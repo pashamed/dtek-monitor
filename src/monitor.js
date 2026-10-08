@@ -212,19 +212,13 @@ function generateEmergencyMessage(emergencyNotice) {
   return { text, outageText, messageType: "emergency" }
 }
 
-function generateEmergencyCancellationMessage(regionalNotice) {
+function generateEmergencyCancellationMessage() {
   console.log("🌀 Generating emergency outage cancellation message...")
 
-  const escapedNotice = regionalNotice
-    ?.replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
   const outageText = [
-    "✅ <b>Екстрені регіональні відключення електроенергії скасовано.</b>",
-    escapedNotice,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
+    "✅ <b>Екстрені відключення електроенергії скасовано.</b>",
+    "<b>Діють стабілізаційні відключення.</b>",
+  ].join("\n\n")
   const text = [outageText, "", `🤖 <i>${getCurrentTime()}</i>`].join("\n")
 
   return { text, outageText, messageType: "emergency-canceled" }
@@ -311,7 +305,7 @@ async function run() {
     )
 
   if (isEmergencyMessage) {
-    const message = generateEmergencyCancellationMessage(regionalNotice)
+    const message = generateEmergencyCancellationMessage()
     await sendNotification(message)
     return
   }
