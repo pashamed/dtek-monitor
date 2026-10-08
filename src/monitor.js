@@ -18,6 +18,7 @@ import {
   checkIsNight,
   deleteLastMessage,
   getCurrentTime,
+  isEmergencyNotice,
   loadLastMessage,
   saveLastMessage,
 } from "./helpers.js"
@@ -36,7 +37,7 @@ async function getInfo() {
       waitUntil: "load",
     })
 
-    const emergencyNotice = await browserPage
+    const regionalNotice = await browserPage
       .locator(".m-attention__container.modal__container--firstPopup")
       .evaluateAll((modals) =>
         modals
@@ -53,15 +54,25 @@ async function getInfo() {
           .find((notice) => {
             const normalizedNotice = notice.toLocaleLowerCase("uk-UA")
             return (
-              normalizedNotice.includes("екстрен") &&
-              normalizedNotice.includes("відключ")
+              normalizedNotice.includes("відключ") &&
+              (normalizedNotice.includes("екстрен") ||
+                normalizedNotice.includes("стабілізац"))
             )
           })
       )
 
+    const emergencyNotice = isEmergencyNotice(regionalNotice)
+      ? regionalNotice
+      : null
+
     if (emergencyNotice) {
       console.log("🚨 Emergency power outage notice detected!")
-      return { emergencyNotice }
+    } else if (regionalNotice) {
+      console.log("ℹ️ Regional stabilization notice detected.")
+    }
+
+    if (regionalNotice) {
+      return { emergencyNotice, regionalNotice }
     }
 
     if (!SHOULD_CHECK_ADDRESS) {
@@ -110,7 +121,7 @@ async function getInfo() {
     }
 
     console.log("✅ Getting info finished.")
-    return { emergencyNotice, info }
+    return { emergencyNotice, regionalNotice, info }
   } catch (error) {
     console.error(`❌ Getting info failed: ${error.message}.`)
   } finally {
@@ -201,11 +212,19 @@ function generateEmergencyMessage(emergencyNotice) {
   return { text, outageText, messageType: "emergency" }
 }
 
-function generateEmergencyCancellationMessage() {
+function generateEmergencyCancellationMessage(regionalNotice) {
   console.log("🌀 Generating emergency outage cancellation message...")
 
-  const outageText =
-    "✅ <b>Екстрені регіональні відключення електроенергії скасовано.</b>"
+  const escapedNotice = regionalNotice
+    ?.replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+  const outageText = [
+    "✅ <b>Екстрені регіональні відключення електроенергії скасовано.</b>",
+    escapedNotice,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
   const text = [outageText, "", `🤖 <i>${getCurrentTime()}</i>`].join("\n")
 
   return { text, outageText, messageType: "emergency-canceled" }
@@ -276,7 +295,7 @@ async function sendNotification({ text, outageText, messageType }) {
 }
 
 async function run() {
-  const { emergencyNotice, info } = await getInfo()
+  const { emergencyNotice, regionalNotice, info } = await getInfo()
 
   if (emergencyNotice) {
     const message = generateEmergencyMessage(emergencyNotice)
@@ -292,7 +311,7 @@ async function run() {
     )
 
   if (isEmergencyMessage) {
-    const message = generateEmergencyCancellationMessage()
+    const message = generateEmergencyCancellationMessage(regionalNotice)
     await sendNotification(message)
     return
   }

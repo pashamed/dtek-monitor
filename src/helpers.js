@@ -8,6 +8,13 @@ export function capitalize(str) {
   return str[0].toUpperCase() + str.slice(1).toLowerCase()
 }
 
+export function isEmergencyNotice(notice) {
+  return (
+    typeof notice === "string" &&
+    /введен[іо]\s+екстрен\p{L}*\s+відключ/iu.test(notice)
+  )
+}
+
 export function loadLastMessage() {
   if (!fs.existsSync(LAST_MESSAGE_FILE)) return null
 
