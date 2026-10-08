@@ -16,6 +16,17 @@ export function isEmergencyNotice(notice) {
   )
 }
 
+export function isEmergencyMessage(message) {
+  return (
+    message?.messageType === "emergency" ||
+    Boolean(
+      message?.outageText?.startsWith(
+        "🚨 <b>Екстрені відключення електроенергії:</b>"
+      )
+    )
+  )
+}
+
 export function loadLastMessage() {
   if (!fs.existsSync(LAST_MESSAGE_FILE)) return null
 
@@ -32,13 +43,7 @@ export function loadLastMessage() {
       timeZone: "Europe/Kyiv",
     })
 
-    const isEmergencyMessage =
-      lastMessage.messageType === "emergency" ||
-      lastMessage.outageText?.startsWith(
-        "🚨 <b>Екстрені відключення електроенергії:</b>"
-      )
-
-    if (messageDay < today && !isEmergencyMessage) {
+    if (messageDay < today && !isEmergencyMessage(lastMessage)) {
       deleteLastMessage()
       return null
     }

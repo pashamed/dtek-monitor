@@ -24,5 +24,8 @@ export const SHUTDOWNS_PAGE =
 export const LAST_MESSAGE_FILE = path.resolve("artifacts", `last-message.json`)
 export const SHOULD_CHECK_ADDRESS = CHECK_ADDRESS !== "false"
 
+// Pause before the second popup check that confirms a cancellation
+export const CANCEL_RECHECK_DELAY = 30 * 1000
+
 export const RETRIES_MAX_COUNT = 5
 export const RETRIES_TIMEOUT = 5000

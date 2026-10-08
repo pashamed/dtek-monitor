@@ -11,6 +11,7 @@ import {
   SHOULD_CHECK_ADDRESS,
   RETRIES_MAX_COUNT,
   RETRIES_TIMEOUT,
+  CANCEL_RECHECK_DELAY,
 } from "./constants.js"
 
 import {
@@ -18,6 +19,7 @@ import {
   checkIsNight,
   deleteLastMessage,
   getCurrentTime,
+  isEmergencyMessage,
   isEmergencyNotice,
   loadLastMessage,
   saveLastMessage,
@@ -44,8 +46,13 @@ async function getInfo() {
           modals
             .map((modal) => {
               const title = modal.querySelector(".modal__title")?.textContent
-              const text =
-                modal.querySelector(".m-attention__text")?.textContent
+              const textNode = modal
+                .querySelector(".m-attention__text")
+                ?.cloneNode(true)
+              textNode
+                ?.querySelectorAll("br")
+                .forEach((br) => br.replaceWith("\n"))
+              const text = textNode?.textContent
               return [title, text]
                 .filter(Boolean)
                 .join("\n\n")
@@ -55,6 +62,14 @@ async function getInfo() {
             })
             .find(Boolean)
         )
+
+    // The popup may render slightly after the load event
+    await browserPage
+      .waitForSelector(".m-attention__container.modal__container--firstPopup", {
+        state: "attached",
+        timeout: 5000,
+      })
+      .catch(() => {})
 
     let regionalNotice
     for (let attempt = 1; ; attempt++) {
@@ -81,16 +96,18 @@ async function getInfo() {
       console.log("ℹ️ Regional stabilization notice detected.")
     }
 
+    // Without the token the page is not the real DTEK page (Cloudflare,
+    // maintenance, half-rendered), so "no popup" must not be trusted.
+    const csrfTokenTag = await browserPage.waitForSelector(
+      'meta[name="csrf-token"]',
+      { state: "attached", timeout: 20000 }
+    )
+    const csrfToken = await csrfTokenTag.getAttribute("content")
+
     if (!SHOULD_CHECK_ADDRESS) {
       console.log("✅ Emergency popup check finished.")
       return { emergencyNotice, regionalNotice }
     }
-
-    const csrfTokenTag = await browserPage.waitForSelector(
-      'meta[name="csrf-token"]',
-      { state: "attached" }
-    )
-    const csrfToken = await csrfTokenTag.getAttribute("content")
 
     const info = await browserPage.evaluate(
       async ({ REGION, CITY, STREET, csrfToken }) => {
@@ -242,8 +259,11 @@ async function sendNotification({ text, outageText, messageType }) {
   const isThreadClosed = lastMessage.messageType === "emergency-canceled"
   const isOutageChanged = lastMessage.outageText !== outageText
   const hasOpenMessage = Boolean(lastMessage.message_id) && !isThreadClosed
-  const isEdit = hasOpenMessage && !isOutageChanged
-  const isReply = hasOpenMessage && isOutageChanged
+  // An open emergency message is updated in place when the notice changes
+  const isEmergencyUpdate =
+    messageType === "emergency" && isEmergencyMessage(lastMessage)
+  const isEdit = hasOpenMessage && (!isOutageChanged || isEmergencyUpdate)
+  const isReply = hasOpenMessage && !isEdit
 
   try {
     const response = await fetch(
@@ -283,7 +303,9 @@ async function sendNotification({ text, outageText, messageType }) {
     return
   } catch (error) {
     console.error(`❌ Sending notification failed: ${error.message}.`)
-    deleteLastMessage()
+    if (isEdit && error.message.includes("message to edit not found")) {
+      deleteLastMessage()
+    }
   }
 
   if (sendNotificationRetries < RETRIES_MAX_COUNT) {
@@ -299,7 +321,18 @@ async function sendNotification({ text, outageText, messageType }) {
 }
 
 async function run() {
-  const { emergencyNotice, regionalNotice, info } = await getInfo()
+  let result = await getInfo()
+
+  if (!result.emergencyNotice && isEmergencyMessage(loadLastMessage())) {
+    // Re-check after a pause so a single glitchy page load can't cancel
+    console.log(
+      `🟡 No emergency popup, re-checking in ${CANCEL_RECHECK_DELAY / 1000}s...`
+    )
+    await new Promise((resolve) => setTimeout(resolve, CANCEL_RECHECK_DELAY))
+    result = await getInfo()
+  }
+
+  const { emergencyNotice, regionalNotice, info } = result
 
   if (emergencyNotice) {
     const message = generateEmergencyMessage(emergencyNotice)
@@ -307,14 +340,7 @@ async function run() {
     return
   }
 
-  const lastMessage = loadLastMessage()
-  const isEmergencyMessage =
-    lastMessage?.messageType === "emergency" ||
-    lastMessage?.outageText?.startsWith(
-      "🚨 <b>Екстрені відключення електроенергії:</b>"
-    )
-
-  if (isEmergencyMessage) {
+  if (isEmergencyMessage(loadLastMessage())) {
     const message = generateEmergencyCancellationMessage(regionalNotice)
     await sendNotification(message)
     return
