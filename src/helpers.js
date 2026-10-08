@@ -11,7 +11,8 @@ export function capitalize(str) {
 export function isEmergencyNotice(notice) {
   return (
     typeof notice === "string" &&
-    /введен[іо]\s+екстрен\p{L}*\s+відключ/iu.test(notice)
+    notice.length > 0 &&
+    !/діють\s+стабілізаційні\s+відключ/iu.test(notice)
   )
 }
 
