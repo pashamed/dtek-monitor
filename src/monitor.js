@@ -37,22 +37,38 @@ async function getInfo() {
       waitUntil: "load",
     })
 
-    const regionalNotice = await browserPage
-      .locator(".m-attention__container.modal__container--firstPopup")
-      .evaluateAll((modals) =>
-        modals
-          .map((modal) => {
-            const title = modal.querySelector(".modal__title")?.textContent
-            const text = modal.querySelector(".m-attention__text")?.textContent
-            return [title, text]
-              .filter(Boolean)
-              .join("\n\n")
-              .replace(/[ \t]+/g, " ")
-              .replace(/\s*\n\s*/g, "\n")
-              .trim()
-          })
-          .find(Boolean)
-      )
+    const readRegionalNotice = () =>
+      browserPage
+        .locator(".m-attention__container.modal__container--firstPopup")
+        .evaluateAll((modals) =>
+          modals
+            .map((modal) => {
+              const title = modal.querySelector(".modal__title")?.textContent
+              const text =
+                modal.querySelector(".m-attention__text")?.textContent
+              return [title, text]
+                .filter(Boolean)
+                .join("\n\n")
+                .replace(/[ \t]+/g, " ")
+                .replace(/\s*\n\s*/g, "\n")
+                .trim()
+            })
+            .find(Boolean)
+        )
+
+    let regionalNotice
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await browserPage.waitForLoadState("load")
+        regionalNotice = await readRegionalNotice()
+        break
+      } catch (error) {
+        // The site may reload itself while the popup is being read
+        const isNavigation = error.message.includes("Execution context")
+        if (!isNavigation || attempt >= 3) throw error
+        console.log("🔁 Page navigated, reading popup again...")
+      }
+    }
 
     const emergencyNotice = isEmergencyNotice(regionalNotice)
       ? regionalNotice
