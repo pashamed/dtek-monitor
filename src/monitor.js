@@ -12,6 +12,8 @@ import {
   RETRIES_MAX_COUNT,
   RETRIES_TIMEOUT,
   CANCEL_RECHECK_DELAY,
+  GRID_STATUS_URL,
+  GRID_STATUS_REGION,
 } from "./constants.js"
 
 import {
@@ -221,7 +223,34 @@ function generateMessage(info) {
   return { text, outageText, messageType: "outage" }
 }
 
-function generateEmergencyMessage(emergencyNotice) {
+async function getGridStatusLine() {
+  try {
+    const response = await fetch(GRID_STATUS_URL, {
+      signal: AbortSignal.timeout(10000),
+    })
+    const data = await response.json()
+    const region = data?.regions?.find((r) => r.slug === GRID_STATUS_REGION)
+    if (!region) return null
+
+    const since = region.since
+      ? ` (з ${new Date(region.since).toLocaleString("uk-UA", {
+          timeZone: "Europe/Kyiv",
+          day: "2-digit",
+          month: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        })})`
+      : ""
+
+    return `${region.emoji} <b>${region.name_uk}:</b> ${region.title_uk}${since}`
+  } catch (error) {
+    // The grid status is only a supplement, never block the notification
+    console.error(`⚠️ Grid status unavailable: ${error.message}.`)
+    return null
+  }
+}
+
+function generateEmergencyMessage(emergencyNotice, gridStatusLine) {
   console.log("🌀 Generating emergency outage message...")
 
   const escapedNotice = emergencyNotice
@@ -229,18 +258,24 @@ function generateEmergencyMessage(emergencyNotice) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
 
-  const outageText = `🚨 <b>Екстрені / аварійні відключення:</b>\n\n${escapedNotice}`
+  const outageText = [
+    `🚨 <b>Екстрені / аварійні відключення:</b>\n\n${escapedNotice}`,
+    gridStatusLine,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
   const text = [outageText, "", `🤖 <i>${getCurrentTime()}</i>`].join("\n")
 
   return { text, outageText, messageType: "emergency" }
 }
 
-function generateEmergencyCancellationMessage(regionalNotice) {
+function generateEmergencyCancellationMessage(regionalNotice, gridStatusLine) {
   console.log("🌀 Generating emergency outage cancellation message...")
 
   const outageText = [
     "✅ <b>Екстрені / аварійні відключення скасовано.</b>",
     regionalNotice && "<b>Діють стабілізаційні відключення.</b>",
+    gridStatusLine,
   ]
     .filter(Boolean)
     .join("\n\n")
@@ -258,11 +293,23 @@ async function sendNotification({ text, outageText, messageType }) {
   const lastMessage = loadLastMessage() || {}
   const isThreadClosed = lastMessage.messageType === "emergency-canceled"
   const isOutageChanged = lastMessage.outageText !== outageText
-  const hasOpenMessage = Boolean(lastMessage.message_id) && !isThreadClosed
+  const hasMessageId = Boolean(lastMessage.message_id)
+  const hasOpenMessage = hasMessageId && !isThreadClosed
+  // A closed thread's cancellation message keeps getting its status refreshed
+  const isCancellationUpdate =
+    isThreadClosed && hasMessageId && messageType === "emergency-canceled"
+
+  if (isCancellationUpdate && !isOutageChanged) {
+    console.log("🟡 Notification not changed.")
+    return
+  }
+
   // An open emergency message is updated in place when the notice changes
   const isEmergencyUpdate =
     messageType === "emergency" && isEmergencyMessage(lastMessage)
-  const isEdit = hasOpenMessage && (!isOutageChanged || isEmergencyUpdate)
+  const isEdit =
+    isCancellationUpdate ||
+    (hasOpenMessage && (!isOutageChanged || isEmergencyUpdate))
   const isReply = hasOpenMessage && !isEdit
 
   try {
@@ -335,15 +382,33 @@ async function run() {
   const { emergencyNotice, regionalNotice, info } = result
 
   if (emergencyNotice) {
-    const message = generateEmergencyMessage(emergencyNotice)
+    const message = generateEmergencyMessage(
+      emergencyNotice,
+      await getGridStatusLine()
+    )
     await sendNotification(message)
     return
   }
 
-  if (isEmergencyMessage(loadLastMessage())) {
-    const message = generateEmergencyCancellationMessage(regionalNotice)
+  const lastMessage = loadLastMessage()
+
+  if (isEmergencyMessage(lastMessage)) {
+    const message = generateEmergencyCancellationMessage(
+      regionalNotice,
+      await getGridStatusLine()
+    )
     await sendNotification(message)
     return
+  }
+
+  if (lastMessage?.messageType === "emergency-canceled") {
+    // Keep the closed thread's status current until a new emergency starts
+    const gridStatusLine = await getGridStatusLine()
+    if (gridStatusLine) {
+      await sendNotification(
+        generateEmergencyCancellationMessage(regionalNotice, gridStatusLine)
+      )
+    }
   }
 
   if (!info) return

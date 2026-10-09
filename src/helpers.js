@@ -43,7 +43,11 @@ export function loadLastMessage() {
       timeZone: "Europe/Kyiv",
     })
 
-    if (messageDay < today && !isEmergencyMessage(lastMessage)) {
+    if (
+      messageDay < today &&
+      !isEmergencyMessage(lastMessage) &&
+      lastMessage.messageType !== "emergency-canceled"
+    ) {
       deleteLastMessage()
       return null
     }
