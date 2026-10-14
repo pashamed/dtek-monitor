@@ -13,3 +13,5 @@ Properties/PublishProfiles/
 appsettings.Local.json
 appsettings.Production.json
 secrets.json
+
+logs/

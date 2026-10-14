@@ -15,6 +15,10 @@ public class PopupClassifierTests
         "<p>Через аварію в мережі <strong>знеструмлено частину правого берега</strong> столиці. </p>"
         + "<p><strong>Стабілізаційні графіки в Києві не діють. </strong><br>Енергетики вже працюють, щоб якомога швидше покращити ситуацію і повернути світло.</p>";
 
+    private const string KyivAccidentBothBanks =
+        "<h6>Шановні клієнти!</h6><p>Через аварію в мережі <strong>знеструмлено частину правого та лівого берегів столиці</strong>. </p>"
+        + "<p><strong>Стабілізаційні графіки в Києві не діють. </strong><br>Енергетики вже працюють, щоб якомога швидше покращити ситуацію і повернути світло.</p>";
+
     private const string EmergencyOrder =
         "<p>За наказом НЕК Укренерго введені<strong> екстрені відключення</strong> <strong>електроенергії</strong>.<br>Графіки відключень при цьому не діють. Будь ласка, розумно споживайте електроенергію.</p>";
 
@@ -33,6 +37,16 @@ public class PopupClassifierTests
 
         Assert.Equal(PopupKind.Stabilization, result.Kind);
         Assert.False(result.IsAlert);
+    }
+
+    [Fact]
+    public void KyivAccidentPopup_BothBanks_IsAccidentForBothParts()
+    {
+        var result = CreateClassifier().Classify("kyiv", KyivAccidentBothBanks);
+
+        Assert.Equal(PopupKind.Accident, result.Kind);
+        Assert.True(result.IsAlert);
+        Assert.Equal(["right-bank", "left-bank"], result.PartIds.OrderByDescending(p => p));
     }
 
     [Fact]
