@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Publish profiles can hold host names and credentials; keep them local.
+Properties/PublishProfiles/
+*.pubxml
+*.pubxml.user
+
+# Local secrets and overrides
+appsettings.Local.json
+appsettings.Production.json
+secrets.json

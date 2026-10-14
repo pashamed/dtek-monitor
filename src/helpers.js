@@ -19,7 +19,7 @@ export function isEmergencyNotice(notice) {
 export function isStabilizationNotice(notice) {
   return (
     typeof notice === "string" &&
-    /діють\s+стабілізаційні\s+відключ/iu.test(notice)
+    /(?<!не\s+)діють\s+стабілізаційні\s+відключ/iu.test(notice)
   )
 }
 

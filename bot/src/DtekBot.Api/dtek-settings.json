@@ -1,0 +1,77 @@
+{
+  "Dtek": {
+    "Regions": [
+      {
+        "Id": "kyiv",
+        "Name": "м. Київ",
+        "SiteUrl": "https://www.dtek-kem.com.ua/ua/shutdowns",
+        "GridStatusSlug": "kyiv",
+        "Aliases": ["київ", "києві", "столиця", "столиці"],
+        "Parts": [
+          {
+            "Id": "right-bank",
+            "Name": "Правий берег",
+            "Aliases": ["правого берега", "правий берег", "правому березі"]
+          },
+          {
+            "Id": "left-bank",
+            "Name": "Лівий берег",
+            "Aliases": ["лівого берега", "лівий берег", "лівому березі"]
+          }
+        ]
+      },
+      {
+        "Id": "kyiv-oblast",
+        "Name": "Київська область",
+        "SiteUrl": "https://www.dtek-krem.com.ua/ua/shutdowns",
+        "GridStatusSlug": "kyiv-oblast",
+        "Aliases": ["київщина", "київщині", "київська область", "київській області"],
+        "Parts": [
+          { "Id": "brovary", "Name": "Броварський район", "Aliases": ["броварськ"] },
+          { "Id": "bucha", "Name": "Бучанський район", "Aliases": ["бучанськ"] },
+          { "Id": "vyshhorod", "Name": "Вишгородський район", "Aliases": ["вишгородськ"] },
+          { "Id": "boryspil", "Name": "Бориспільський район", "Aliases": ["бориспільськ"] }
+        ]
+      },
+      {
+        "Id": "dnipropetrovsk",
+        "Name": "Дніпропетровська область",
+        "SiteUrl": "https://www.dtek-dnem.com.ua/ua/shutdowns",
+        "GridStatusSlug": "dnipropetrovsk",
+        "Aliases": ["дніпропетровщина", "дніпропетровщині", "дніпропетровська область"],
+        "Parts": []
+      },
+      {
+        "Id": "odesa",
+        "Name": "Одеська область",
+        "SiteUrl": "https://www.dtek-oem.com.ua/ua/shutdowns",
+        "GridStatusSlug": "odesa",
+        "Aliases": ["одещина", "одещині", "одеська область", "одеса"],
+        "Parts": []
+      },
+      {
+        "Id": "donetsk",
+        "Name": "Донецька область",
+        "SiteUrl": "https://www.dtek-dem.com.ua/ua/shutdowns",
+        "GridStatusSlug": "donetsk",
+        "Aliases": ["донеччина", "донеччині", "донецька область"],
+        "Parts": []
+      }
+    ],
+    "Classification": {
+      "Cancelled": ["скасовано", "повертаємось до графіків"],
+      "Stabilization": ["діють стабілізаційні відключ"],
+      "Accident": ["через аварію", "аварійне відключ", "аварійні відключ", "знеструмлено"],
+      "Emergency": [
+        "екстрені відключ",
+        "графіки при цьому не діють",
+        "графіки не діють",
+        "графіки тимчасово не діють",
+        "стабілізаційні графіки в києві не діють"
+      ]
+    },
+    "Polling": {
+      "CancelRecheckDelaySeconds": 30
+    }
+  }
+}
