@@ -15,6 +15,10 @@ import {
   GRID_STATUS_URL,
   GRID_STATUS_REGION,
   SHOULD_CHECK_GRID_STATUS,
+  INGEST_URL,
+  INGEST_SECRET,
+  INGEST_REGION_ID,
+  SHOULD_INGEST,
 } from "./constants.js"
 
 import {
@@ -374,6 +378,30 @@ async function sendNotification({ text, outageText, messageType }) {
   )
 }
 
+async function ingestToSharedBot(regionalNotice) {
+  if (!SHOULD_INGEST) return
+
+  try {
+    const response = await fetch(INGEST_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-ingest-secret": INGEST_SECRET,
+      },
+      body: JSON.stringify({
+        regionId: INGEST_REGION_ID,
+        popupText: regionalNotice ?? "",
+        observedAt: new Date().toISOString(),
+      }),
+      signal: AbortSignal.timeout(30000),
+    })
+    console.log(`📡 Shared bot ingest: HTTP ${response.status}`)
+  } catch (error) {
+    // The shared bot must never break the personal notifications
+    console.error(`⚠️ Shared bot ingest failed: ${error.message}`)
+  }
+}
+
 async function run() {
   let result = await getInfo()
 
@@ -387,6 +415,8 @@ async function run() {
   }
 
   const { emergencyNotice, regionalNotice, info } = result
+
+  await ingestToSharedBot(regionalNotice)
 
   if (emergencyNotice) {
     const message = generateEmergencyMessage(
