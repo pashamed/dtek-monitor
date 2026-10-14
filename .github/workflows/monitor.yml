@@ -19,6 +19,9 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      INGEST_URL: ${{ secrets.INGEST_URL }}
+      INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
 
     steps:
       - name: Checkout code
@@ -77,10 +80,13 @@ jobs:
           HOUSE: ${{ secrets.HOUSE }}
           CHECK_ADDRESS: ${{ steps.check-type.outputs.address }}
           CHECK_GRID_STATUS: ${{ secrets.CHECK_GRID_STATUS }}
-          INGEST_URL: ${{ secrets.INGEST_URL }}
-          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
-          INGEST_REGION_ID: ${{ secrets.INGEST_REGION_ID }}
         run: node ./src/monitor.js
+
+      - name: Check all regions for the shared bot
+        if: always() && env.INGEST_URL != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node ./src/ingest-regions.js
 
       - name: Commit updated artifacts
         run: |

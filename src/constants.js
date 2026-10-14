@@ -31,14 +31,6 @@ export const SHOULD_CHECK_ADDRESS = CHECK_ADDRESS !== "false"
 // Pause before the second popup check that confirms a cancellation
 export const CANCEL_RECHECK_DELAY = 30 * 1000
 
-// Optional: also forward the popup text to the shared .NET bot
-export const INGEST_URL = process.env.INGEST_URL?.trim()
-export const INGEST_SECRET = process.env.INGEST_SECRET?.trim()
-export const INGEST_REGION_ID = process.env.INGEST_REGION_ID?.trim()
-export const SHOULD_INGEST = Boolean(
-  INGEST_URL && INGEST_SECRET && INGEST_REGION_ID
-)
-
 export const GRID_STATUS_URL =
   "https://raw.githubusercontent.com/lasercat12/ua-power-status/main/data/regions.json"
 export const gridStatusRegions = {
