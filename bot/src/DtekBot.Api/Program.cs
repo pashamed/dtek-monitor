@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DtekBot.Api;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
@@ -11,6 +12,9 @@ using Telegram.Bot.Types;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddJsonFile("dtek-settings.json", optional: false, reloadOnChange: true);
+
+// Level filtering still comes from the "Logging" config section.
+builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(builder.Environment.ContentRootPath, "logs")));
 builder.Services.Configure<DtekSettings>(builder.Configuration.GetSection(DtekSettings.SectionName));
 
 builder.Services.ConfigureHttpJsonOptions(o => JsonBotAPI.Configure(o.SerializerOptions));
@@ -64,11 +68,13 @@ app.MapPost("/ingest", async (
     IOptionsMonitor<DtekSettings> settings,
     TimeProvider time,
     IConfiguration config,
+    ILogger<Program> logger,
     CancellationToken ct) =>
 {
     var header = request.Headers["X-Ingest-Secret"].ToString();
     if (!Security.SecretMatches(header, config["Ingest:Secret"]))
     {
+        logger.LogWarning("Ingest rejected: bad or missing secret (header length {Length})", header.Length);
         return Results.Unauthorized();
     }
 
@@ -76,10 +82,14 @@ app.MapPost("/ingest", async (
         string.Equals(r.Id, body.RegionId, StringComparison.OrdinalIgnoreCase));
     if (region is null)
     {
+        logger.LogWarning("Ingest rejected: unknown region '{RegionId}'", body.RegionId);
         return Results.BadRequest(new { error = "unknown region" });
     }
 
     var result = classifier.Classify(region.Id, body.PopupText);
+    logger.LogInformation(
+        "Ingest {Region}: kind={Kind} parts=[{Parts}] textLength={Length}",
+        region.Id, result.Kind, string.Join(",", result.PartIds), result.NormalizedText.Length);
     var now = time.GetUtcNow();
 
     var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
@@ -102,6 +112,7 @@ app.MapPost("/ingest", async (
     await db.SaveChangesAsync(ct);
 
     var dispatch = changed ? await dispatcher.DispatchAsync(region, result, ct) : null;
+    logger.LogInformation("Ingest {Region}: changed={Changed} dispatch={@Dispatch}", region.Id, changed, dispatch);
 
     return Results.Ok(new
     {
@@ -115,6 +126,9 @@ app.MapPost("/ingest", async (
 
 app.Run();
 
-public sealed record IngestRequest(string RegionId, string? PopupText, DateTimeOffset? ObservedAt);
+public sealed record IngestRequest(
+    [property: JsonPropertyName("regionId")] string RegionId,
+    [property: JsonPropertyName("popupText")] string? PopupText,
+    [property: JsonPropertyName("observedAt")] DateTimeOffset? ObservedAt);
 
 public partial class Program;
