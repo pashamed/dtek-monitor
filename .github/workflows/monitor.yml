@@ -77,6 +77,9 @@ jobs:
           HOUSE: ${{ secrets.HOUSE }}
           CHECK_ADDRESS: ${{ steps.check-type.outputs.address }}
           CHECK_GRID_STATUS: ${{ secrets.CHECK_GRID_STATUS }}
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+          INGEST_REGION_ID: ${{ secrets.INGEST_REGION_ID }}
         run: node ./src/monitor.js
 
       - name: Commit updated artifacts

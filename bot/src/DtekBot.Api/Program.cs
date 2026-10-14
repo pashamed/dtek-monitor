@@ -26,6 +26,7 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
     return new TelegramBotClient(string.IsNullOrWhiteSpace(token) ? "0:unset" : token);
 });
 builder.Services.AddScoped<BotUpdateHandler>();
+builder.Services.AddScoped<AlertDispatcher>();
 
 var app = builder.Build();
 
@@ -59,6 +60,7 @@ app.MapPost("/ingest", async (
     HttpRequest request,
     BotDbContext db,
     PopupClassifier classifier,
+    AlertDispatcher dispatcher,
     IOptionsMonitor<DtekSettings> settings,
     TimeProvider time,
     IConfiguration config,
@@ -99,12 +101,15 @@ app.MapPost("/ingest", async (
 
     await db.SaveChangesAsync(ct);
 
+    var dispatch = changed ? await dispatcher.DispatchAsync(region, result, ct) : null;
+
     return Results.Ok(new
     {
         regionId = region.Id,
         changed,
         kind = result.Kind.ToString(),
         parts = result.PartIds,
+        dispatch,
     });
 });
 
