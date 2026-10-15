@@ -3,7 +3,13 @@ const tg = window.Telegram && window.Telegram.WebApp;
 const app = document.getElementById('app');
 const initData = tg ? tg.initData : '';
 
-const KINDS = [['Emergency', 'Екстрене'], ['Accident', 'Аварія'], ['Unknown', 'Невідомо'], ['Ended', 'Завершення']];
+const SLOT_GROUPS = [['emergency', 'Екстрені відключення'], ['regional', 'Аварія в регіоні'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
+const KIND_OF = { emergency: 'Emergency', regional: 'Accident', local: 'Emergency', ended: 'Ended' };
+const MODES = [['New', 'Нове повідомлення'], ['ReplaceDelete', 'Видалити старе й опублікувати нове'], ['Edit', 'Редагувати те саме']];
+const MODE_TEXT = {
+  post: { New: 'Кожне оновлення графіка — новий пост. Старі пости лишаються в каналі.', ReplaceDelete: 'Бот публікує новий пост і видаляє попередній. Потрібне право «Видаляти повідомлення», інакше старий пост лишиться.', Edit: 'Бот змінює один і той самий пост — нових публікацій не буде.' },
+  event: { New: 'Кожна подія — окреме повідомлення. Старі лишаються в каналі.', ReplaceDelete: 'Нова подія видаляє попереднє повідомлення. Потрібне право «Видаляти повідомлення», інакше воно лишиться.', Edit: 'Одне повідомлення оновлюється на місці, нові не зʼявляються.' },
+};
 const TABS = [['main', 'Основне'], ['addr', 'Адреса і черга'], ['sched', 'Графік'], ['msg', 'Повідомлення']];
 const state = { boot: null, chats: [], editing: null };
 const groupsCache = new Map(); // regionId -> Promise of schedule groups
@@ -12,7 +18,9 @@ const CREDIT = 'Дані графіків: outage-data-ua (ДТЕК).';
 
 const HELP = {
   region: ['Регіон', 'Регіон, за яким бот стежить за відключеннями. Від нього залежать доступні адреси, черги та графіки.'],
-  part: ['Частина регіону', 'Необовʼязково. Якщо обрати частину регіону, бот надсилатиме повідомлення лише про неї; «Весь регіон» — без обмежень.'],
+  parts: ['Райони', 'Бот надсилатиме екстрені сповіщення, лише якщо у повідомленні ДТЕК названо один із обраних районів, або якщо повідомлення стосується всього регіону. Якщо нічого не обрано, сповіщення приходять для всього регіону.'],
+  status: ['Поточний стан', 'Показує, що зараз повідомляє сайт ДТЕК для вашого регіону та що кажуть графіки для вашої черги.'],
+  check: ['Світла немає?', 'Бот перевірить причину: спершу графік вашої черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише потім адресу на сайті ДТЕК. Результат також надійде вам у чат із ботом.'],
   active: ['Підписка активна', 'Поки підписка активна, бот надсилає сюди сповіщення. Якщо її вимкнути, сповіщення припиняються, а збережена адреса видаляється.'],
   pause: ['Пауза', 'Тимчасово зупиняє сповіщення, не скасовуючи підписку й не видаляючи адресу. Зніміть паузу, щоб відновити їх.'],
   filter: ['Які сповіщення', 'Усі — також нерозпізнані повідомлення з сайту ДТЕК. Лише екстрені та аварії — тільки екстрені відключення й аварії.'],
@@ -21,10 +29,16 @@ const HELP = {
   address: ['Адреса', 'Потрібна, щоб визначити вашу чергу й перевіряти саме вашу адресу на сайті ДТЕК. Зберігається, поки діє підписка, і видаляється при відписці.'],
   group: ['Черга', 'Номер черги в графіку відключень, наприклад 45.1. Визначається за адресою, але її можна змінити вручну. Від черги залежать повідомлення за графіком і сповіщення про екстрені відключення черги.'],
   outage: ['Реагувати на «Світло зникло»', 'Якщо застосунок моніторингу світла пише в канал «Світло зникло», бот знайде причину: спершу перевіряє графік черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише тоді адресу на сайті ДТЕК.'],
-  schedule: ['Сповіщення за графіком', 'Бот публікує одне повідомлення на кожне планове відключення з очікуваним часом повернення, редагує його при зміні графіка й коли світло повертається. Використовує дані outage-data-ua.'],
+  schedule: ['Сповіщення за графіком', 'Бот пише в канал, коли за графіком світло вимикається й коли воно має зʼявитися, з тривалістю та очікуваним часом. Використовує дані outage-data-ua.'],
   image: ['Картинка', 'Таблиця на 2 дні — графік на сьогодні й завтра. Коротка картинка — картка з годинами відключень. Без картинки — лише текст.'],
-  template: ['Шаблон повідомлення', 'Ваш текст екстрених сповіщень. Параметри у {фігурних дужках} замінюються даними, теги Telegram дозволені.'],
-  kind: ['Тип попереднього перегляду', 'Обирає, для якого типу події показати приклад повідомлення за вашим шаблоном.'],
+  schedulePost: ['Публікація графіка', 'Бот публікує в канал окремий пост із графіком відключень вашої черги (картинка з підписом) і оновлює його, коли графік змінюється. Те, як саме зʼявляються нові пости, задає режим нижче. Видалення попереднього повідомлення потребує в бота права адміністратора «Видаляти повідомлення»; без нього старе повідомлення просто лишається.'],
+  postMode: ['Як публікувати', 'Нове повідомлення — кожне оновлення графіка це новий пост, старі лишаються. Видалити старе й опублікувати нове — бот публікує новий пост і видаляє попередній (потрібне право «Видаляти повідомлення», інакше старий пост лишиться). Редагувати те саме — бот змінює один і той самий пост.'],
+  events: ['Події: світло вимкнено / зʼявилося', 'Бот пише, коли за графіком світло вимикається й коли воно має зʼявитися: з тривалістю, очікуваним часом і статистикою. Для кожної події є свій шаблон. Видалення попереднього повідомлення потребує права «Видаляти повідомлення».'],
+  eventMode: ['Як показувати події', 'Нове повідомлення — кожна подія окремим постом, старі лишаються. Видалити старе й опублікувати нове — попереднє повідомлення про подію видаляється (потрібне право «Видаляти повідомлення», інакше воно лишиться). Редагувати те саме — один пост оновлюється на місці.'],
+  slots: ['Шаблони повідомлень', 'Кожен вид повідомлень, які бот публікує, має свій шаблон. Оберіть вид, змініть текст і стиль та перегляньте, як це виглядатиме в Telegram. Змінені шаблони позначені фіолетовою цяткою.'],
+  template: ['Шаблон повідомлення', 'Ваш текст для цього виду повідомлень. Параметри у {фігурних дужках} замінюються даними, теги Telegram дозволені: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Щоб вивести фігурні дужки, пишіть {{ і }}.'],
+  cond: ['Умовні блоки', 'Фрагмент {#назва}…{/назва} лишається в тексті, лише якщо значення параметра «назва» не порожнє. Наприклад: {#onDuration}🕓 Воно було {onDuration}{/onDuration}. Блоки не можна вкладати.'],
+  test: ['Тестове повідомлення', 'Бот надішле це повідомлення в канал (або в чат із ботом) зі зразковими чи вашими даними й позначкою 🧪 Тест, щоб ви побачили його справжній вигляд. Кількість тестів обмежена: якщо зʼявиться повідомлення про ліміт, зачекайте трохи й повторіть.'],
   connect: ['Підключити канал', 'Додайте бота адміністратором у канал із правом публікувати повідомлення — канал зʼявиться тут автоматично (за потреби натисніть «Оновити список»). @імʼя потрібне лише як запасний варіант для публічного каналу.'],
   remove: ['Видалити зі списку', 'Знімає канал зі списку. Якщо ви єдиний адміністратор у боті, сповіщення вимикаються, а адреса видаляється. Сам бот лишається в каналі.'],
 };
@@ -75,7 +89,7 @@ async function api(method, path, body) {
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
-    const msg = res.status === 401 ? 'Відкрийте цей застосунок із Telegram (кнопка в меню бота).'
+    const msg = res.status === 401 ? 'Відкрийте цей застосунок із Telegram.'
       : res.status === 403 ? 'Недостатньо прав для цієї дії.'
       : (data && data.error) || `Помилка сервера (${res.status}).`;
     throw Object.assign(new Error(msg), { status: res.status, details: (data && data.details) || [] });
@@ -144,12 +158,19 @@ function statusOf(o) {
 const pill = o => { const [c, t] = statusOf(o); return h('span', { class: 'pill ' + c, text: t }); };
 const chatTitle = c => c.isPrivate ? PRIVATE_LABEL : (c.title || 'Канал');
 
+function partIdsOf(s) {
+  const r = regionOf(s.regionId);
+  return r ? [...new Set(s.partIds || [])].filter(id => r.parts.some(p => p.id === id)).sort() : [];
+}
+function partNames(s) {
+  const r = regionOf(s.regionId);
+  return r ? r.parts.filter(p => partIdsOf(s).includes(p.id)).map(p => p.name) : [];
+}
+
 function regionLine(s) {
   const r = regionOf(s.regionId);
   if (!s.regionId) return 'Регіон не обрано';
-  if (!r) return 'Невідомий регіон';
-  const p = s.partId && r.parts.find(x => x.id === s.partId);
-  return r.name + (p ? ' · ' + p.name : '');
+  return r ? r.name : 'Невідомий регіон';
 }
 
 function showFatal(e, retry) {
@@ -179,10 +200,15 @@ async function refreshChats(manual) {
 function chatCard(c) {
   const s = c.settings;
   const [cls, label] = statusOf(s);
+  const names = partNames(s);
   const chips = [
+    ...names.slice(0, 2).map(n => h('span', { class: 'chip grey', text: n })),
+    names.length > 2 ? h('span', { class: 'chip grey', text: '+' + (names.length - 2) }) : null,
     s.groupId ? h('span', { class: 'chip purple', text: 'Черга ' + s.groupId }) : null,
-    s.scheduleNotify ? h('span', { class: 'chip purple', text: 'Графік' }) : null,
+    s.schedulePost ? h('span', { class: 'chip purple', text: 'Графік' }) : null,
+    s.scheduleNotify ? h('span', { class: 'chip purple', text: 'Події' }) : null,
     s.outageTrigger ? h('span', { class: 'chip blue', text: 'Реакція на «Світло зникло»' }) : null,
+    Object.values(s.templates || {}).some(v => v && v.trim()) ? h('span', { class: 'chip grey', text: 'Свої шаблони' }) : null,
   ].filter(Boolean);
   return h('button', { type: 'button', class: 'chat glass', onclick: () => renderEditor(c) },
     h('div', { class: 'chat-h' }, h('b', { text: chatTitle(c) }), h('span', { class: 'pill ' + cls, text: label })),
@@ -220,7 +246,7 @@ function renderList(note, errNote) {
   show(
     h('header', { class: 'hero' },
       h('h1', { class: 'ttl', text: 'DTEK Сповіщення' }),
-      h('p', { class: 'lead', text: 'Керуйте каналами зі сповіщеннями про відключення світла.' })),
+      h('p', { class: 'lead', text: 'Керуйте каналами зі сповіщеннями про відключення світла. Усі налаштування — тут, у редакторі.' })),
     note ? h('div', { class: 'toast ok', role: 'status', text: note }) : null,
     errNote ? h('div', { class: 'toast err', role: 'alert', text: errNote }) : null,
     h('div', { class: 'sechead' }, h('h2', { text: 'Ваші канали' }), refresh),
@@ -239,30 +265,43 @@ function renderList(note, errNote) {
 function renderEditor(chat) {
   const { boot } = state;
   const isPriv = !!chat.isPrivate;
-  const s = { ...chat.settings, scheduleImage: chat.settings.scheduleImage || 'Grid' };
+  const slots = boot.templateSlots || [];
+  const slotOf = id => slots.find(x => x.id === id) || null;
+  const s = {
+    ...chat.settings, partIds: [...(chat.settings.partIds || [])],
+    scheduleImage: chat.settings.scheduleImage || 'None', schedulePostImage: chat.settings.schedulePostImage || 'Grid',
+    schedulePostMode: chat.settings.schedulePostMode || 'New', scheduleEventMode: chat.settings.scheduleEventMode || 'Edit',
+  };
   state.editing = chat;
   try { tg.BackButton.show(); } catch { /* optional */ }
-  let kind = 'Emergency', seq = 0, timer = 0, errors = [], busy = false, tab = 'main', hintFor = null, uid = 0;
+  let seq = 0, timer = 0, busy = false, tab = 'main', hintFor = null, uid = 0, cs = slots.length ? slots[0].id : null;
+  // Per-slot editor state: current text (the default text when not customised), errors from preview / from the server.
+  const tpls = Object.fromEntries(slots.map(x => [x.id, (chat.settings.templates || {})[x.id] || x.defaultTemplate]));
+  const perr = {}, serr = {};
 
-  const normT = v => (!v || !v.trim() || v === boot.defaultTemplate) ? null : v;
   const groupOf = () => (chat.settings.regionId === s.regionId && chat.settings.groupId) || null;
   const addrOf = () => (groupOf() && chat.settings.addressLabel) || null;
-  // Form fields only; scheduleNotify counts only when a group is saved for the chosen region.
-  const form = (src, template, saved) => {
-    const r = regionOf(src.regionId);
+  const customised = (x, v) => !!(x && v && v.trim() && v !== x.defaultTemplate);
+  const isCustom = id => customised(slotOf(id), tpls[id]);
+  const tplMap = get => Object.fromEntries(slots.filter(x => customised(x, get(x.id))).map(x => [x.id, get(x.id)]));
+  // Form fields only; schedule flags count only when a group is saved for the chosen region.
+  const form = (src, templates, saved) => {
+    const r = regionOf(src.regionId), ok = !!(r && r.hasSchedules && saved.regionId === src.regionId && saved.groupId);
     return {
-      regionId: src.regionId || null, partId: src.partId || null, isActive: !!src.isActive, isPaused: !!src.isPaused,
+      regionId: src.regionId || null, partIds: partIdsOf(src), isActive: !!src.isActive, isPaused: !!src.isPaused,
       filter: src.filter || 'All', notifyOnEnd: !!src.notifyOnEnd, editInPlace: !!src.editInPlace,
-      outageTrigger: !!src.outageTrigger, scheduleImage: src.scheduleImage || 'Grid', template,
-      scheduleNotify: !!(src.scheduleNotify && r && r.hasSchedules && saved.regionId === src.regionId && saved.groupId),
+      outageTrigger: !!src.outageTrigger, templates,
+      scheduleNotify: !!(src.scheduleNotify && ok), scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
+      schedulePost: !!(src.schedulePost && ok), schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
     };
   };
 
-  const tpl = h('textarea', { maxlength: boot.maxTemplateLength, rows: 8, spellcheck: 'false', 'aria-label': 'Шаблон повідомлення', id: 'tpl' });
-  tpl.value = s.template || boot.defaultTemplate;
-  const cur = () => form(s, normT(tpl.value), chat.settings);
-  let base = JSON.stringify(form(chat.settings, normT(chat.settings.template), chat.settings));
+  const cur = () => form(s, tplMap(id => tpls[id]), chat.settings);
+  let base = JSON.stringify(form(s, tplMap(id => (chat.settings.templates || {})[id]), chat.settings));
   const isDirty = () => JSON.stringify(cur()) !== base;
+  const slotErrs = id => [...(perr[id] || []), ...(serr[id] || [])];
+  const blocking = () => Object.values(perr).some(a => a && a.length);
+  const anyErr = () => blocking() || Object.values(serr).some(a => a && a.length);
 
   // ----- chrome: top bar, tabs, save bar -----
   const topPill = h('span', { class: 'pill' });
@@ -296,6 +335,7 @@ function renderEditor(chat) {
     window.scrollTo(0, 0);
     try { tabBtns[TABS.findIndex(x => x[0] === id)].scrollIntoView({ inline: 'center', block: 'nearest' }); } catch { /* optional */ }
     if (id === 'sched') loadPv();
+    if (id === 'msg') runPreview();
   }
 
   // ----- widgets bound to form state -----
@@ -322,18 +362,59 @@ function renderEditor(chat) {
 
   // ----- tab: Основне -----
   const regionSel = h('select', { 'aria-label': 'Регіон', id: 'regionSel' });
-  const partSel = h('select', { 'aria-label': 'Частина регіону', id: 'partSel' });
   regionSel.replaceChildren(h('option', { value: '', text: '— Оберіть регіон —' }), ...boot.regions.map(r => h('option', { value: r.id, text: r.name })));
   regionSel.value = s.regionId || '';
-  const partField = h('div', { class: 'fld' }, fieldLabel('Частина регіону', 'part', 'partSel'), partSel);
   const hintBox = h('div');
   const activeRow = toggle('Підписка активна', 'isActive', 'active');
 
-  function fillParts() {
+  // Districts: multi-select chips; empty selection = whole region.
+  let dq = '';
+  const dqIn = h('input', { type: 'text', placeholder: 'Пошук району', autocomplete: 'off', 'aria-label': 'Пошук району', hidden: true });
+  const dList = h('div', { class: 'dchips' });
+  const dSum = h('p', { class: 'hint' });
+  const distBox = h('div', { class: 'fld' }, fieldLabel('Райони', 'parts'), dqIn, dList, dSum);
+  dqIn.addEventListener('input', () => { dq = dqIn.value; renderDistricts(); });
+
+  function renderDistricts() {
     const r = regionOf(s.regionId);
-    partField.hidden = !r || !r.parts.length;
-    partSel.replaceChildren(h('option', { value: '', text: 'Весь регіон' }), ...(r ? r.parts : []).map(p => h('option', { value: p.id, text: p.name })));
-    partSel.value = s.partId || '';
+    distBox.hidden = !r || !r.parts.length;
+    if (distBox.hidden) return;
+    const many = r.parts.length > 12, sel = new Set(partIdsOf(s)), q = many ? dq.trim().toLowerCase() : '';
+    dqIn.hidden = !many;
+    dList.classList.toggle('scroll', many);
+    const chip = (label, on, fn) => h('button', { type: 'button', class: 'dchip' + (on ? ' on' : ''), 'aria-pressed': String(on), text: label, onclick: fn });
+    const flip = id => { sel.has(id) ? sel.delete(id) : sel.add(id); s.partIds = [...sel]; touch(); renderDistricts(); };
+    const top = dList.scrollTop;
+    dList.replaceChildren(chip('Усі райони', !sel.size, () => { s.partIds = []; touch(); renderDistricts(); }),
+      ...r.parts.filter(p => !q || p.name.toLowerCase().includes(q)).map(p => chip(p.name, sel.has(p.id), () => flip(p.id))));
+    dList.scrollTop = top;
+    const names = partNames(s);
+    dSum.textContent = names.length ? 'Сповіщення про екстрені відключення лише для: ' + names.join(', ') : 'Сповіщення для всього регіону';
+  }
+
+  // Current state card (what DTEK and the schedules say right now).
+  const stLines = h('div', { class: 'stlines', 'aria-live': 'polite' });
+  const stBtn = h('button', { type: 'button', class: 'btn ghost sm', text: 'Оновити', onclick: () => loadStatus() });
+  const stCard = card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Поточний стан' }), help('status')), stLines, stBtn);
+  let stSeq = 0, stFor;
+  async function loadStatus() {
+    const my = ++stSeq;
+    stBtn.disabled = true;
+    stLines.replaceChildren(h('div', { class: 'sk sk-line' }), h('div', { class: 'sk sk-line s' }));
+    try {
+      const d = await api('GET', '/api/chats/' + encodeURIComponent(chat.chatId) + '/status');
+      if (my !== stSeq) return;
+      const lines = (d && d.lines) || [];
+      stLines.replaceChildren(...(lines.length ? lines.map(t => h('div', { class: 'stl', text: t })) : [h('div', { class: 'hint', text: 'Поки немає даних.' })]));
+    } catch {
+      if (my === stSeq) stLines.replaceChildren(h('div', { class: 'hint', text: 'Стан недоступний' }));
+    }
+    if (my === stSeq) stBtn.disabled = false;
+  }
+  function syncStatus() {
+    const has = !!(chat.settings.regionId || chat.settings.isActive);
+    stCard.hidden = !has;
+    if (has && stFor !== chat.settings.regionId) { stFor = chat.settings.regionId; loadStatus(); }
   }
 
   function renderHint() {
@@ -346,16 +427,16 @@ function renderEditor(chat) {
   }
 
   regionSel.addEventListener('change', () => {
-    s.regionId = regionSel.value || null; s.partId = null;
+    s.regionId = regionSel.value || null; s.partIds = []; dq = ''; dqIn.value = '';
     if (s.regionId && !s.isActive) { s.isActive = true; activeRow.cb.checked = true; }
     const r = regionOf(s.regionId);
     hintFor = r && (r.hasGroups || r.hasSchedules) ? s.regionId : null;
-    setErr([]); refreshAll(); schedulePreview();
+    setErr([]); refreshAll();
   });
-  partSel.addEventListener('change', () => { s.partId = partSel.value || null; touch(); schedulePreview(); });
 
   panels.main.append(
-    card(h('div', { class: 'fld' }, fieldLabel('Регіон', 'region', 'regionSel'), regionSel), partField),
+    stCard,
+    card(h('div', { class: 'fld' }, fieldLabel('Регіон', 'region', 'regionSel'), regionSel), distBox),
     hintBox,
     card(activeRow, toggle('Пауза', 'isPaused', 'pause')),
     card(h('div', { class: 'fld' }, fieldLabel('Які сповіщення', 'filter'),
@@ -369,14 +450,28 @@ function renderEditor(chat) {
     chat = c; state.editing = c;
     const i = state.chats.findIndex(x => x.chatId === c.chatId);
     if (i >= 0) state.chats[i] = c;
-    if (!c.settings.groupId) s.scheduleNotify = false;
+    if (!c.settings.groupId) { s.scheduleNotify = false; s.schedulePost = false; }
     const r = regionOf(c.settings.regionId);
+    const ok = !!(c.settings.groupId && r && r.hasSchedules);
     const b = JSON.parse(base);
-    b.scheduleNotify = !!(c.settings.scheduleNotify && c.settings.groupId && r && r.hasSchedules);
+    b.scheduleNotify = !!(c.settings.scheduleNotify && ok);
+    b.schedulePost = !!(c.settings.schedulePost && ok);
     base = JSON.stringify(b);
   }
 
-  // Shared by the save bar and ensureSaved(). Resolves to null on success or the Error.
+  // Server template errors are plain strings that name the slot; show each next to its slot when we can tell which.
+  function attributeErrors(e) {
+    for (const k of Object.keys(serr)) delete serr[k];
+    const rest = [];
+    for (const d of Array.isArray(e.details) ? e.details.map(String) : []) {
+      const low = d.toLowerCase();
+      const x = slots.find(z => low.includes(z.title.toLowerCase())) || slots.find(z => new RegExp(`(^|[^a-zа-яіїєґ_])${z.id}([^a-zа-яіїєґ_]|$)`, 'i').test(d));
+      if (x) (serr[x.id] = serr[x.id] || []).push(d); else rest.push(d);
+    }
+    return [e.message, ...rest];
+  }
+
+  // Shared by the save bar, ensureSaved() and the test send. Resolves to null on success or the Error.
   async function doSave(silent) {
     if (!silent) setErr([]);
     if (s.isActive && !s.regionId) {
@@ -386,13 +481,17 @@ function renderEditor(chat) {
     }
     busy = true; updateUi();
     try {
-      applyChat(await api('PUT', '/api/chats/' + encodeURIComponent(chat.chatId), { ...chat.settings, ...cur() }));
+      const { partId: _p, template: _t, ...saved } = chat.settings; // legacy fields are never sent
+      applyChat(await api('PUT', '/api/chats/' + encodeURIComponent(chat.chatId), { ...saved, ...cur() }));
       base = JSON.stringify(cur());
+      for (const k of Object.keys(serr)) delete serr[k];
       if (!silent) { haptic('success'); busy = false; refreshAll(); }
       return null;
     } catch (e) {
-      if (!silent) setErr(errorText(e));
-      return e;
+      const lines = attributeErrors(e);
+      if (!silent) setErr(lines);
+      renderPills(); paintSlotErrors();
+      return Object.assign(e, { lines });
     } finally {
       busy = false; updateUi();
     }
@@ -408,6 +507,24 @@ function renderEditor(chat) {
   // ----- tab: Адреса і черга -----
   const empty = (text, to) => card(h('p', { class: 'empty', text }),
     to ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Перейти до «Основне»', onclick: () => setTab(to) }) : null);
+
+  // "Світла немає?" check (private chat only): runs the outage assessment for the saved address.
+  const chkOut = h('div', { 'aria-live': 'polite' });
+  const chkBtn = h('button', { type: 'button', class: 'btn amber', text: 'Перевірити зараз' });
+  const chkCard = h('section', { class: 'card glass warnc' },
+    h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Світла немає?' }), help('check')),
+    h('p', { class: 'hint', text: 'Перевірте причину відключення за вашою адресою.' }), chkBtn);
+  chkBtn.addEventListener('click', async () => {
+    chkBtn.disabled = true; chkBtn.classList.add('busy'); chkBtn.textContent = 'Перевіряю…';
+    chkOut.replaceChildren();
+    try {
+      const d = await api('POST', '/api/chats/' + encodeURIComponent(chat.chatId) + '/check');
+      chkOut.replaceChildren(card(h('h3', { class: 'ct', text: 'Результат перевірки' }), h('div', { class: 'tgb', text: (d && d.text) || 'Немає даних.' })));
+    } catch (e) {
+      chkOut.replaceChildren(h('div', { class: 'note ' + (e.status === 429 ? 'warn' : 'err'), role: 'alert', text: errorText(e).join(' ') }));
+    }
+    chkBtn.disabled = false; chkBtn.classList.remove('busy'); chkBtn.textContent = 'Перевірити зараз';
+  });
 
   function renderAddr() {
     const r = regionOf(s.regionId);
@@ -486,52 +603,74 @@ function renderEditor(chat) {
           grp && !addr ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути чергу', onclick: () => commit('DELETE', '/address') }) : null));
       }
       nodes.push(msg);
+      if (isPriv && addrOf()) nodes.push(chkCard, chkOut);
     }
-    if (!isPriv) nodes.push(card(toggle('Реагувати на «Світло зникло»', 'outageTrigger', 'outage')));
+    if (!isPriv) nodes.push(card(toggle('Реагувати на «Світло зникло»', 'outageTrigger', 'outage'),
+      h('p', { class: 'hint', text: 'Для каналу перевірка запускається повідомленням «Світло зникло» (див. «Реагувати на «Світло зникло»»).' })));
     panels.addr.replaceChildren(...nodes);
   }
 
-  // ----- tab: Графік -----
-  const pv = { key: '', state: 'idle', data: null, msg: '' };
-  let pvSeq = 0;
-  const pvImg = h('div', { class: 'pimg' });
-  const pvBubble = h('div', { class: 'tgb' });
-  const pvNote = h('p', { class: 'hint' });
-  const pvCard = card(h('h3', { class: 'ct', text: 'Попередній перегляд' }), pvImg, pvBubble, pvNote);
-
-  function paintPv() {
-    pvImg.replaceChildren(); pvBubble.replaceChildren(); pvNote.textContent = ''; pvNote.className = 'hint';
-    pvBubble.hidden = pv.state !== 'ok' && pv.state !== 'loading';
-    if (pv.state === 'loading') {
-      pvImg.append(h('div', { class: 'sk sk-img' }));
-      pvBubble.append(h('div', { class: 'sk sk-line' }), h('div', { class: 'sk sk-line s' }));
-    } else if (pv.state === 'ok') {
-      const d = pv.data || {};
-      if (d.imageUrl && /^(https?:\/\/|\/)/.test(d.imageUrl)) {
-        const img = h('img', { src: d.imageUrl, loading: 'lazy', alt: 'Графік відключень для черги ' + (d.groupId || '') });
-        img.addEventListener('error', () => img.replaceWith(h('p', { class: 'hint err', text: 'Не вдалося завантажити картинку' })));
-        pvImg.append(img);
-      }
-      pvBubble.textContent = d.text || '';
-    } else if (pv.state === 'err') { pvNote.className = 'hint err'; pvNote.textContent = pv.msg; }
-    else pvNote.textContent = 'Оберіть чергу, щоб побачити приклад повідомлення.';
+  // ----- Telegram-style message preview (the only place server html is injected) -----
+  const channelName = isPriv ? 'Чат із ботом' : (chat.title || 'Канал');
+  function tgPreview() {
+    const photo = h('div', { class: 'tgphoto' });
+    const text = h('div', { class: 'tgtext' });
+    const note = h('p', { class: 'hint' });
+    const box = h('div', { class: 'tgmsg' }, h('div', { class: 'tgname', text: channelName }), photo, text,
+      h('div', { class: 'tgmeta' }, h('span', { text: '👁 1,2 тис.' }), h('span', { text: '14:24' })));
+    const wrap = h('div', { class: 'tgchat' }, box);
+    return {
+      node: h('div', { class: 'pvbox' }, h('div', { class: 'pvlabel', text: 'Приклад із тестовими даними' }), wrap, note),
+      set(st, d, msg) {
+        wrap.classList.toggle('loading', st === 'loading' || st === 'stale');
+        box.hidden = st === 'idle' || (st === 'err' && !text.childNodes.length);
+        note.className = 'hint' + (st === 'err' ? ' err' : ''); note.textContent = st === 'err' ? msg : st === 'idle' ? msg : '';
+        if (st === 'loading' && !text.childNodes.length) { photo.replaceChildren(h('div', { class: 'sk sk-img' })); text.replaceChildren(h('div', { class: 'sk sk-line' }), h('div', { class: 'sk sk-line s' })); }
+        if (st !== 'ok') return;
+        photo.replaceChildren();
+        if (d.imageUrl && /^(https?:\/\/|\/)/.test(d.imageUrl)) {
+          const img = h('img', { src: d.imageUrl, loading: 'lazy', alt: 'Картинка до повідомлення' });
+          img.addEventListener('error', () => img.replaceWith(h('p', { class: 'hint err', text: 'Не вдалося завантажити картинку' })));
+          photo.append(img);
+        }
+        text.innerHTML = d.html || ''; // pre-validated Telegram HTML from the server, whitelisted tags only
+      },
+    };
   }
+  const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : (id === 'off' || id === 'on') ? s.scheduleImage : 'None';
+  const previewBody = id => ({
+    slot: id, template: customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
+    groupId: groupOf(), kind: KIND_OF[id] || 'Emergency', imageKind: imageKindOf(id),
+  });
+
+  // ----- tab: Графік -----
+  const pv = { key: '', state: 'idle' };
+  let pvSeq = 0;
+  const pvx = tgPreview();
 
   function loadPv() {
     const r = regionOf(s.regionId), g = groupOf();
-    if (!r || !r.hasSchedules || !g) { pv.key = ''; pv.state = 'idle'; paintPv(); return; }
-    const k = `${s.regionId}|${g}|${s.scheduleImage}`;
+    if (!r || !r.hasSchedules || !g || !slotOf('schedule')) { pv.key = ''; pv.state = 'idle'; pvx.set('idle', null, 'Оберіть чергу, щоб побачити приклад публікації.'); return; }
+    const body = previewBody('schedule'), k = JSON.stringify(body);
     if (k === pv.key && pv.state !== 'err') return;
-    pv.key = k; pv.state = 'loading'; paintPv();
+    pv.key = k; pv.state = 'loading'; pvx.set('loading');
     const my = ++pvSeq;
-    api('GET', `/api/schedules/preview?regionId=${encodeURIComponent(s.regionId)}&groupId=${encodeURIComponent(g)}&kind=${s.scheduleImage.toLowerCase()}`).then(d => {
+    api('POST', '/api/preview', body).then(d => {
       if (my !== pvSeq) return;
-      pv.state = 'ok'; pv.data = d; paintPv();
+      if (d.errors && d.errors.length) { pv.state = 'err'; pvx.set('err', null, d.errors.join(' ')); return; }
+      pv.state = 'ok'; pvx.set('ok', d);
     }, e => {
       if (my !== pvSeq) return;
-      pv.state = 'err'; pv.msg = e.message; paintPv();
+      pv.state = 'err'; pvx.set('err', null, e.message);
     });
   }
+
+  const modeNote = (kindKey, get) => h('p', { class: 'hint modenote', text: MODE_TEXT[kindKey][get()] });
+  function modeSeg(kindKey, get, set, label) {
+    const note = modeNote(kindKey, get);
+    return [seg(MODES, get, v => { set(v); note.textContent = MODE_TEXT[kindKey][v]; touch(); }, label), note];
+  }
+  const imgSeg = (get, set) => seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], get, v => { set(v); touch(); loadPv(); }, 'Картинка');
 
   function renderSched() {
     const r = regionOf(s.regionId);
@@ -540,66 +679,168 @@ function renderEditor(chat) {
       panels.sched.replaceChildren(empty(r ? 'Графіки відключень для цього регіону поки недоступні.' : 'Спершу оберіть регіон на вкладці «Основне».', r ? null : 'main'));
       return;
     }
-    const has = !!groupOf();
+    const has = !!groupOf(), off = slotOf('off'), on = slotOf('on');
+    const lock = () => has ? null : h('div', { class: 'lockhint' }, h('span', { class: 'hint', text: 'Спершу оберіть адресу або чергу.' }),
+      h('button', { type: 'button', class: 'btn ghost sm', text: 'Адреса і черга', onclick: () => setTab('addr') }));
+    const edit = (id, label) => slotOf(id) ? h('button', { type: 'button', class: 'btn ghost sm', text: label, onclick: () => openSlot(id) }) : null;
     panels.sched.replaceChildren(
-      card(toggle('Сповіщення за графіком', 'scheduleNotify', 'schedule', { disabled: !has }),
-        has ? null : h('div', { class: 'lockhint' }, h('span', { class: 'hint', text: 'Спершу оберіть адресу або чергу.' }),
-          h('button', { type: 'button', class: 'btn ghost sm', text: 'Адреса і черга', onclick: () => setTab('addr') }))),
-      card(h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'),
-        seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], () => s.scheduleImage, v => { s.scheduleImage = v; touch(); loadPv(); }, 'Картинка'))),
-      pvCard,
+      card(
+        h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Публікація графіка' }), help('schedulePost')),
+        toggle('Публікувати графік', 'schedulePost', null, { disabled: !has }), lock(),
+        h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
+        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
+        edit('schedule', 'Редагувати шаблон'),
+        pvx.node),
+      card(
+        h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Події: світло вимкнено / зʼявилося' }), help('events')),
+        toggle('Сповіщення за графіком', 'scheduleNotify', null, { disabled: !has }), lock(),
+        h('div', { class: 'fld' }, fieldLabel('Як показувати', 'eventMode'), ...modeSeg('event', () => s.scheduleEventMode, v => { s.scheduleEventMode = v; }, 'Як показувати')),
+        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'),
+          seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], () => s.scheduleImage, v => { s.scheduleImage = v; touch(); }, 'Картинка подій')),
+        off || on ? h('div', { class: 'btnrow' }, edit('off', 'Редагувати шаблон: ' + (off ? off.title : '')), edit('on', 'Редагувати шаблон: ' + (on ? on.title : ''))) : null),
       h('p', { class: 'hint credit', text: CREDIT }));
     if (tab === 'sched') loadPv();
   }
 
-  // ----- tab: Повідомлення -----
-  const counter = h('div', { class: 'counter' });
-  const errBox = h('div', { class: 'errs' });
-  const bubble = h('div', { class: 'bubble' });
+  // ----- tab: Повідомлення (template studio) -----
+  const slotBar = h('div', { class: 'slotbar', role: 'tablist', 'aria-label': 'Види повідомлень' });
+  const studio = h('div', { class: 'studio' });
+  // Editor widgets of the current slot (rebuilt whenever the slot changes).
+  let tpl, counter, errBox, resetBtn, paramNote, testBtn, testOut, prevx;
+  const previewCache = {};
 
-  function schedulePreview() {
+  function renderPills() {
+    const groups = [...SLOT_GROUPS, ...[...new Set(slots.map(x => x.group))].filter(g => !SLOT_GROUPS.some(y => y[0] === g)).map(g => [g, g])];
+    slotBar.replaceChildren(...groups.map(([g, title]) => {
+      const list = slots.filter(x => x.group === g);
+      if (!list.length) return null;
+      return h('div', { class: 'sgrp', role: 'presentation' }, h('div', { class: 'sgh', text: title }),
+        h('div', { class: 'sgp' }, list.map(x => h('button', {
+          type: 'button', role: 'tab', class: 'spill' + (x.id === cs ? ' on' : ''), id: 'slot-' + x.id, 'aria-selected': String(x.id === cs),
+          onclick: () => openSlot(x.id, true),
+        }, h('span', { text: x.title }), isCustom(x.id) ? h('i', { class: 'pd', title: 'Змінений шаблон' }) : null,
+          slotErrs(x.id).length ? h('i', { class: 'rd2', title: 'Є помилки' }) : null))));
+    }));
+  }
+
+  function openSlot(id, stay) {
+    cs = id;
+    renderPills(); renderStudio();
+    if (!stay) setTab('msg');
+    try { document.getElementById('slot-' + id).scrollIntoView({ inline: 'center', block: 'nearest' }); } catch { /* optional */ }
+    runPreview();
+  }
+
+  function paintSlotErrors() {
+    if (!errBox) return;
+    errBox.replaceChildren(...slotErrs(cs).map(t => h('div', { text: t })));
+  }
+
+  function onEdit() {
+    delete serr[cs];
+    counter.textContent = `${tpl.value.length} / ${boot.maxTemplateLength}`;
+    resetBtn.disabled = !isCustom(cs);
+    renderPills(); paintSlotErrors(); setErr([]); updateUi();
     clearTimeout(timer);
-    updateUi();
     timer = setTimeout(runPreview, 300);
   }
 
+  // Insert text at the caret (replacing the selection); `caret` is the offset inside the inserted text to place the cursor at.
+  function put(text, caret) {
+    const a = tpl.selectionStart ?? tpl.value.length, b = tpl.selectionEnd ?? a;
+    if (tpl.value.length - (b - a) + text.length > boot.maxTemplateLength) return false;
+    tpl.setRangeText(text, a, b, 'end');
+    if (caret != null) tpl.setSelectionRange(a + caret, a + caret);
+    tpl.focus();
+    tpl.dispatchEvent(new Event('input'));
+    return true;
+  }
+  function renderStudio() {
+    const x = slotOf(cs);
+    if (!x) { studio.replaceChildren(card(h('p', { class: 'empty', text: 'Шаблони недоступні.' }))); return; }
+    tpl = h('textarea', { maxlength: boot.maxTemplateLength, rows: 4, spellcheck: 'false', 'aria-label': 'Шаблон: ' + x.title, id: 'tpl' });
+    tpl.value = tpls[cs];
+    counter = h('div', { class: 'counter' });
+    errBox = h('div', { class: 'errs', role: 'alert' });
+    paramNote = h('p', { class: 'hint pnote', 'aria-live': 'polite', text: 'Торкніться параметра, щоб вставити його в текст.' });
+    resetBtn = h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути до стандартного', onclick: () => { tpl.value = x.defaultTemplate; tpls[cs] = x.defaultTemplate; onEdit(); tpl.focus(); } });
+    resetBtn.disabled = !isCustom(cs);
+    tpl.addEventListener('input', () => { tpls[cs] = tpl.value; onEdit(); });
+    counter.textContent = `${tpl.value.length} / ${boot.maxTemplateLength}`;
+
+    const keep = e => e.preventDefault(); // keep the caret in the textarea when tapping a parameter chip
+    const note = p => { paramNote.textContent = `{${p.name}} — ${p.description}${p.example ? '. Приклад: ' + p.example : ''}`; };
+    const chips = h('div', { class: 'chips pchips' }, x.placeholders.map(p => h('button', {
+      type: 'button', class: 'chip mono', title: p.description, 'aria-label': `{${p.name}} — ${p.description}`, onmousedown: keep,
+      onclick: () => { put('{' + p.name + '}'); note(p); },
+      onfocus: () => note(p),
+    }, h('span', { text: '{' + p.name + '}' }))));
+
+    const legend = h('details', { class: 'fold' }, h('summary', { text: 'Що підставляється' }),
+      x.placeholders.map(p => h('div', { class: 'ph' }, h('code', { text: '{' + p.name + '}' }), ' — ' + p.description, p.example ? h('small', { text: 'У прикладі: ' + p.example }) : null)),
+      h('div', { class: 'ph', text: 'Теги: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Фігурні дужки: {{ і }}.' }));
+
+    prevx = tgPreview();
+    testOut = h('div', { class: 'testout', 'aria-live': 'polite' });
+    testBtn = h('button', { type: 'button', class: 'btn', onclick: sendTest });
+    setTestLabel();
+
+    studio.replaceChildren(
+      card(
+        h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: x.title }), help('template')),
+        h('p', { class: 'hint', text: x.description }),
+        h('div', { class: 'tawrap' }, tpl, counter), errBox, prevx.node,
+        h('div', { class: 'testrow' }, testBtn, help('test')), testOut),
+      card(
+        h('div', { class: 'fl sm' }, h('span', { text: 'Параметри' }), help('cond')), chips, paramNote,
+        resetBtn, legend));
+    paintSlotErrors();
+    const c = previewCache[cs];
+    if (c) prevx.set('ok', c);
+  }
+  const setTestLabel = () => { if (testBtn) testBtn.textContent = isPriv ? 'Надіслати тест у цей чат' : 'Надіслати тест у канал'; };
+
   async function runPreview() {
-    const my = ++seq;
+    const x = slotOf(cs);
+    if (!x || !prevx) return;
+    const id = cs, my = ++seq;
+    prevx.set(previewCache[id] ? 'stale' : 'loading');
     try {
-      const r = await api('POST', '/api/preview', {
-        template: tpl.value.trim() ? tpl.value : boot.defaultTemplate,
-        kind, regionId: s.regionId, partId: s.partId,
-      });
-      if (my !== seq) return; // stale response
-      errors = r.errors || [];
-      bubble.innerHTML = errors.length ? '' : r.html; // server-validated, whitelisted tags only
+      const r = await api('POST', '/api/preview', previewBody(id));
+      if (my !== seq || id !== cs) return; // stale response
+      perr[id] = r.errors || [];
+      if (!perr[id].length) { previewCache[id] = r; prevx.set('ok', r); } else prevx.set(previewCache[id] ? 'stale' : 'idle', null, 'Виправте помилки, щоб побачити приклад.');
     } catch (e) {
-      if (my !== seq) return;
-      errors = [];
-      bubble.textContent = 'Не вдалося отримати попередній перегляд: ' + e.message;
+      if (my !== seq || id !== cs) return;
+      perr[id] = [];
+      prevx.set('err', null, 'Не вдалося отримати попередній перегляд: ' + e.message);
     }
-    updateUi();
+    paintSlotErrors(); renderPills(); updateUi();
+    testBtn.disabled = slotErrs(id).length > 0 || testBusy;
   }
 
-  tpl.addEventListener('input', schedulePreview);
-
-  const chips = h('div', { class: 'chips' }, boot.placeholders.map(p => h('button', {
-    type: 'button', class: 'chip mono', text: '{' + p.name + '}',
-    onclick: () => {
-      const a = tpl.selectionStart ?? tpl.value.length, b = tpl.selectionEnd ?? a, t = '{' + p.name + '}';
-      if (tpl.value.length - (b - a) + t.length > boot.maxTemplateLength) return;
-      tpl.setRangeText(t, a, b, 'end');
-      tpl.focus();
-      schedulePreview();
-    },
-  })));
-
-  const helpBox = h('details', { class: 'fold' }, h('summary', { text: 'Довідка щодо плейсхолдерів' }),
-    boot.placeholders.map(p => h('div', { class: 'ph' },
-      h('code', { text: '{' + p.name + '}' }), ' — ' + p.description,
-      p.example ? h('small', { text: 'Приклад: ' + p.example }) : null)),
-    h('div', { class: 'ph', text: 'Дозволені теги: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Щоб вивести фігурні дужки, пишіть {{ і }}.' }));
-
+  let testBusy = false;
+  async function sendTest() {
+    const id = cs, x = slotOf(id);
+    if (!x || testBusy) return;
+    testBusy = true; testBtn.disabled = true; testBtn.classList.add('busy'); testOut.replaceChildren();
+    const fail = lines => testOut.replaceChildren(...lines.map(t => h('div', { class: 'note err', role: 'alert', text: t })));
+    try {
+      if (isDirty()) {
+        const err = await doSave(true);
+        if (err) { fail(err.lines || errorText(err)); return; }
+      }
+      const imageKind = id === 'schedule' || id === 'off' || id === 'on' ? imageKindOf(id) : null;
+      await api('POST', `/api/chats/${encodeURIComponent(chat.chatId)}/templates/${encodeURIComponent(id)}/send`, { template: customised(x, tpls[id]) ? tpls[id] : null, imageKind });
+      haptic('success');
+      testOut.replaceChildren(h('div', { class: 'toast ok', role: 'status', text: 'Надіслано ✓' }));
+      setTimeout(() => testOut && testOut.querySelector('.toast') && testOut.replaceChildren(), 4000);
+    } catch (e) {
+      fail([e.status === 429 ? 'Забагато тестів. ' + e.message : e.message]);
+    } finally {
+      testBusy = false; testBtn.classList.remove('busy'); testBtn.disabled = slotErrs(cs).length > 0;
+    }
+  }
   // Linked channels can be taken off the list; the private chat can only be unsubscribed.
   const removeBtn = isPriv ? null : h('button', { type: 'button', class: 'btn danger', text: 'Видалити зі списку', onclick: async () => {
     const ask = 'Видалити цей канал зі списку? Якщо ви єдиний, хто ним керує, сповіщення буде вимкнено, а збережену адресу видалено.';
@@ -617,28 +858,25 @@ function renderEditor(chat) {
   } });
 
   panels.msg.append(
-    card(fieldLabel('Шаблон повідомлення', 'template', 'tpl'), tpl, counter, errBox, chips,
-      h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути до стандартного', onclick: () => { tpl.value = boot.defaultTemplate; schedulePreview(); } }),
-      helpBox),
-    card(fieldLabel('Попередній перегляд', 'kind'),
-      seg(KINDS, () => kind, v => { kind = v; schedulePreview(); }, 'Тип попереднього перегляду'), bubble),
+    card(h('div', { class: 'fl big sm' }, h('span', { text: 'Шаблони повідомлень' }), help('slots')),
+      h('div', { class: 'slotwrap' }, slotBar)),
+    studio,
     removeBtn ? card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Керування' }), help('remove')), removeBtn) : null);
+  renderPills(); renderStudio();
 
   // ----- wiring -----
   function updateUi() {
-    counter.textContent = `${tpl.value.length} / ${boot.maxTemplateLength}`;
-    errBox.replaceChildren(...errors.map(t => h('div', { text: t })));
-    const d = isDirty();
-    saveBtn.disabled = busy || errors.length > 0 || !d;
-    const mode = errors.length ? 'err' : d ? 'dirty' : 'ok';
+    const d = isDirty(), bad = blocking();
+    saveBtn.disabled = busy || bad || !d;
+    const mode = bad ? 'err' : d ? 'dirty' : 'ok';
     bar.dataset.mode = mode;
     stTxt.textContent = mode === 'err' ? 'Виправте помилки шаблону' : mode === 'dirty' ? 'Є незбережені зміни' : 'Збережено ✓';
-    rd.hidden = !errors.length;
+    rd.hidden = !anyErr();
     const [c, t] = statusOf(s);
     topPill.className = 'pill ' + c; topPill.textContent = t;
   }
 
-  function refreshAll() { fillParts(); renderHint(); renderAddr(); renderSched(); updateUi(); }
+  function refreshAll() { renderDistricts(); syncStatus(); renderHint(); renderAddr(); renderSched(); updateUi(); if (tab === 'msg') runPreview(); }
 
   async function goBack() {
     if (isDirty()) {
@@ -657,7 +895,6 @@ function renderEditor(chat) {
   refreshAll();
   setTab('main');
   window.scrollTo(0, 0);
-  runPreview();
 }
 
 // ---------- startup ----------
@@ -677,7 +914,7 @@ async function load() {
 
 if (!tg || !initData) {
   show(h('h1', { class: 'ttl', text: 'Налаштування DTEK' }),
-    card(h('p', { class: 'msg', text: 'Відкрийте цей застосунок із Telegram (кнопка в меню бота).' })));
+    card(h('p', { class: 'msg', text: 'Відкрийте цей застосунок із Telegram.' })));
 } else {
   for (const [m, c] of [['setHeaderColor', '#070b16'], ['setBackgroundColor', '#070b16'], ['setBottomBarColor', '#0d1226']]) {
     try { if (tg[m]) tg[m](c); } catch { /* unsupported in this client version */ }

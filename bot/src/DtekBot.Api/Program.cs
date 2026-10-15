@@ -46,11 +46,14 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
         string.IsNullOrWhiteSpace(baseUrl) ? null : baseUrl));
 });
 builder.Services.AddScoped<BotUpdateHandler>();
+builder.Services.AddHostedService<BotMenuInitializer>();
 builder.Services.AddScoped<AlertDispatcher>();
 builder.Services.AddScoped<ChatAccessService>();
 builder.Services.AddScoped<AddressCheckService>();
 builder.Services.AddScoped<OutageAssessmentService>();
+builder.Services.AddScoped<ChatStatusService>();
 builder.Services.AddScoped<ScheduleNotifier>();
+builder.Services.AddScoped<DtekBot.Api.MiniApp.TemplatePreviewService>();
 builder.Services.AddSingleton<IScheduleProvider, ScheduleProvider>();
 builder.Services.AddHttpClient(ScheduleProvider.ClientName, client =>
 {
@@ -138,10 +141,10 @@ app.MapPost("/ingest", async (
         return Results.BadRequest(new { error = "unknown region" });
     }
 
-    var result = classifier.Classify(region.Id, body.PopupText);
+    var result = classifier.Classify(region.Id, body.PopupText, body.Structured);
     logger.LogInformation(
-        "Ingest {Region}: kind={Kind} parts=[{Parts}] textLength={Length}",
-        region.Id, result.Kind, string.Join(",", result.PartIds), result.NormalizedText.Length);
+        "Ingest {Region}: kind={Kind} parts=[{Parts}] textLength={Length} structured={Structured}",
+        region.Id, result.Kind, string.Join(",", result.PartIds), result.NormalizedText.Length, body.Structured?.Scope ?? "none");
     var now = time.GetUtcNow();
 
     var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
@@ -184,6 +187,7 @@ app.Run();
 public sealed record IngestRequest(
     [property: JsonPropertyName("regionId")] string RegionId,
     [property: JsonPropertyName("popupText")] string? PopupText,
-    [property: JsonPropertyName("observedAt")] DateTimeOffset? ObservedAt);
+    [property: JsonPropertyName("observedAt")] DateTimeOffset? ObservedAt,
+    [property: JsonPropertyName("structured")] StructuredPopup? Structured = null);
 
 public partial class Program;

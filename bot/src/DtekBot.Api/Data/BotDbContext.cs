@@ -9,6 +9,19 @@ public sealed class Channel
     public long ChatId { get; set; }
     public string RegionId { get; set; } = "";
     public string? PartId { get; set; }
+
+    // Districts the chat wants emergency alerts for, comma-separated; empty means the whole region.
+    // PartId is the older single-choice field and is only read when PartIds is empty.
+    public string? PartIds { get; set; }
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public IReadOnlyList<string> PartIdList
+    {
+        get => string.IsNullOrWhiteSpace(PartIds)
+            ? (string.IsNullOrEmpty(PartId) ? [] : [PartId])
+            : PartIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        set => PartIds = value.Count == 0 ? null : string.Join(',', value.Distinct(StringComparer.Ordinal));
+    }
     public bool IsActive { get; set; } = true;
     public DateTimeOffset CreatedAt { get; set; }
 
@@ -24,7 +37,52 @@ public sealed class Channel
 
     // Post and edit schedule messages for the chat's group (needs GroupId).
     public bool ScheduleNotify { get; set; }
-    public ScheduleImage ScheduleImage { get; set; } = ScheduleImage.Grid;
+
+    // Picture of the light off/on messages (none by default: the schedule post carries the picture).
+    public ScheduleImage ScheduleImage { get; set; } = ScheduleImage.None;
+    public PostMode ScheduleEventMode { get; set; } = PostMode.Edit;
+
+    // A separate post with the group's schedule for the day.
+    public bool SchedulePost { get; set; }
+    public PostMode SchedulePostMode { get; set; } = PostMode.New;
+    public ScheduleImage SchedulePostImage { get; set; } = ScheduleImage.Grid;
+
+    // Customised message templates by slot, as JSON. A slot that is not there uses the default text;
+    // for the alert slots the older single Template is the fallback.
+    public string? Templates { get; set; }
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public IReadOnlyDictionary<string, string> TemplateMap
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Templates))
+            {
+                return new Dictionary<string, string>();
+            }
+
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(Templates) ?? [];
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return new Dictionary<string, string>();
+            }
+        }
+        set => Templates = value.Count == 0 ? null : System.Text.Json.JsonSerializer.Serialize(value);
+    }
+
+    public string? TemplateFor(string slot)
+    {
+        if (TemplateMap.TryGetValue(slot, out var own) && !string.IsNullOrWhiteSpace(own))
+        {
+            return own;
+        }
+
+        return MessageSlots.IsAlert(slot) && !string.IsNullOrWhiteSpace(Template) ? Template : null;
+    }
+
     public string? GroupId { get; set; }
     public string? AddressLabel { get; set; }
 
@@ -55,6 +113,25 @@ public sealed class ScheduleThread
     public string ImageVersion { get; set; } = "";
 
     // The picture kind the message was posted with (a text-only fallback still remembers the requested kind).
+    public ScheduleImage ImageKind { get; set; } = ScheduleImage.Grid;
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+// The latest schedule post of a chat for a given day, so the next update can edit or replace it.
+public sealed class SchedulePostThread
+{
+    public long ChatId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string GroupId { get; set; } = "";
+    public int MessageId { get; set; }
+    public bool IsPhoto { get; set; }
+
+    // Kyiv date the post is about, yyyy-MM-dd.
+    public string DateKey { get; set; } = "";
+
+    // Hash of what the post shows (the group's outages for today and tomorrow, picture kind).
+    public string ContentHash { get; set; } = "";
+    public string ImageVersion { get; set; } = "";
     public ScheduleImage ImageKind { get; set; } = ScheduleImage.Grid;
     public DateTimeOffset UpdatedAt { get; set; }
 }
@@ -165,9 +242,22 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<AddressResult> AddressResults => Set<AddressResult>();
     public DbSet<KeyValue> KeyValues => Set<KeyValue>();
     public DbSet<ScheduleThread> ScheduleThreads => Set<ScheduleThread>();
+    public DbSet<SchedulePostThread> SchedulePostThreads => Set<SchedulePostThread>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<SchedulePostThread>(e =>
+        {
+            e.HasKey(x => x.ChatId);
+            e.Property(x => x.ChatId).ValueGeneratedNever();
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.GroupId).HasMaxLength(16);
+            e.Property(x => x.DateKey).HasMaxLength(10);
+            e.Property(x => x.ContentHash).HasMaxLength(64);
+            e.Property(x => x.ImageVersion).HasMaxLength(64);
+            e.Property(x => x.ImageKind).HasConversion<string>().HasMaxLength(8);
+        });
+
         modelBuilder.Entity<ScheduleThread>(e =>
         {
             e.HasKey(x => x.ChatId);
@@ -228,12 +318,16 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.ChatId).ValueGeneratedNever();
             e.Property(x => x.RegionId).HasMaxLength(64);
             e.Property(x => x.PartId).HasMaxLength(64);
+            e.Property(x => x.PartIds).HasMaxLength(512);
             e.Property(x => x.Title).HasMaxLength(256);
             e.Property(x => x.Filter).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.Template).HasMaxLength(MessageTemplate.MaxLength);
             e.Property(x => x.GroupId).HasMaxLength(16);
             e.Property(x => x.AddressLabel).HasMaxLength(256);
             e.Property(x => x.ScheduleImage).HasConversion<string>().HasMaxLength(8);
+            e.Property(x => x.ScheduleEventMode).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.SchedulePostMode).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.SchedulePostImage).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.AddressStreet).HasMaxLength(256);
             e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.HasIndex(x => new { x.RegionId, x.IsActive });

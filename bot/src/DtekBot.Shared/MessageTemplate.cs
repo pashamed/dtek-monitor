@@ -23,18 +23,23 @@ public static partial class MessageTemplate
         new("site", "Посилання на сайт ДТЕК", "https://www.dtek-kem.com.ua/ua/shutdowns"),
     ];
 
-    private static readonly HashSet<string> KnownNames = Placeholders.Select(p => p.Name).ToHashSet();
-
     private static readonly HashSet<string> AllowedTags = new(StringComparer.OrdinalIgnoreCase)
     {
         "b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a", "tg-spoiler", "blockquote",
     };
 
-    public static string Render(string? template, IReadOnlyDictionary<string, string> values)
+    // Syntax: {name}, a conditional block {#name}...{/name} shown only when the value is not empty,
+    // and {{ / }} for literal braces. Values are HTML-escaped; the template's own tags are kept.
+    public static string Render(string? template, IReadOnlyDictionary<string, string> values, string? fallback = null)
     {
-        var source = string.IsNullOrWhiteSpace(template) ? Default : template;
+        var source = string.IsNullOrWhiteSpace(template) ? fallback ?? Default : template;
         var output = new StringBuilder(source.Length + 256);
+        Append(source, values, output);
+        return output.ToString();
+    }
 
+    private static void Append(string source, IReadOnlyDictionary<string, string> values, StringBuilder output)
+    {
         for (var i = 0; i < source.Length; i++)
         {
             var c = source[i];
@@ -52,7 +57,33 @@ public static partial class MessageTemplate
             {
                 var close = source.IndexOf('}', i + 1);
                 var name = close < 0 ? null : source[(i + 1)..close];
-                if (name is not null && values.TryGetValue(name, out var value))
+                if (name is null)
+                {
+                    output.Append(c);
+                }
+                else if (name.StartsWith('#'))
+                {
+                    var block = name[1..];
+                    var closing = "{/" + block + "}";
+                    var end = source.IndexOf(closing, close + 1, StringComparison.Ordinal);
+                    if (end < 0)
+                    {
+                        output.Append(c);
+                        continue;
+                    }
+
+                    if (values.TryGetValue(block, out var shown) && !string.IsNullOrWhiteSpace(shown))
+                    {
+                        Append(source[(close + 1)..end], values, output);
+                    }
+
+                    i = end + closing.Length - 1;
+                }
+                else if (name.StartsWith('/'))
+                {
+                    i = close;
+                }
+                else if (values.TryGetValue(name, out var value))
                 {
                     output.Append(Escape(value));
                     i = close;
@@ -67,13 +98,17 @@ public static partial class MessageTemplate
                 output.Append(c);
             }
         }
-
-        return output.ToString();
     }
 
-    public static IReadOnlyList<string> Validate(string? template)
+    public static IReadOnlyList<string> Validate(string? template, string slot = MessageSlots.Emergency)
     {
         var errors = new List<string>();
+        var definition = MessageSlots.Find(slot);
+        if (definition is null)
+        {
+            errors.Add("Невідомий тип повідомлення.");
+            return errors;
+        }
 
         if (string.IsNullOrWhiteSpace(template))
         {
@@ -86,7 +121,9 @@ public static partial class MessageTemplate
             errors.Add($"Шаблон задовгий: максимум {MaxLength} символів.");
         }
 
+        var known = definition.Placeholders.Select(p => p.Name).ToHashSet();
         var used = new HashSet<string>();
+        string? openBlock = null;
         for (var i = 0; i < template.Length; i++)
         {
             var c = template[i];
@@ -108,7 +145,30 @@ public static partial class MessageTemplate
                 }
 
                 var name = template[(i + 1)..close];
-                if (KnownNames.Contains(name))
+                if (name.StartsWith('#'))
+                {
+                    var block = name[1..];
+                    if (!known.Contains(block))
+                    {
+                        errors.Add($"Невідомий параметр {{{block}}} в умовному блоці.");
+                    }
+                    else if (openBlock is not null)
+                    {
+                        errors.Add("Умовні блоки не можуть бути вкладеними.");
+                    }
+
+                    openBlock = block;
+                }
+                else if (name.StartsWith('/'))
+                {
+                    if (openBlock != name[1..])
+                    {
+                        errors.Add($"Блок {{/{name[1..]}}} закрито без відкриття {{#{name[1..]}}}.");
+                    }
+
+                    openBlock = null;
+                }
+                else if (known.Contains(name))
                 {
                     used.Add(name);
                 }
@@ -121,9 +181,17 @@ public static partial class MessageTemplate
             }
         }
 
-        if (!used.Contains("message") && !used.Contains("popup"))
+        if (openBlock is not null)
         {
-            errors.Add("Додайте {message} або {popup}, інакше сповіщення не матиме змісту.");
+            errors.Add($"Блок {{#{openBlock}}} не закрито: додайте {{/{openBlock}}}.");
+        }
+
+        var required = MessageSlots.RequiredAny(slot);
+        if (required.Count > 0 && !required.Any(used.Contains))
+        {
+            errors.Add(required.Count == 1
+                ? $"Додайте {{{required[0]}}}, інакше повідомлення не матиме змісту."
+                : $"Додайте {{{string.Join("} або {", required)}}}, інакше повідомлення не матиме змісту.");
         }
 
         ValidateHtml(template, errors);

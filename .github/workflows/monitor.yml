@@ -87,6 +87,12 @@ jobs:
         if: always() && env.INGEST_URL != '' && github.event.action != 'check-addresses'
         continue-on-error: true
         timeout-minutes: 5
+        env:
+          # Optional: lets an LLM read which districts a popup names. Any OpenAI-compatible provider works;
+          # the defaults are the Google Gemini free tier. Without the key the bot matches district names itself.
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: node ./src/ingest-regions.js
 
       # Cheap when nothing is queued (one HTTP request); any run also drains requests whose dispatch failed.

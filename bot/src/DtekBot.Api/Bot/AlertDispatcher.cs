@@ -150,7 +150,7 @@ public sealed class AlertDispatcher(
             Outcome outcome;
             if (isEmergency && !channel.IsPaused)
             {
-                var text = Render(channel, region, AlertKind.Emergency, partNames, null, now);
+                var text = Render(channel, region, AlertKind.Emergency, partNames, null, now, isGroup: true);
                 outcome = await TrySendAsync(
                     channel,
                     () => SendOrEditAsync(channel, key, delivery, text, hash, now, ct),
@@ -161,7 +161,7 @@ public sealed class AlertDispatcher(
                 outcome = !channel.IsPaused && channel.NotifyOnEnd
                     ? await TrySendAsync(
                         channel,
-                        () => SendEndAsync(channel, region, delivery, partNames, null, now, ct),
+                        () => SendEndAsync(channel, region, delivery, partNames, null, now, ct, isGroup: true),
                         ct)
                     : Outcome.Closed;
                 delivery.IsClosed = true;
@@ -258,9 +258,10 @@ public sealed class AlertDispatcher(
         IReadOnlyList<string> partNames,
         string? popupText,
         DateTimeOffset now,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool isGroup = false)
     {
-        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now);
+        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup);
         await WithMarkupFallback(
             text,
             t => bot.SendMessage(
@@ -278,22 +279,45 @@ public sealed class AlertDispatcher(
         return Outcome.Closed;
     }
 
+    // The message type decides which of the chat's templates is used.
+    public static string SlotFor(AlertKind kind, bool isGroup) =>
+        kind == AlertKind.Ended ? MessageSlots.Ended
+        : isGroup ? MessageSlots.Local
+        : kind == AlertKind.Accident ? MessageSlots.Regional
+        : MessageSlots.Emergency;
+
     private static string Render(
         Channel channel,
         RegionSettings region,
         AlertKind kind,
         IReadOnlyList<string> partNames,
         string? popupText,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool isGroup = false)
     {
-        var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText);
-        return MessageTemplate.Render(channel.Template, values);
+        var slot = SlotFor(kind, isGroup);
+        var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText).ToDictionary(p => p.Key, p => p.Value);
+        if (isGroup)
+        {
+            values["group"] = channel.GroupId ?? "";
+            values["address"] = channel.AddressLabel ?? "";
+        }
+
+        return MessageTemplate.Render(channel.TemplateFor(slot), values, MessageSlots.Find(slot)!.DefaultTemplate);
     }
 
-    private static List<string> PartNames(RegionSettings region, PopupClassification result) =>
-        result.PartIds
+    // Names only the districts the alert itself mentions: parts that are merely implied by another one
+    // (a bank's city districts) would make the text needlessly long.
+    private static List<string> PartNames(RegionSettings region, PopupClassification result)
+    {
+        var implied = result.PartIds
+            .SelectMany(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Children ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        return result.PartIds
+            .Where(id => !implied.Contains(id))
             .Select(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Name ?? id)
             .ToList();
+    }
 
     // A saved template is validated, but if Telegram still rejects its markup the alert must go out.
     private async Task<T> WithMarkupFallback<T>(string text, Func<string, Task<T>> call, Channel channel)
@@ -305,7 +329,7 @@ public sealed class AlertDispatcher(
         catch (ApiRequestException ex) when (
             ex.ErrorCode == 400
             && ex.Message.Contains("parse entities", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(channel.Template))
+            && (!string.IsNullOrWhiteSpace(channel.Template) || !string.IsNullOrWhiteSpace(channel.Templates)))
         {
             logger.LogWarning("Chat {ChatId}: custom template rejected by Telegram, sending it without tags", channel.ChatId);
             // The text is already entity-escaped by the renderer, so only the tags are dropped here.
@@ -317,10 +341,14 @@ public sealed class AlertDispatcher(
         }
     }
 
-    private static bool Matches(Channel channel, PopupClassification result) =>
-        channel.PartId is null
-        || result.PartIds.Count == 0
-        || result.PartIds.Contains(channel.PartId, StringComparer.OrdinalIgnoreCase);
+    // No chosen districts, or an alert that names none, reaches everybody in the region; otherwise any overlap counts.
+    private static bool Matches(Channel channel, PopupClassification result)
+    {
+        var wanted = channel.PartIdList;
+        return wanted.Count == 0
+            || result.PartIds.Count == 0
+            || result.PartIds.Any(id => wanted.Contains(id, StringComparer.OrdinalIgnoreCase));
+    }
 
     private static bool PassesFilter(Channel channel, PopupKind kind) =>
         channel.Filter == AlertFilter.All || kind is PopupKind.Emergency or PopupKind.Accident;

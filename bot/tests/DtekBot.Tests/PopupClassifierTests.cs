@@ -46,7 +46,11 @@ public class PopupClassifierTests
 
         Assert.Equal(PopupKind.Accident, result.Kind);
         Assert.True(result.IsAlert);
-        Assert.Equal(["right-bank", "left-bank"], result.PartIds.OrderByDescending(p => p));
+        Assert.Equal(12, result.PartIds.Count);
+        Assert.Contains("right-bank", result.PartIds);
+        Assert.Contains("left-bank", result.PartIds);
+        Assert.Contains("darnytskyi", result.PartIds);
+        Assert.Contains("obolonskyi", result.PartIds);
     }
 
     [Fact]
@@ -56,7 +60,9 @@ public class PopupClassifierTests
 
         Assert.Equal(PopupKind.Accident, result.Kind);
         Assert.True(result.IsAlert);
-        Assert.Equal(["right-bank"], result.PartIds);
+        Assert.Equal(
+            ["right-bank", "holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi"],
+            result.PartIds);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
 using DtekBot.Api.Schedules;
@@ -41,7 +42,7 @@ public static class MiniAppApi
             var regions = settings.CurrentValue.Regions
                 .Select(r => new RegionDto(r.Id, r.Name, r.SiteUrl, r.Parts.Select(p => new PartDto(p.Id, p.Name)).ToList(), r.HasGroups, r.HasSchedules))
                 .ToList();
-            return Json(new BootstrapDto(UserId(http), regions, MessageTemplate.Placeholders, MessageTemplate.Default, MessageTemplate.MaxLength));
+            return Json(new BootstrapDto(UserId(http), regions, MessageTemplate.Placeholders, MessageTemplate.Default, MessageTemplate.MaxLength, MessageSlots.All));
         });
 
         api.MapGet("/chats", async (HttpContext http, BotDbContext db, CancellationToken ct) =>
@@ -147,16 +148,38 @@ public static class MiniAppApi
                 return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
             }
 
-            var template = string.IsNullOrWhiteSpace(dto.Template) || dto.Template == MessageTemplate.Default
-                ? null
-                : dto.Template;
-            if (template is not null)
+            // Templates by slot: only customised, non-default texts are kept. Old clients send the single Template.
+            Dictionary<string, string>? templates = null;
+            var templateErrors = new List<string>();
+            if (dto.Templates is not null)
             {
-                var errors = MessageTemplate.Validate(template);
-                if (errors.Count > 0)
+                templates = [];
+                foreach (var (slot, text) in dto.Templates)
                 {
-                    return Results.Json(new ApiError("Шаблон містить помилки.", errors), ApiJson.Options, statusCode: 400);
+                    var definition = MessageSlots.Find(slot);
+                    if (definition is null)
+                    {
+                        templateErrors.Add($"Невідомий тип повідомлення «{slot}».");
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(text) || text == definition.DefaultTemplate)
+                    {
+                        continue;
+                    }
+
+                    templateErrors.AddRange(MessageTemplate.Validate(text, slot).Select(e => $"{definition.Title}: {e}"));
+                    templates[slot] = text;
                 }
+            }
+            else if (!string.IsNullOrWhiteSpace(dto.Template) && dto.Template != MessageTemplate.Default)
+            {
+                templateErrors.AddRange(MessageTemplate.Validate(dto.Template).Select(e => $"Екстрені відключення: {e}"));
+            }
+
+            if (templateErrors.Count > 0)
+            {
+                return Results.Json(new ApiError("Шаблон містить помилки.", templateErrors), ApiJson.Options, statusCode: 400);
             }
 
             var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
@@ -166,13 +189,23 @@ public static class MiniAppApi
                 return Error("Оберіть регіон.");
             }
 
-            string? partId = null;
-            if (region is not null && !string.IsNullOrEmpty(dto.PartId))
+            // Districts: PartIds (new, many) wins; the legacy single PartId is still understood.
+            List<string> partIds = [];
+            if (region is not null)
             {
-                partId = region.Parts.FirstOrDefault(p => string.Equals(p.Id, dto.PartId, StringComparison.OrdinalIgnoreCase))?.Id;
-                if (partId is null)
+                var requested = dto.PartIds ?? (string.IsNullOrEmpty(dto.PartId) ? [] : [dto.PartId]);
+                foreach (var raw in requested.Where(r => !string.IsNullOrWhiteSpace(r)))
                 {
-                    return Error("Невідома частина регіону.");
+                    var match = region.Parts.FirstOrDefault(p => string.Equals(p.Id, raw.Trim(), StringComparison.OrdinalIgnoreCase));
+                    if (match is null)
+                    {
+                        return Error("Невідомий район.");
+                    }
+
+                    if (!partIds.Contains(match.Id))
+                    {
+                        partIds.Add(match.Id);
+                    }
                 }
             }
 
@@ -196,7 +229,19 @@ public static class MiniAppApi
                 }
 
                 channel.RegionId = region.Id;
-                channel.PartId = partId;
+                channel.PartId = null;
+                channel.PartIdList = partIds;
+            }
+
+            // Switching the subscription off also removes the saved address and everything that depends on it.
+            if (channel.IsActive && !dto.IsActive)
+            {
+                channel.GroupId = null;
+                channel.AddressLabel = null;
+                channel.AddressStreet = null;
+                channel.AddressHouse = null;
+                channel.OutageTrigger = false;
+                channel.ScheduleNotify = false;
             }
 
             channel.IsActive = dto.IsActive;
@@ -204,19 +249,37 @@ public static class MiniAppApi
             channel.Filter = dto.Filter;
             channel.NotifyOnEnd = dto.NotifyOnEnd;
             channel.EditInPlace = dto.EditInPlace;
-            channel.Template = template;
-            channel.OutageTrigger = dto.OutageTrigger;
+            if (templates is not null)
+            {
+                channel.TemplateMap = templates;
+                channel.Template = null;
+            }
+            else
+            {
+                channel.Template = string.IsNullOrWhiteSpace(dto.Template) || dto.Template == MessageTemplate.Default ? null : dto.Template;
+            }
+
+            channel.OutageTrigger = dto.IsActive && dto.OutageTrigger;
 
             // Schedule messages need a group and a region that has schedules.
             var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
-            channel.ScheduleNotify = dto.ScheduleNotify && channel.GroupId is not null && regionHasSchedules;
+            var canSchedule = dto.IsActive && channel.GroupId is not null && regionHasSchedules;
+            channel.ScheduleNotify = canSchedule && dto.ScheduleNotify;
             channel.ScheduleImage = dto.ScheduleImage;
+            channel.ScheduleEventMode = dto.ScheduleEventMode;
+            channel.SchedulePost = canSchedule && dto.SchedulePost;
+            channel.SchedulePostMode = dto.SchedulePostMode;
+            channel.SchedulePostImage = dto.SchedulePostImage;
             await db.SaveChangesAsync(ct);
 
             return Json(ToSummary(channel, userId));
         });
 
-        api.MapPost("/preview", async (HttpContext http, IOptionsMonitor<DtekSettings> settings, CancellationToken ct) =>
+        api.MapPost("/preview", async (
+            HttpContext http,
+            IOptionsMonitor<DtekSettings> settings,
+            TemplatePreviewService previews,
+            CancellationToken ct) =>
         {
             var request = await http.Request.ReadFromJsonAsync<PreviewRequest>(ApiJson.Options, ct);
             if (request is null)
@@ -224,22 +287,157 @@ public static class MiniAppApi
                 return Error("Порожній запит.");
             }
 
+            var slot = string.IsNullOrWhiteSpace(request.Slot) ? MessageSlots.Emergency : request.Slot;
+            if (MessageSlots.Find(slot) is null)
+            {
+                return Error("Невідомий тип повідомлення.");
+            }
+
             var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
                 string.Equals(r.Id, request.RegionId, StringComparison.OrdinalIgnoreCase))
                 ?? settings.CurrentValue.Regions.First();
-            var part = region.Parts.FirstOrDefault(p => string.Equals(p.Id, request.PartId, StringComparison.OrdinalIgnoreCase));
+            var wantedParts = request.PartIds ?? (string.IsNullOrEmpty(request.PartId) ? [] : [request.PartId]);
 
-            var errors = string.IsNullOrWhiteSpace(request.Template) ? [] : MessageTemplate.Validate(request.Template);
-            var html = errors.Count == 0
-                ? MessageTemplate.RenderPreviewHtml(
-                    request.Template,
-                    request.Kind,
-                    region.Name,
-                    part is null ? [] : [part.Name],
-                    region.SiteUrl)
-                : "";
-            return Json(new PreviewResponse(html, errors));
+            var errors = string.IsNullOrWhiteSpace(request.Template) ? [] : MessageTemplate.Validate(request.Template, slot);
+            if (errors.Count > 0)
+            {
+                return Json(new PreviewResponse("", errors));
+            }
+
+            // The legacy single-template call has no slot: its Kind picks the sample.
+            var kind = string.IsNullOrWhiteSpace(request.Slot) ? request.Kind : (AlertKind?)null;
+            var rendered = await previews.RenderAsync(
+                slot,
+                request.Template,
+                region,
+                wantedParts,
+                request.GroupId,
+                null,
+                request.ImageKind ?? ScheduleImage.Grid,
+                kind,
+                ct);
+            return Json(new PreviewResponse(rendered.Html, errors, rendered.ImageUrl));
         });
+
+        // Posts a sample of the slot into the chat so the user sees the real thing in Telegram.
+        api.MapPost("/chats/{chatId:long}/templates/{slot}/send", async (
+            long chatId,
+            string slot,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            IOptionsMonitor<DtekSettings> settings,
+            TemplatePreviewService previews,
+            ScheduleNotifier notifier,
+            TimeProvider time,
+            CancellationToken ct) =>
+        {
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            if (MessageSlots.Find(slot) is null)
+            {
+                return Error("Невідомий тип повідомлення.");
+            }
+
+            var request = await http.Request.ReadFromJsonAsync<SendTestRequest>(ApiJson.Options, ct);
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || string.IsNullOrEmpty(channel.RegionId))
+            {
+                return Error("Спершу оберіть регіон і збережіть налаштування.");
+            }
+
+            var template = string.IsNullOrWhiteSpace(request?.Template) ? channel.TemplateFor(slot) : request!.Template;
+            if (!string.IsNullOrWhiteSpace(template))
+            {
+                var errors = MessageTemplate.Validate(template, slot);
+                if (errors.Count > 0)
+                {
+                    return Results.Json(new ApiError("Шаблон містить помилки.", errors), ApiJson.Options, statusCode: 400);
+                }
+            }
+
+            var now = time.GetUtcNow();
+            if (TestSendLimiter.IsLimited(chatId, now))
+            {
+                return Results.Json(new ApiError("Забагато тестових повідомлень. Спробуйте за кілька секунд."), ApiJson.Options, statusCode: 429);
+            }
+
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
+            if (region is null)
+            {
+                return Error("Оберіть регіон.");
+            }
+
+            var rendered = await previews.RenderAsync(
+                slot,
+                template,
+                region,
+                channel.PartIdList,
+                channel.GroupId,
+                channel.AddressLabel,
+                request?.ImageKind ?? (slot == MessageSlots.Schedule ? channel.SchedulePostImage : ScheduleImage.None),
+                null,
+                ct);
+
+            try
+            {
+                await notifier.SendNewAsync(chatId, "🧪 <b>Тест</b>\n\n" + rendered.Html, rendered.ImageUrl, ct);
+            }
+            catch (Telegram.Bot.Exceptions.ApiRequestException ex) when (ex.ErrorCode == 403)
+            {
+                return Error("Бот не може писати в цей чат. Перевірте, що він адміністратор каналу з правом публікації.");
+            }
+            catch (Telegram.Bot.Exceptions.ApiRequestException ex)
+            {
+                return Error("Telegram не прийняв повідомлення: " + ex.Message);
+            }
+
+            return Json(new { ok = true });
+        });
+        // The editor's "current state" card (replaces the bot's old status button).
+        api.MapGet("/chats/{chatId:long}/status", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            ChatStatusService status,
+            CancellationToken ct) =>
+        {
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            return Json(new ChatStatusDto(await status.BuildAsync(channel, ct)));
+        });
+
+        // "The power is off, why?" from the editor (replaces the old /check). Only for the user's own chat:
+        // a queued DTEK address check answers there, and channels get this through the «Світло зникло» post.
+        api.MapPost("/chats/{chatId:long}/check", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            OutageAssessmentService assessment,
+            CancellationToken ct) =>
+        {
+            if (chatId != UserId(http))
+            {
+                return Error("Перевірка за запитом доступна в особистому чаті. Для каналу її запускає повідомлення «Світло зникло».");
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId && c.IsActive, ct);
+            if (channel is null)
+            {
+                return Error("Спершу оберіть регіон і ввімкніть підписку.");
+            }
+
+            return Json(new CheckResultDto(await assessment.AssessAsync(channel, ct)));
+        });
+
         api.MapGet("/address/streets", async (
             string regionId,
             string? query,
@@ -371,6 +569,7 @@ public static class MiniAppApi
             channel.AddressStreet = null;
             channel.AddressHouse = null;
             channel.ScheduleNotify = false;
+            channel.SchedulePost = false;
             await db.SaveChangesAsync(ct);
             return Json(ToSummary(channel, userId));
         });
@@ -514,18 +713,39 @@ public static class MiniAppApi
         var title = isPrivate ? "Цей чат із ботом" : c.Title ?? c.ChatId.ToString();
         var settings = new ChatSettingsDto(
             string.IsNullOrEmpty(c.RegionId) ? null : c.RegionId,
-            c.PartId,
+            c.PartIdList.FirstOrDefault(),
             c.IsActive,
             c.IsPaused,
             c.Filter,
             c.NotifyOnEnd,
             c.EditInPlace,
-            c.Template,
+            null,
             c.GroupId,
             c.AddressLabel,
             c.OutageTrigger,
             c.ScheduleNotify,
-            c.ScheduleImage);
+            c.ScheduleImage,
+            c.PartIdList,
+            c.SchedulePost,
+            c.SchedulePostMode,
+            c.SchedulePostImage,
+            c.ScheduleEventMode,
+            MergedTemplates(c));
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
+    }
+
+    // The older single template counts as the customised text of every alert slot that has none of its own.
+    private static Dictionary<string, string> MergedTemplates(Channel c)
+    {
+        var map = c.TemplateMap.Where(p => MessageSlots.Find(p.Key) is not null).ToDictionary(p => p.Key, p => p.Value);
+        if (!string.IsNullOrWhiteSpace(c.Template))
+        {
+            foreach (var slot in MessageSlots.All.Where(s => MessageSlots.IsAlert(s.Id)))
+            {
+                map.TryAdd(slot.Id, c.Template);
+            }
+        }
+
+        return map;
     }
 }

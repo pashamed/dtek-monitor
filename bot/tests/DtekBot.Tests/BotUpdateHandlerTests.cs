@@ -16,14 +16,11 @@ namespace DtekBot.Tests;
 
 public sealed class BotUpdateHandlerTests : IDisposable
 {
-    private const string NoAccess = "Керувати ботом можуть лише адміністратори чату.";
-    private const string ChooseRegionFirst = "Спершу оберіть регіон";
-
     private const long PrivateChat = 500;
     private const long GroupChat = -1001;
     private const long ChannelChat = -1002;
-    private const long AdminUser = 1;
-    private const long PlainUser = 2;
+
+    private const string OldButtonsAlert = "Бот тепер працює через редактор. Надішліть /start і відкрийте його.";
 
     private readonly DispatcherFixture _f = new();
     private readonly FakeWorkflowTrigger _trigger = new();
@@ -31,6 +28,13 @@ public sealed class BotUpdateHandlerTests : IDisposable
     private readonly TestClock _clock = new(new DateTimeOffset(2026, 10, 15, 9, 0, 0, TimeSpan.FromHours(3)));
     private readonly BotUpdateHandler _handler;
     private int _updateId;
+
+    public BotUpdateHandlerTests()
+    {
+        _handler = NewHandler("https://example.test");
+    }
+
+    public void Dispose() => _f.Dispose();
 
     private OutageAssessmentService NewAssessment() => new(
         _f.Db,
@@ -40,19 +44,17 @@ public sealed class BotUpdateHandlerTests : IDisposable
         _f.Options,
         _clock);
 
-    public BotUpdateHandlerTests()
+    private BotUpdateHandler NewHandler(string? publicUrl)
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:PublicUrl"] = "https://example.test" })
-            .Build();
-        var access = new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance);
-        _handler = new BotUpdateHandler(
-            _f.Bot, _f.Db, access, NewAssessment(), _f.Options, config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
+        var values = new Dictionary<string, string?>();
+        if (publicUrl is not null)
+        {
+            values["App:PublicUrl"] = publicUrl;
+        }
 
-        _f.Bot.SetStatus(AdminUser, ChatMemberStatus.Administrator);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        return new BotUpdateHandler(_f.Bot, _f.Db, NewAssessment(), config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
     }
-
-    public void Dispose() => _f.Dispose();
 
     // ---- helpers ----
 
@@ -63,7 +65,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
     private static Chat Group => MakeChat(GroupChat, ChatType.Supergroup, "Мій будинок");
 
-    private Update TextUpdate(Chat chat, string text, long? from) => new()
+    private Update TextUpdate(Chat chat, string? text, long? from = null) => new()
     {
         Id = ++_updateId,
         Message = new Message
@@ -71,17 +73,17 @@ public sealed class BotUpdateHandlerTests : IDisposable
             Id = ++_updateId,
             Chat = chat,
             Text = text,
-            From = from is { } id ? new User { Id = id, FirstName = "U" } : null,
+            From = new User { Id = from ?? chat.Id, FirstName = "U" },
         },
     };
 
-    private Update ChannelPostUpdate(string text) => new()
+    private Update ChannelPostUpdate(string? text, long chatId = ChannelChat) => new()
     {
         Id = ++_updateId,
-        ChannelPost = new Message { Id = ++_updateId, Chat = MakeChat(ChannelChat, ChatType.Channel, "Канал"), Text = text },
+        ChannelPost = new Message { Id = ++_updateId, Chat = MakeChat(chatId, ChatType.Channel, "Канал"), Text = text },
     };
 
-    private Update CallbackUpdate(Chat chat, string data, long from) => new()
+    private Update CallbackUpdate(Chat chat, string? data, long from = 5) => new()
     {
         Id = ++_updateId,
         CallbackQuery = new CallbackQuery
@@ -94,99 +96,171 @@ public sealed class BotUpdateHandlerTests : IDisposable
         },
     };
 
-    private Task SendAsync(Chat chat, string text, long? from = null) =>
-        _handler.HandleAsync(TextUpdate(chat, text, from ?? chat.Id), CancellationToken.None);
+    private Task HandleAsync(Update update) => _handler.HandleAsync(update, CancellationToken.None);
 
-    private Task PressAsync(Chat chat, string data, long? from = null) =>
-        _handler.HandleAsync(CallbackUpdate(chat, data, from ?? chat.Id), CancellationToken.None);
+    private Task SendAsync(Chat chat, string? text, long? from = null) => HandleAsync(TextUpdate(chat, text, from));
 
-    private string Reply() => Assert.Single(_f.Bot.Sent).Text;
-
-    private EditMessageTextRequest Edit() => Assert.Single(_f.Bot.Edits);
-
-    private static List<InlineKeyboardButton> Buttons(Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? markup) =>
+    private static List<InlineKeyboardButton> Buttons(ReplyMarkup? markup) =>
         ((InlineKeyboardMarkup)markup!).InlineKeyboard.SelectMany(r => r).ToList();
 
     private Channel Row(long chatId) => _f.LoadChannel(chatId);
 
-    private bool HasRow(long chatId) => _f.Db.Channels.AsNoTracking().Any(c => c.ChatId == chatId);
+    private int CheckRows() => _f.Db.AddressChecks.AsNoTracking().Count();
 
-    // ---- /start, /menu, /help ----
+    // ---- welcome in private chats ----
 
     [Theory]
     [InlineData("/start")]
-    [InlineData("/menu")]
     [InlineData("/help")]
+    [InlineData("/menu")]
     [InlineData("/start@dtek_test_bot")]
-    public async Task MenuCommands_InPrivateChat_SendMainMenuWithCallbackAndWebAppButtons(string command)
+    [InlineData("/region kyiv")]
+    [InlineData("/stop")]
+    [InlineData("/template {message}")]
+    [InlineData("/check")]
+    [InlineData("привіт")]
+    [InlineData("Світло зникло")]
+    [InlineData("  /start  ")]
+    [InlineData("12345")]
+    public async Task AnyTextInAPrivateChat_GetsTheWelcomeWithOneWebAppButton(string text)
     {
-        await SendAsync(Private, command);
+        await SendAsync(Private, text);
 
-        var request = Assert.Single(_f.Bot.Sent);
-        Assert.Contains("Підписки немає.", request.Text);
-        var buttons = Buttons(request.ReplyMarkup);
+        var message = Assert.Single(_f.Bot.Sent);
+        Assert.Single(_f.Bot.Requests);
+        Assert.Equal(PrivateChat, message.ChatId.Identifier);
+        Assert.Equal(default, message.ParseMode);
+        Assert.Null(message.ReplyParameters);
 
-        var callbacks = buttons.Where(b => b.CallbackData is not null).Select(b => b.CallbackData).ToList();
-        Assert.Equal(["regions", "status", "cfg"], callbacks);
+        var paragraphs = message.Text.Split("\n\n");
+        Assert.Equal(3, paragraphs.Length);
+        Assert.Contains("Вітаю! Я повідомляю про екстрені відключення", paragraphs[0]);
+        Assert.Contains("Усе налаштовується в редакторі", paragraphs[1]);
+        Assert.Contains("додайте мене до нього адміністратором", paragraphs[2]);
 
-        var webApps = buttons.Where(b => b.WebApp is not null).Select(b => b.WebApp!.Url).ToList();
-        Assert.Equal(["https://example.test/lite/"], webApps);
+        var button = Assert.Single(Buttons(message.ReplyMarkup));
+        Assert.Contains("Відкрити редактор", button.Text);
+        Assert.Equal("https://example.test/lite/", button.WebApp!.Url);
+        Assert.Null(button.CallbackData);
+        Assert.Single(((InlineKeyboardMarkup)message.ReplyMarkup!).InlineKeyboard);
     }
 
     [Fact]
-    public async Task Start_InGroup_HasNoWebAppButtons()
+    public async Task Welcome_ButtonTextIsTheEditorLabel()
     {
-        await SendAsync(Group, "/start", PlainUser);
-
-        var buttons = Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup);
-        Assert.DoesNotContain(buttons, b => b.WebApp is not null);
-        Assert.Contains(buttons, b => b.CallbackData == "regions");
-    }
-
-    [Fact]
-    public async Task Start_InChannel_HasNoWebAppButtons()
-    {
-        await _handler.HandleAsync(ChannelPostUpdate("/start"), CancellationToken.None);
-
-        Assert.DoesNotContain(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup), b => b.WebApp is not null);
-    }
-
-    [Fact]
-    public async Task Start_WhenSubscribed_ShowsSubscriptionAndUnsubscribeButton()
-    {
-        await SendAsync(Private, "/region kyiv right-bank");
-        _f.Bot.Requests.Clear();
-
         await SendAsync(Private, "/start");
 
-        var request = Assert.Single(_f.Bot.Sent);
-        Assert.Contains("Підписка: м. Київ (Правий берег)", request.Text);
-        Assert.Contains(Buttons(request.ReplyMarkup), b => b.CallbackData == "stop");
-    }
-
-    [Fact]
-    public async Task Start_WhenPublicUrlIsMissing_HasNoWebAppButtons()
-    {
-        var handler = new BotUpdateHandler(
-            _f.Bot,
-            _f.Db,
-            new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance),
-            NewAssessment(),
-            _f.Options,
-            new ConfigurationBuilder().Build(),
-            TimeProvider.System,
-            NullLogger<BotUpdateHandler>.Instance);
-
-        await handler.HandleAsync(TextUpdate(Private, "/start", PrivateChat), CancellationToken.None);
-
-        Assert.DoesNotContain(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup), b => b.WebApp is not null);
+        Assert.Equal("🧩 Відкрити редактор", Assert.Single(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup)).Text);
     }
 
     [Theory]
-    [InlineData("hello")]
-    [InlineData("/unknown")]
+    [InlineData("https://example.test/")]
+    [InlineData("https://example.test///")]
+    [InlineData("https://example.test")]
+    public async Task Welcome_TrimsTheTrailingSlashOfThePublicUrl(string publicUrl)
+    {
+        var handler = NewHandler(publicUrl);
+
+        await handler.HandleAsync(TextUpdate(Private, "/start"), CancellationToken.None);
+
+        var button = Assert.Single(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup));
+        Assert.Equal("https://example.test/lite/", button.WebApp!.Url);
+    }
+
+    [Fact]
+    public async Task Welcome_WithAPathInThePublicUrl_KeepsIt()
+    {
+        var handler = NewHandler("https://example.test/bot/");
+
+        await handler.HandleAsync(TextUpdate(Private, "/start"), CancellationToken.None);
+
+        Assert.Equal("https://example.test/bot/lite/", Assert.Single(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup)).WebApp!.Url);
+    }
+
+    [Theory]
+    [InlineData(null)]
     [InlineData("")]
-    public async Task IgnoredMessages_ProduceNoRequests(string text)
+    [InlineData("/")]
+    public async Task Welcome_WithoutPublicUrl_HasNoKeyboard(string? publicUrl)
+    {
+        var handler = NewHandler(publicUrl);
+
+        await handler.HandleAsync(TextUpdate(Private, "/start"), CancellationToken.None);
+
+        var message = Assert.Single(_f.Bot.Sent);
+        Assert.Null(message.ReplyMarkup);
+        Assert.Contains("Вітаю! Я повідомляю про екстрені відключення", message.Text);
+        Assert.Equal(3, message.Text.Split("\n\n").Length);
+    }
+
+    [Fact]
+    public async Task Welcome_DoesNotTouchTheDatabase()
+    {
+        _f.AddChannel(PrivateChat);
+        var before = Row(PrivateChat);
+
+        await SendAsync(Private, "/region odesa");
+
+        var after = Row(PrivateChat);
+        Assert.Equal(before.RegionId, after.RegionId);
+        Assert.Equal(before.IsActive, after.IsActive);
+        Assert.Single(_f.Db.Channels);
+        Assert.Empty(_f.Db.ChannelAdmins);
+    }
+
+    [Fact]
+    public async Task PrivateMessageWithThePhrase_GetsTheWelcome_NotAnAssessment()
+    {
+        _f.AddChannel(PrivateChat, c =>
+        {
+            c.OutageTrigger = true;
+            c.AddressStreet = "вул. Драгоманова";
+            c.AddressHouse = "12";
+        });
+
+        await SendAsync(Private, "🔴 14:24 Світло зникло");
+
+        Assert.Contains("Вітаю!", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Theory]
+    [InlineData(ChatType.Group)]
+    [InlineData(ChatType.Supergroup)]
+    public async Task MessagesInGroups_AreIgnored(ChatType type)
+    {
+        var chat = MakeChat(GroupChat, type, "Чат");
+
+        await SendAsync(chat, "/start", 42);
+        await SendAsync(chat, "привіт", 42);
+        await SendAsync(chat, "Світло зникло", 42);
+
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task MessagesInGroups_WithAnActiveTriggerChannelRow_AreStillIgnored()
+    {
+        _f.AddChannel(GroupChat, c =>
+        {
+            c.OutageTrigger = true;
+            c.AddressStreet = "вул. Драгоманова";
+            c.AddressHouse = "12";
+        });
+
+        await SendAsync(Group, "🔴 14:24 Світло зникло", 42);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\n\t")]
+    public async Task UpdatesWithoutText_AreIgnored(string? text)
     {
         await SendAsync(Private, text);
 
@@ -194,672 +268,103 @@ public sealed class BotUpdateHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateWithoutMessage_IsIgnored()
+    public async Task UpdateWithoutAnyPayload_IsIgnored()
     {
-        await _handler.HandleAsync(new Update { Id = 1 }, CancellationToken.None);
+        await HandleAsync(new Update { Id = 1 });
 
         Assert.Empty(_f.Bot.Requests);
     }
 
-    // ---- /region ----
-
     [Fact]
-    public async Task Region_InPrivateChat_Subscribes()
+    public async Task EachPrivateMessage_GetsItsOwnWelcome()
     {
-        await SendAsync(Private, "/region kyiv");
+        await SendAsync(Private, "/start");
+        await SendAsync(Private, "/start");
 
-        var channel = Row(PrivateChat);
-        Assert.True(channel.IsActive);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Null(channel.PartId);
-        Assert.Equal("pavlo", channel.Title);
-        Assert.Contains("Підписано: м. Київ", Reply());
-        Assert.Equal(ParseMode.Html, Assert.Single(_f.Bot.Sent).ParseMode);
-        Assert.Empty(_f.Db.ChannelAdmins);
+        Assert.Equal(2, _f.Bot.Sent.Count());
     }
 
-    [Fact]
-    public async Task Region_TitleComesFromGroupTitle()
-    {
-        await SendAsync(Group, "/region kyiv", AdminUser);
-
-        Assert.Equal("Мій будинок", Row(GroupChat).Title);
-    }
-
-    [Fact]
-    public async Task Region_WithPart_SetsPartId()
-    {
-        await SendAsync(Private, "/region kyiv right-bank");
-
-        Assert.Equal("right-bank", Row(PrivateChat).PartId);
-        Assert.Contains("Підписано", Reply());
-    }
-
-    [Fact]
-    public async Task Region_IsCaseInsensitive_AndAcceptsBotSuffix()
-    {
-        await SendAsync(Private, "/REGION@dtek_test_bot KYIV Left-Bank");
-
-        var channel = Row(PrivateChat);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Equal("left-bank", channel.PartId);
-    }
-
-    [Fact]
-    public async Task Region_Resubscribe_ClearsPart_AndReactivates_KeepingSettings()
-    {
-        _f.AddChannel(PrivateChat, c =>
-        {
-            c.PartId = "right-bank";
-            c.IsActive = false;
-            c.Filter = AlertFilter.EmergencyOnly;
-        });
-
-        await SendAsync(Private, "/region kyiv");
-
-        var channel = Row(PrivateChat);
-        Assert.True(channel.IsActive);
-        Assert.Null(channel.PartId);
-        Assert.Equal(AlertFilter.EmergencyOnly, channel.Filter);
-        Assert.Single(_f.Db.Channels);
-    }
-
-    [Fact]
-    public async Task Region_UnknownRegion_RepliesWithError_AndCreatesNoRow()
-    {
-        await SendAsync(Private, "/region atlantis");
-
-        Assert.Contains("Невідомий регіон", Reply());
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Region_UnknownRegion_LeavesExistingSubscriptionUntouched()
-    {
-        await SendAsync(Private, "/region kyiv right-bank");
-
-        await SendAsync(Private, "/region atlantis");
-
-        var channel = Row(PrivateChat);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Equal("right-bank", channel.PartId);
-    }
-
-    [Fact]
-    public async Task Region_UnknownPart_RepliesWithError_AndChangesNothing()
-    {
-        await SendAsync(Private, "/region odesa");
-
-        await SendAsync(Private, "/region kyiv nowhere");
-
-        Assert.Contains("Невідома частина", _f.Bot.Sent.Last().Text);
-        var channel = Row(PrivateChat);
-        Assert.Equal("odesa", channel.RegionId);
-        Assert.Null(channel.PartId);
-    }
-
-    [Fact]
-    public async Task Region_WithoutArguments_AsksForRegion()
-    {
-        await SendAsync(Private, "/region");
-
-        Assert.Contains("Вкажіть код регіону", Reply());
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    // ---- /stop ----
-
-    [Fact]
-    public async Task Stop_DeactivatesSubscription()
-    {
-        await SendAsync(Private, "/region kyiv");
-        _f.Bot.Requests.Clear();
-
-        await SendAsync(Private, "/stop");
-
-        Assert.Equal("Відписано.", Reply());
-        Assert.False(Row(PrivateChat).IsActive);
-    }
-
-    [Fact]
-    public async Task Stop_WithoutSubscription_SaysSo()
-    {
-        await SendAsync(Private, "/stop");
-
-        Assert.Equal("Підписки немає.", Reply());
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Stop_Twice_SecondSaysNoSubscription()
-    {
-        await SendAsync(Private, "/region kyiv");
-        await SendAsync(Private, "/stop");
-        _f.Bot.Requests.Clear();
-
-        await SendAsync(Private, "/stop");
-
-        Assert.Equal("Підписки немає.", Reply());
-    }
-
-    // ---- authorization ----
+    // ---- callbacks from old messages ----
 
     [Theory]
-    [InlineData("/region kyiv")]
-    [InlineData("/stop")]
-    [InlineData("/template {message}")]
-    public async Task Group_NonAdmin_IsRefused_AndNothingChanges(string command)
-    {
-        _f.AddChannel(GroupChat, c => c.PartId = "left-bank");
-
-        await SendAsync(Group, command, PlainUser);
-
-        Assert.Equal(NoAccess, Reply());
-        var channel = Row(GroupChat);
-        Assert.True(channel.IsActive);
-        Assert.Equal("left-bank", channel.PartId);
-        Assert.Null(channel.Template);
-        Assert.Empty(_f.Db.ChannelAdmins);
-    }
-
-    [Fact]
-    public async Task Group_NonAdmin_CannotSubscribe()
-    {
-        await SendAsync(Group, "/region kyiv", PlainUser);
-
-        Assert.Equal(NoAccess, Reply());
-        Assert.False(HasRow(GroupChat));
-    }
-
-    [Fact]
-    public async Task Group_AdminSubscribes_AndIsLinkedAsChannelAdmin()
-    {
-        await SendAsync(Group, "/region kyiv", AdminUser);
-
-        Assert.True(Row(GroupChat).IsActive);
-        var admin = Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
-        Assert.Equal(GroupChat, admin.ChatId);
-        Assert.Equal(AdminUser, admin.UserId);
-    }
-
-    [Theory]
-    [InlineData(ChatType.Group)]
-    [InlineData(ChatType.Supergroup)]
-    public async Task GroupAndSupergroupAdmins_AreLinked(ChatType type)
-    {
-        var chat = MakeChat(GroupChat, type, "G");
-
-        await SendAsync(chat, "/region kyiv", AdminUser);
-
-        Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
-    }
-
-    [Fact]
-    public async Task GroupCreator_IsTreatedAsAdmin()
-    {
-        _f.Bot.SetStatus(PlainUser, ChatMemberStatus.Creator);
-
-        await SendAsync(Group, "/region kyiv", PlainUser);
-
-        Assert.True(Row(GroupChat).IsActive);
-    }
-
-    [Fact]
-    public async Task Group_AdminSubscribingAgain_DoesNotDuplicateChannelAdmin()
-    {
-        await SendAsync(Group, "/region kyiv", AdminUser);
-        await SendAsync(Group, "/region kyiv left-bank", AdminUser);
-
-        Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
-    }
-
-    [Fact]
-    public async Task Group_AdminCheckFailure_IsTreatedAsRefusal()
-    {
-        _f.Bot.Failure = r => r is GetChatMemberRequest ? new HttpRequestException("down") : null;
-
-        await SendAsync(Group, "/region kyiv", AdminUser);
-
-        Assert.Equal(NoAccess, Reply());
-        Assert.False(HasRow(GroupChat));
-    }
-
-    [Fact]
-    public async Task ChannelPost_WithoutSender_IsAllowed_AndCreatesNoChannelAdmin()
-    {
-        await _handler.HandleAsync(ChannelPostUpdate("/region kyiv"), CancellationToken.None);
-
-        var channel = Row(ChannelChat);
-        Assert.True(channel.IsActive);
-        Assert.Equal("Канал", channel.Title);
-        Assert.Empty(_f.Db.ChannelAdmins);
-        Assert.Empty(_f.Bot.Requests.OfType<GetChatMemberRequest>());
-    }
-
-    // ---- callbacks: settings toggles ----
-
-    [Fact]
-    public async Task CfgFilter_TogglesBetweenAllAndEmergencyOnly()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:filter");
-        Assert.Equal(AlertFilter.EmergencyOnly, Row(PrivateChat).Filter);
-
-        await PressAsync(Private, "cfg:filter");
-        Assert.Equal(AlertFilter.All, Row(PrivateChat).Filter);
-    }
-
-    [Fact]
-    public async Task CfgEnd_TogglesNotifyOnEnd()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:end");
-        Assert.False(Row(PrivateChat).NotifyOnEnd);
-
-        await PressAsync(Private, "cfg:end");
-        Assert.True(Row(PrivateChat).NotifyOnEnd);
-    }
-
-    [Fact]
-    public async Task CfgEdit_TogglesEditInPlace()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:edit");
-        Assert.False(Row(PrivateChat).EditInPlace);
-
-        await PressAsync(Private, "cfg:edit");
-        Assert.True(Row(PrivateChat).EditInPlace);
-    }
-
-    [Fact]
-    public async Task CfgPause_TogglesIsPaused()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:pause");
-        Assert.True(Row(PrivateChat).IsPaused);
-
-        await PressAsync(Private, "cfg:pause");
-        Assert.False(Row(PrivateChat).IsPaused);
-    }
-
-    [Theory]
-    [InlineData("cfg:filter", "лише екстрені та аварії")]
-    [InlineData("cfg:end", "Про завершення: ні")]
-    [InlineData("cfg:edit", "щоразу нове повідомлення")]
-    [InlineData("cfg:pause", "на паузі")]
-    public async Task CfgToggle_AnswersCallback_AndEditsMessageWithSettingsScreen(string data, string expected)
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, data);
-
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.False(string.IsNullOrEmpty(answer.Text));
-        Assert.True(answer.ShowAlert is not true);
-
-        var edit = Edit();
-        Assert.Equal(PrivateChat, edit.ChatId.Identifier);
-        Assert.Equal(77, edit.MessageId);
-        Assert.Contains("⚙️ Налаштування", edit.Text);
-        Assert.Contains(expected, edit.Text);
-        Assert.Contains(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:filter");
-        Assert.Contains(Buttons(edit.ReplyMarkup), b => b.CallbackData == "menu");
-    }
-
-    [Theory]
-    [InlineData("cfg:filter")]
-    [InlineData("cfg:end")]
-    [InlineData("cfg:edit")]
-    [InlineData("cfg:pause")]
-    public async Task CfgToggle_ByGroupAdmin_Works(string data)
-    {
-        _f.AddChannel(GroupChat);
-
-        await PressAsync(Group, data, AdminUser);
-
-        var channel = Row(GroupChat);
-        Assert.False(channel.Filter == AlertFilter.All && channel.NotifyOnEnd && channel.EditInPlace && !channel.IsPaused);
-        Assert.Single(_f.Bot.Edits);
-    }
-
-    [Theory]
-    [InlineData("cfg:filter")]
-    [InlineData("cfg:end")]
-    [InlineData("cfg:edit")]
-    [InlineData("cfg:pause")]
-    [InlineData("stop")]
+    [InlineData("menu")]
+    [InlineData("regions")]
     [InlineData("r:kyiv")]
     [InlineData("p:kyiv:all")]
+    [InlineData("status")]
+    [InlineData("stop")]
     [InlineData("cfg")]
-    public async Task Callbacks_ByNonAdminInGroup_AreRefusedWithAlert_AndNothingChanges(string data)
+    [InlineData("cfg:filter")]
+    [InlineData("cfg:sched")]
+    [InlineData("chk")]
+    [InlineData("whatever")]
+    [InlineData(null)]
+    public async Task CallbackFromAnOldMessage_GetsExactlyOneAlert_AndNothingElse(string? data)
     {
-        _f.AddChannel(GroupChat, c => c.PartId = "left-bank");
-        var before = Row(GroupChat);
+        _f.AddChannel(PrivateChat);
+        var before = Row(PrivateChat);
 
-        await PressAsync(Group, data, PlainUser);
+        await HandleAsync(CallbackUpdate(Private, data));
 
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.Equal(NoAccess, answer.Text);
-        Assert.True(answer.ShowAlert);
-        Assert.Empty(_f.Bot.Edits);
+        var answer = Assert.Single(_f.Bot.Requests);
+        var request = Assert.IsType<AnswerCallbackQueryRequest>(answer);
+        Assert.StartsWith("cb", request.CallbackQueryId);
+        Assert.Equal(OldButtonsAlert, request.Text);
+        Assert.True(request.ShowAlert);
 
-        var after = Row(GroupChat);
+        var after = Row(PrivateChat);
         Assert.Equal(before.Filter, after.Filter);
         Assert.Equal(before.NotifyOnEnd, after.NotifyOnEnd);
         Assert.Equal(before.EditInPlace, after.EditInPlace);
         Assert.Equal(before.IsPaused, after.IsPaused);
         Assert.Equal(before.IsActive, after.IsActive);
-        Assert.Equal(before.RegionId, after.RegionId);
-        Assert.Equal(before.PartId, after.PartId);
+        Assert.Equal(before.ScheduleNotify, after.ScheduleNotify);
+        Assert.Equal(before.OutageTrigger, after.OutageTrigger);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
     }
 
     [Theory]
-    [InlineData("menu")]
-    [InlineData("regions")]
-    [InlineData("status")]
-    public async Task ReadOnlyCallbacks_WorkForNonAdminsInGroup(string data)
+    [InlineData(ChatType.Group)]
+    [InlineData(ChatType.Supergroup)]
+    [InlineData(ChatType.Channel)]
+    public async Task CallbackFromAnOldMessage_InAnyChat_GetsTheSameAlert(ChatType type)
     {
         _f.AddChannel(GroupChat);
 
-        await PressAsync(Group, data, PlainUser);
+        await HandleAsync(CallbackUpdate(MakeChat(GroupChat, type, "Чат"), "cfg:pause", 42));
 
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.True(answer.ShowAlert is not true);
-        Assert.NotEqual(NoAccess, answer.Text);
-        Assert.Single(_f.Bot.Edits);
+        var request = Assert.IsType<AnswerCallbackQueryRequest>(Assert.Single(_f.Bot.Requests));
+        Assert.Equal(OldButtonsAlert, request.Text);
+        Assert.True(request.ShowAlert);
+        Assert.False(Row(GroupChat).IsPaused);
     }
 
     [Fact]
-    public async Task Cfg_WithoutSubscription_AsksToChooseRegionFirst()
+    public async Task CallbackWithoutAMessage_GetsTheAlertToo()
     {
-        await PressAsync(Private, "cfg");
-
-        Assert.Contains(ChooseRegionFirst, Edit().Text);
-        Assert.Single(_f.Bot.Answers);
-    }
-
-    [Fact]
-    public async Task CfgToggle_WithoutSubscription_AsksToChooseRegionFirst_AndCreatesNothing()
-    {
-        await PressAsync(Private, "cfg:filter");
-
-        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Answers).Text);
-        Assert.Contains(ChooseRegionFirst, Edit().Text);
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Cfg_WithSubscription_ShowsSettingsScreen()
-    {
-        _f.AddChannel(PrivateChat, c => c.PartId = "right-bank");
-
-        await PressAsync(Private, "cfg");
-
-        var edit = Edit();
-        Assert.Contains("⚙️ Налаштування", edit.Text);
-        Assert.Contains("Підписка: м. Київ (Правий берег)", edit.Text);
-        Assert.Contains("Шаблон: стандартний", edit.Text);
-    }
-
-    [Fact]
-    public async Task Cfg_ForInactiveSubscription_AsksToChooseRegionFirst()
-    {
-        _f.AddChannel(PrivateChat, c => c.IsActive = false);
-
-        await PressAsync(Private, "cfg:pause");
-
-        Assert.Contains(ChooseRegionFirst, Edit().Text);
-        Assert.False(Row(PrivateChat).IsPaused);
-    }
-
-    [Fact]
-    public async Task EditThrowingMessageNotModified_IsSwallowed()
-    {
-        _f.Bot.Failure = r => r is EditMessageTextRequest ? FakeTelegramBotClient.NotModified() : null;
-
-        await PressAsync(Private, "menu");
-
-        Assert.Single(_f.Bot.Answers);
-    }
-
-    [Fact]
-    public async Task Callback_WithoutMessage_IsJustAnswered()
-    {
-        var update = CallbackUpdate(Private, "menu", PrivateChat);
+        var update = CallbackUpdate(Private, "menu");
         update.CallbackQuery!.Message = null;
 
-        await _handler.HandleAsync(update, CancellationToken.None);
+        await HandleAsync(update);
 
-        Assert.Single(_f.Bot.Answers);
-        Assert.Empty(_f.Bot.Edits);
-    }
-
-    // ---- callbacks: menu / regions / region choice ----
-
-    [Fact]
-    public async Task Callback_Menu_ShowsMainMenu()
-    {
-        await PressAsync(Private, "menu");
-
-        var edit = Edit();
-        Assert.Contains("Підписки немає.", edit.Text);
-        Assert.Contains(Buttons(edit.ReplyMarkup), b => b.CallbackData == "regions");
+        var request = Assert.IsType<AnswerCallbackQueryRequest>(Assert.Single(_f.Bot.Requests));
+        Assert.Equal(OldButtonsAlert, request.Text);
     }
 
     [Fact]
-    public async Task Callback_UnknownData_FallsBackToMainMenu()
-    {
-        await PressAsync(Private, "whatever");
-
-        Assert.Contains("Підписки немає.", Edit().Text);
-    }
-
-    [Fact]
-    public async Task Callback_Regions_ListsEveryRegion_AndBackButton()
-    {
-        await PressAsync(Private, "regions");
-
-        var edit = Edit();
-        Assert.Equal("Оберіть регіон:", edit.Text);
-        var data = Buttons(edit.ReplyMarkup).Select(b => b.CallbackData).ToList();
-        Assert.Equal(_f.Settings.Regions.Select(r => "r:" + r.Id).Append("menu"), data);
-    }
-
-    [Fact]
-    public async Task Callback_RegionWithParts_ShowsPartPicker_WithoutSubscribing()
-    {
-        await PressAsync(Private, "r:kyiv");
-
-        var edit = Edit();
-        Assert.Contains("оберіть частину", edit.Text);
-        var data = Buttons(edit.ReplyMarkup).Select(b => b.CallbackData).ToList();
-        Assert.Equal(["p:kyiv:all", "p:kyiv:right-bank", "p:kyiv:left-bank", "regions"], data);
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Callback_RegionWithoutParts_SubscribesImmediately()
-    {
-        await PressAsync(Private, "r:odesa");
-
-        var channel = Row(PrivateChat);
-        Assert.True(channel.IsActive);
-        Assert.Equal("odesa", channel.RegionId);
-        Assert.Null(channel.PartId);
-        Assert.Contains("Підписка: Одеська область", Edit().Text);
-    }
-
-    [Fact]
-    public async Task Callback_UnknownRegion_ShowsListWithToast()
-    {
-        await PressAsync(Private, "r:atlantis");
-
-        Assert.Equal("Невідомий регіон.", Assert.Single(_f.Bot.Answers).Text);
-        Assert.Equal("Оберіть регіон:", Edit().Text);
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Callback_PartAll_SubscribesToWholeRegion()
-    {
-        _f.AddChannel(PrivateChat, c => c.PartId = "left-bank");
-
-        await PressAsync(Private, "p:kyiv:all");
-
-        var channel = Row(PrivateChat);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Null(channel.PartId);
-        Assert.Contains("Підписано", Assert.Single(_f.Bot.Answers).Text);
-        Assert.Contains("Підписка: м. Київ", Edit().Text);
-    }
-
-    [Fact]
-    public async Task Callback_PartSpecific_SubscribesToPart()
-    {
-        await PressAsync(Private, "p:kyiv:right-bank");
-
-        var channel = Row(PrivateChat);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Equal("right-bank", channel.PartId);
-        Assert.Contains("Підписка: м. Київ (Правий берег)", Edit().Text);
-    }
-
-    [Fact]
-    public async Task Callback_Part_ByGroupAdmin_LinksChannelAdmin()
-    {
-        await PressAsync(Group, "p:kyiv:all", AdminUser);
-
-        Assert.True(Row(GroupChat).IsActive);
-        Assert.Equal(AdminUser, Assert.Single(_f.Db.ChannelAdmins.AsNoTracking()).UserId);
-    }
-
-    [Fact]
-    public async Task Callback_UnknownPart_DoesNotSubscribe()
-    {
-        await PressAsync(Private, "p:kyiv:nowhere");
-
-        Assert.Contains("Невідома частина", Assert.Single(_f.Bot.Answers).Text);
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Callback_Stop_DeactivatesAndShowsMenu()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "stop");
-
-        Assert.False(Row(PrivateChat).IsActive);
-        Assert.Equal("Відписано.", Assert.Single(_f.Bot.Answers).Text);
-        Assert.Contains("Підписки немає.", Edit().Text);
-    }
-
-    // ---- /template ----
-
-    [Fact]
-    public async Task Template_WithoutSubscription_AsksToChooseRegionFirst()
-    {
-        await SendAsync(Private, "/template {message}");
-
-        Assert.Contains(ChooseRegionFirst, Reply());
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task Template_NoArguments_ShowsCurrentTemplateAndPlaceholders()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await SendAsync(Private, "/template");
-
-        var request = Assert.Single(_f.Bot.Sent);
-        Assert.Equal(ParseMode.Html, request.ParseMode);
-        Assert.Contains("Поточний шаблон", request.Text);
-        Assert.Contains("<pre>{emoji} {message}\n\nДеталі: {site}</pre>", request.Text);
-        foreach (var placeholder in MessageTemplate.Placeholders)
-        {
-            Assert.Contains($"<code>{{{placeholder.Name}}}</code>", request.Text);
-        }
-    }
-
-    [Fact]
-    public async Task Template_NoArguments_ShowsCustomTemplateHtmlEncoded()
-    {
-        _f.AddChannel(PrivateChat, c => c.Template = "<b>{where}</b> {message}");
-
-        await SendAsync(Private, "/template");
-
-        Assert.Contains("<pre>&lt;b&gt;{where}&lt;/b&gt; {message}</pre>", Reply());
-    }
-
-    [Fact]
-    public async Task Template_Valid_IsSaved_AndRepliesWithPreview()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await SendAsync(Private, "/template <b>{where}</b> — {title} {message}");
-
-        Assert.Equal("<b>{where}</b> — {title} {message}", Row(PrivateChat).Template);
-        var request = Assert.Single(_f.Bot.Sent);
-        Assert.StartsWith("Збережено.", request.Text);
-        Assert.Contains("<b>м. Київ</b> — Екстрені відключення", request.Text);
-        Assert.Equal(ParseMode.Html, request.ParseMode);
-    }
-
-    [Fact]
-    public async Task Template_Valid_PreservesNewlines()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await SendAsync(Private, "/template {emoji} {message}\nдругий рядок");
-
-        Assert.Equal("{emoji} {message}\nдругий рядок", Row(PrivateChat).Template);
-    }
-
-    [Fact]
-    public async Task Template_Invalid_IsNotSaved_AndListsErrors()
-    {
-        _f.AddChannel(PrivateChat, c => c.Template = "{message}");
-
-        await SendAsync(Private, "/template <script>x</script> {nope}");
-
-        var text = Reply();
-        Assert.StartsWith("Шаблон не збережено:", text);
-        Assert.Contains("• ", text);
-        Assert.Contains("{nope}", text);
-        Assert.Contains("&lt;script&gt;", text);
-        Assert.DoesNotContain("<script>", text);
-        Assert.Equal("{message}", Row(PrivateChat).Template);
-    }
-
-    [Theory]
-    [InlineData("reset")]
-    [InlineData("RESET")]
-    public async Task Template_Reset_ClearsCustomTemplate(string argument)
-    {
-        _f.AddChannel(PrivateChat, c => c.Template = "<b>{message}</b>");
-
-        await SendAsync(Private, "/template " + argument);
-
-        Assert.Equal("Шаблон скинуто до стандартного.", Reply());
-        Assert.Null(Row(PrivateChat).Template);
-    }
-
-    [Fact]
-    public async Task Template_InGroup_ByAdmin_IsSaved()
+    public async Task CallbackFromAGroupNonAdmin_IsNotRefusedAnyMore_ItJustGetsTheAlert()
     {
         _f.AddChannel(GroupChat);
+        _f.Bot.SetStatus(42, ChatMemberStatus.Member);
 
-        await SendAsync(Group, "/template {message}", AdminUser);
+        await HandleAsync(CallbackUpdate(Group, "cfg:filter", 42));
 
-        Assert.Equal("{message}", Row(GroupChat).Template);
+        Assert.Empty(_f.Bot.Requests.OfType<GetChatMemberRequest>());
+        Assert.Equal(OldButtonsAlert, Assert.IsType<AnswerCallbackQueryRequest>(Assert.Single(_f.Bot.Requests)).Text);
     }
 
-    // ---- «Світло зникло» channel posts ----
+    // ---- channel posts: «Світло зникло» ----
 
     private const string SamplePost = "🔴 14:24 Світло зникло\n🕓 Воно було 17год 23хв\n🗓 Очікуємо за графіком о 18:00";
 
@@ -884,7 +389,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     private async Task<Update> PostAsync(string text)
     {
         var update = ChannelPostUpdate(text);
-        await _handler.HandleAsync(update, CancellationToken.None);
+        await HandleAsync(update);
         return update;
     }
 
@@ -968,7 +473,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [InlineData("Світло, зникло")]
     [InlineData("зникло світло")]
     [InlineData("привіт всім")]
-    public async Task UnrelatedChannelPosts_DoNothing(string text)
+    public async Task UnrelatedChannelPosts_AreIgnored(string text)
     {
         AddTriggerChannel();
 
@@ -979,36 +484,50 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Empty(_trigger.Events);
     }
 
-    [Fact]
-    public async Task ChannelPostWithoutText_DoesNothing()
+    [Theory]
+    [InlineData("/start")]
+    [InlineData("/help")]
+    [InlineData("/region kyiv")]
+    [InlineData("/template {message} деталі")]
+    [InlineData("/check")]
+    [InlineData("/stop")]
+    public async Task ChannelPostCommands_ProduceNoReply_AndChangeNothing(string text)
     {
-        AddTriggerChannel();
-        var update = new Update { Id = 1, ChannelPost = new Message { Id = 5, Chat = MakeChat(ChannelChat, ChatType.Channel, "Канал") } };
+        var channel = AddTriggerChannel();
 
-        await _handler.HandleAsync(update, CancellationToken.None);
+        await PostAsync(text);
 
         Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+        var after = Row(ChannelChat);
+        Assert.Equal(channel.IsActive, after.IsActive);
+        Assert.Equal(channel.RegionId, after.RegionId);
+        Assert.Null(after.Template);
     }
 
-    [Theory]
-    [InlineData(ChatType.Private, PrivateChat)]
-    [InlineData(ChatType.Group, GroupChat)]
-    [InlineData(ChatType.Supergroup, GroupChat)]
-    public async Task OrdinaryMessages_WithThePhrase_AreIgnored(ChatType type, long chatId)
+    [Fact]
+    public async Task SlashPrefixedPost_WithThePhrase_IsNotATrigger()
     {
-        _f.AddChannel(chatId, c =>
-        {
-            c.OutageTrigger = true;
-            c.AddressStreet = "вул. Драгоманова";
-            c.AddressHouse = "12";
-        });
-        var chat = MakeChat(chatId, type, "Чат", "user");
+        AddTriggerChannel();
 
-        await SendAsync(chat, SamplePost, AdminUser);
+        await PostAsync("/start Світло зникло");
 
         Assert.Empty(_f.Bot.Requests);
         Assert.Equal(0, CheckRows());
         Assert.Empty(_trigger.Events);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task ChannelPostWithoutText_IsIgnored(string? text)
+    {
+        AddTriggerChannel();
+
+        await HandleAsync(ChannelPostUpdate(text));
+
+        Assert.Empty(_f.Bot.Requests);
     }
 
     [Fact]
@@ -1196,7 +715,6 @@ public sealed class BotUpdateHandlerTests : IDisposable
     {
         _f.AddChannel(ChannelChat, c =>
         {
-            c.RegionId = "odesa";
             c.OutageTrigger = true;
             c.AddressStreet = "s";
             c.AddressHouse = "1";
@@ -1249,613 +767,11 @@ public sealed class BotUpdateHandlerTests : IDisposable
         AssertDoesNotSelfTrigger(text);
     }
 
-    [Fact]
-    public async Task ChannelPostCommands_StillWork_OnATriggerChannel()
-    {
-        _f.AddChannel(ChannelChat, c => c.OutageTrigger = true);
-
-        await _handler.HandleAsync(ChannelPostUpdate("/template {message} деталі"), CancellationToken.None);
-
-        Assert.Equal("{message} деталі", Row(ChannelChat).Template);
-        Assert.StartsWith("Збережено.", Assert.Single(_f.Bot.Sent).Text);
-    }
-
-    [Fact]
-    public async Task ChannelPostStartCommand_StillShowsMenu()
-    {
-        AddTriggerChannel();
-
-        await _handler.HandleAsync(ChannelPostUpdate("/start"), CancellationToken.None);
-
-        Assert.Contains("Вітаю!", Assert.Single(_f.Bot.Sent).Text);
-        Assert.Equal(0, CheckRows());
-    }
-
-    [Fact]
-    public async Task ChannelPostRegionCommand_StillSubscribes()
-    {
-        await _handler.HandleAsync(ChannelPostUpdate("/region kyiv right-bank"), CancellationToken.None);
-
-        var channel = Row(ChannelChat);
-        Assert.True(channel.IsActive);
-        Assert.False(channel.OutageTrigger);
-        Assert.Equal("right-bank", channel.PartId);
-    }
-
-    // ---- cfg:trigger ----
-
-    [Fact]
-    public async Task Settings_ShowTriggerOffByDefault_WithToggleButton()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg");
-
-        var edit = Edit();
-        Assert.Contains("Реакція на «Світло зникло»: вимкнена", edit.Text);
-        var button = Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:trigger");
-        Assert.Equal("Реагувати на «Світло зникло»", button.Text);
-    }
-
-    [Fact]
-    public async Task Settings_WhenTriggerOn_ShowEnabledTextAndOppositeButton()
-    {
-        _f.AddChannel(PrivateChat, c => c.OutageTrigger = true);
-
-        await PressAsync(Private, "cfg");
-
-        var edit = Edit();
-        Assert.Contains("Реакція на «Світло зникло»: увімкнена", edit.Text);
-        Assert.Equal(
-            "Не реагувати на «Світло зникло»",
-            Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:trigger").Text);
-    }
-
-    [Fact]
-    public async Task CfgTrigger_TogglesAndPersists()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:trigger");
-
-        Assert.True(Row(PrivateChat).OutageTrigger);
-        Assert.Equal("Реагуватиму на «Світло зникло»", Assert.Single(_f.Bot.Answers).Text);
-        var edit = Edit();
-        Assert.Contains("Реакція на «Світло зникло»: увімкнена", edit.Text);
-        Assert.Contains(Buttons(edit.ReplyMarkup), b => b.Text == "Не реагувати на «Світло зникло»");
-
-        _f.Bot.Requests.Clear();
-        await PressAsync(Private, "cfg:trigger");
-
-        Assert.False(Row(PrivateChat).OutageTrigger);
-        Assert.Equal("Не реагуватиму на «Світло зникло»", Assert.Single(_f.Bot.Answers).Text);
-        Assert.Contains("вимкнена", Edit().Text);
-    }
-
-    [Fact]
-    public async Task CfgTrigger_DoesNotTouchOtherSettings()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:trigger");
-
-        var channel = Row(PrivateChat);
-        Assert.Equal(AlertFilter.All, channel.Filter);
-        Assert.True(channel.NotifyOnEnd);
-        Assert.True(channel.EditInPlace);
-        Assert.False(channel.IsPaused);
-    }
-
-    [Fact]
-    public async Task CfgTrigger_WithoutSubscription_AsksToChooseRegionFirst()
-    {
-        await PressAsync(Private, "cfg:trigger");
-
-        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Answers).Text);
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task CfgTrigger_ByGroupAdmin_Works()
-    {
-        _f.AddChannel(GroupChat);
-
-        await PressAsync(Group, "cfg:trigger", AdminUser);
-
-        Assert.True(Row(GroupChat).OutageTrigger);
-    }
-
-    [Fact]
-    public async Task CfgTrigger_ByNonAdminInGroup_IsRefusedWithAlert_AndNothingChanges()
-    {
-        _f.AddChannel(GroupChat);
-
-        await PressAsync(Group, "cfg:trigger", PlainUser);
-
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.Equal(NoAccess, answer.Text);
-        Assert.True(answer.ShowAlert);
-        Assert.Empty(_f.Bot.Edits);
-        Assert.False(Row(GroupChat).OutageTrigger);
-    }
-
-    [Fact]
-    public async Task Trigger_EndToEnd_ToggleOnThenPostReacts()
-    {
-        _f.AddChannel(ChannelChat, c =>
-        {
-            c.AddressStreet = "вул. Драгоманова";
-            c.AddressHouse = "12";
-        });
-        var channelChat = MakeChat(ChannelChat, ChatType.Channel, "Канал");
-
-        await PostAsync(SamplePost);
-        Assert.Empty(_f.Bot.Requests);
-
-        await _handler.HandleAsync(CallbackUpdate(channelChat, "cfg:trigger", AdminUser), CancellationToken.None);
-        _f.Bot.Requests.Clear();
-        await PostAsync(SamplePost);
-
-        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
-    }
-
-    // ---- /check and address menu ----
-
-    private Channel AddChannelWithAddress(long chatId, Action<Channel>? configure = null) =>
-        _f.AddChannel(chatId, c =>
-        {
-            c.AddressStreet = "вул. Драгоманова";
-            c.AddressHouse = "12";
-            c.AddressLabel = "вул. Драгоманова, 12";
-            c.GroupId = "45.1";
-            configure?.Invoke(c);
-        });
-
-    private int CheckRows() => _f.Db.AddressChecks.AsNoTracking().Count();
-
-    [Fact]
-    public async Task Check_WithoutSubscription_AsksToChooseRegionFirst()
-    {
-        await SendAsync(Private, "/check");
-
-        Assert.Contains(ChooseRegionFirst, Reply());
-        Assert.Empty(_trigger.Events);
-        Assert.Equal(0, CheckRows());
-    }
-
-    [Fact]
-    public async Task Check_WithInactiveSubscription_AsksToChooseRegionFirst()
-    {
-        AddChannelWithAddress(PrivateChat, c => c.IsActive = false);
-
-        await SendAsync(Private, "/check");
-
-        Assert.Contains(ChooseRegionFirst, Reply());
-        Assert.Equal(0, CheckRows());
-    }
-
-    [Fact]
-    public async Task Check_WithoutSavedAddress_SaysToPickOne()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await SendAsync(Private, "/check");
-
-        Assert.Contains("адресу", Reply());
-        Assert.Equal(0, CheckRows());
-        Assert.Empty(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task Check_WithAddress_QueuesCheck_AndRepliesWithPlainText()
-    {
-        AddChannelWithAddress(PrivateChat);
-
-        await SendAsync(Private, "/check");
-
-        var request = Assert.Single(_f.Bot.Sent);
-        Assert.Contains("⏳", request.Text);
-        Assert.Equal(default, request.ParseMode);
-        Assert.Null(request.LinkPreviewOptions);
-        Assert.Equal(1, CheckRows());
-        Assert.Equal(["check-addresses"], _trigger.Events);
-    }
-
-    [Fact]
-    public async Task Check_AcceptsBotSuffix_AndIgnoresArguments()
-    {
-        AddChannelWithAddress(PrivateChat);
-
-        await SendAsync(Private, "/check@dtek_test_bot вул. Інша, 5");
-
-        Assert.Contains("⏳", Reply());
-        Assert.Equal("вул. Драгоманова", _f.Db.AddressChecks.AsNoTracking().Single().Street);
-    }
-
-    [Fact]
-    public async Task Check_WithFreshResult_RepliesWithResultAsPlainText_WithoutQueueing()
-    {
-        AddChannelWithAddress(PrivateChat);
-        _f.Db.AddressResults.Add(new AddressResult
-        {
-            RegionId = "kyiv",
-            Street = "вул. Драгоманова",
-            House = "12",
-            Found = true,
-            SubType = "Аварійне відключення <b>",
-            CheckedAt = DateTimeOffset.UtcNow,
-        });
-        _f.Db.SaveChanges();
-
-        await SendAsync(Private, "/check");
-
-        var request = Assert.Single(_f.Bot.Sent);
-        Assert.Contains("🚨", request.Text);
-        Assert.Contains("вул. Драгоманова, 12", request.Text);
-        Assert.Contains("<b>", request.Text);
-        Assert.Equal(default, request.ParseMode);
-        Assert.Equal(0, CheckRows());
-        Assert.Empty(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task Check_Twice_SecondIsRefusedWhilePending()
-    {
-        AddChannelWithAddress(PrivateChat);
-        await SendAsync(Private, "/check");
-        _f.Bot.Requests.Clear();
-
-        await SendAsync(Private, "/check");
-
-        Assert.Contains("ще виконують", Reply());
-        Assert.Equal(1, CheckRows());
-        Assert.Single(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task CheckCallback_SendsResultMessage_AnswersCallback_AndRefreshesMenu()
-    {
-        AddChannelWithAddress(PrivateChat);
-
-        await PressAsync(Private, "chk");
-
-        var message = Assert.Single(_f.Bot.Sent);
-        Assert.Equal(PrivateChat, message.ChatId.Identifier);
-        Assert.Contains("⏳", message.Text);
-        Assert.Equal(default, message.ParseMode);
-
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.Equal("Запит прийнято", answer.Text);
-        Assert.Contains("Підписка:", Edit().Text);
-        Assert.Equal(1, CheckRows());
-        Assert.Single(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task CheckCallback_WithoutSubscription_SendsChooseRegionMessage()
-    {
-        await PressAsync(Private, "chk");
-
-        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Sent).Text);
-        Assert.Equal(0, CheckRows());
-    }
-
-    [Theory]
-    [InlineData(true, "вул. Драгоманова", "12", true)]
-    [InlineData(true, "вул. Драгоманова", null, false)]
-    [InlineData(true, null, "12", false)]
-    [InlineData(true, "", "", false)]
-    [InlineData(true, null, null, false)]
-    [InlineData(false, "вул. Драгоманова", "12", false)]
-    public async Task MainMenu_ShowsCheckButton_OnlyForActiveChannelWithFullAddress(
-        bool active, string? street, string? house, bool expectButton)
-    {
-        _f.AddChannel(PrivateChat, c =>
-        {
-            c.IsActive = active;
-            c.AddressStreet = street;
-            c.AddressHouse = house;
-        });
-
-        await SendAsync(Private, "/start");
-
-        var buttons = Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup);
-        var check = buttons.SingleOrDefault(b => b.CallbackData == "chk");
-        Assert.Equal(expectButton, check is not null);
-        if (check is not null)
-        {
-            Assert.Equal("⚡ Світла немає? Перевірити адресу", check.Text);
-        }
-    }
-
-    [Fact]
-    public async Task MainMenu_WithoutChannel_HasNoCheckButton()
-    {
-        await SendAsync(Private, "/start");
-
-        Assert.DoesNotContain(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup), b => b.CallbackData == "chk");
-    }
-
-    [Fact]
-    public async Task Stop_ClearsGroupAndAddressData()
-    {
-        AddChannelWithAddress(PrivateChat);
-
-        await SendAsync(Private, "/stop");
-
-        var channel = Row(PrivateChat);
-        Assert.False(channel.IsActive);
-        Assert.Null(channel.GroupId);
-        Assert.Null(channel.AddressLabel);
-        Assert.Null(channel.AddressStreet);
-        Assert.Null(channel.AddressHouse);
-    }
-
-    [Fact]
-    public async Task StopCallback_ClearsGroupAndAddressData_AndHidesCheckButton()
-    {
-        AddChannelWithAddress(PrivateChat);
-
-        await PressAsync(Private, "stop");
-
-        var channel = Row(PrivateChat);
-        Assert.Null(channel.GroupId);
-        Assert.Null(channel.AddressStreet);
-        Assert.DoesNotContain(Buttons(Edit().ReplyMarkup), b => b.CallbackData == "chk");
-    }
-
-    [Fact]
-    public async Task Resubscribing_AfterStop_DoesNotBringTheAddressBack()
-    {
-        AddChannelWithAddress(PrivateChat);
-        await SendAsync(Private, "/stop");
-
-        await SendAsync(Private, "/region kyiv");
-
-        var channel = Row(PrivateChat);
-        Assert.True(channel.IsActive);
-        Assert.Null(channel.AddressStreet);
-        Assert.Null(channel.GroupId);
-    }
-
-    [Fact]
-    public async Task Check_InGroup_ByNonAdmin_IsRefused()
-    {
-        AddChannelWithAddress(GroupChat);
-
-        await SendAsync(Group, "/check", PlainUser);
-
-        Assert.Equal(NoAccess, Reply());
-        Assert.Equal(0, CheckRows());
-        Assert.Empty(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task CheckCallback_InGroup_ByNonAdmin_IsRefusedWithAlert()
-    {
-        AddChannelWithAddress(GroupChat);
-
-        await PressAsync(Group, "chk", PlainUser);
-
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.Equal(NoAccess, answer.Text);
-        Assert.True(answer.ShowAlert);
-        Assert.Empty(_f.Bot.Sent);
-        Assert.Empty(_f.Bot.Edits);
-        Assert.Equal(0, CheckRows());
-        Assert.Empty(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task Check_InGroup_ByAdmin_Works()
-    {
-        AddChannelWithAddress(GroupChat);
-
-        await SendAsync(Group, "/check", AdminUser);
-
-        Assert.Contains("⏳", Reply());
-        Assert.Equal(1, CheckRows());
-    }
-
-    [Fact]
-    public async Task CheckCallback_InGroup_ByAdmin_Works()
-    {
-        AddChannelWithAddress(GroupChat);
-
-        await PressAsync(Group, "chk", AdminUser);
-
-        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
-        Assert.Equal(1, CheckRows());
-    }
-
-    // ---- cfg:sched ----
-
-    private Channel AddGroupChannel(long chatId, Action<Channel>? configure = null) =>
-        _f.AddChannel(chatId, c =>
-        {
-            c.GroupId = "45.1";
-            configure?.Invoke(c);
-        });
-
-    [Fact]
-    public async Task Settings_ShowScheduleNotificationsOffByDefault_WithToggleButton()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg");
-
-        var edit = Edit();
-        Assert.Contains("Сповіщення за графіком: вимкнені", edit.Text);
-        var button = Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:sched");
-        Assert.Equal("Увімкнути сповіщення за графіком", button.Text);
-    }
-
-    [Fact]
-    public async Task Settings_WhenScheduleNotificationsAreOn_ShowEnabledTextAndOppositeButton()
-    {
-        AddGroupChannel(PrivateChat, c => c.ScheduleNotify = true);
-
-        await PressAsync(Private, "cfg");
-
-        var edit = Edit();
-        Assert.Contains("Сповіщення за графіком: увімкнені", edit.Text);
-        Assert.Equal(
-            "Вимкнути сповіщення за графіком",
-            Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:sched").Text);
-    }
-
-    [Fact]
-    public async Task CfgSched_WithGroup_TogglesOnAndOff_AndPersists()
-    {
-        AddGroupChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:sched");
-
-        Assert.True(Row(PrivateChat).ScheduleNotify);
-        Assert.Equal("Сповіщення за графіком увімкнено", Assert.Single(_f.Bot.Answers).Text);
-        Assert.Contains("Сповіщення за графіком: увімкнені", Edit().Text);
-
-        _f.Bot.Requests.Clear();
-        await PressAsync(Private, "cfg:sched");
-
-        Assert.False(Row(PrivateChat).ScheduleNotify);
-        Assert.Equal("Сповіщення за графіком вимкнено", Assert.Single(_f.Bot.Answers).Text);
-        Assert.Contains("Сповіщення за графіком: вимкнені", Edit().Text);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public async Task CfgSched_WithoutGroup_IsRefusedWithAToast_AndStaysOff(string? groupId)
-    {
-        _f.AddChannel(PrivateChat, c => c.GroupId = groupId);
-
-        await PressAsync(Private, "cfg:sched");
-
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.StartsWith("Спершу оберіть адресу або чергу", answer.Text);
-        Assert.Contains("Редактор повідомлень", answer.Text);
-        Assert.False(Row(PrivateChat).ScheduleNotify);
-        Assert.Contains("Сповіщення за графіком: вимкнені", Edit().Text);
-    }
-
-    [Fact]
-    public async Task CfgSched_CanAlwaysBeTurnedOff_EvenWithoutAGroup()
-    {
-        _f.AddChannel(PrivateChat, c => { c.GroupId = null; c.ScheduleNotify = true; });
-
-        await PressAsync(Private, "cfg:sched");
-
-        Assert.False(Row(PrivateChat).ScheduleNotify);
-        Assert.Equal("Сповіщення за графіком вимкнено", Assert.Single(_f.Bot.Answers).Text);
-    }
-
-    [Fact]
-    public async Task CfgSched_WithoutSubscription_AsksToChooseRegionFirst()
-    {
-        await PressAsync(Private, "cfg:sched");
-
-        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Answers).Text);
-        Assert.False(HasRow(PrivateChat));
-    }
-
-    [Fact]
-    public async Task CfgSched_DoesNotTouchOtherSettings()
-    {
-        AddGroupChannel(PrivateChat);
-
-        await PressAsync(Private, "cfg:sched");
-
-        var channel = Row(PrivateChat);
-        Assert.Equal(AlertFilter.All, channel.Filter);
-        Assert.True(channel.NotifyOnEnd);
-        Assert.True(channel.EditInPlace);
-        Assert.False(channel.IsPaused);
-        Assert.False(channel.OutageTrigger);
-    }
-
-    [Fact]
-    public async Task CfgSched_ByGroupAdmin_Works()
-    {
-        AddGroupChannel(GroupChat);
-
-        await PressAsync(Group, "cfg:sched", AdminUser);
-
-        Assert.True(Row(GroupChat).ScheduleNotify);
-    }
-
-    [Fact]
-    public async Task CfgSched_ByNonAdminInGroup_IsRefusedWithAlert_AndNothingChanges()
-    {
-        AddGroupChannel(GroupChat);
-
-        await PressAsync(Group, "cfg:sched", PlainUser);
-
-        var answer = Assert.Single(_f.Bot.Answers);
-        Assert.Equal(NoAccess, answer.Text);
-        Assert.True(answer.ShowAlert);
-        Assert.Empty(_f.Bot.Edits);
-        Assert.False(Row(GroupChat).ScheduleNotify);
-    }
-
-    [Fact]
-    public async Task Stop_ClearsScheduleNotify()
-    {
-        AddGroupChannel(PrivateChat, c => c.ScheduleNotify = true);
-
-        await SendAsync(Private, "/stop");
-
-        Assert.False(Row(PrivateChat).ScheduleNotify);
-        Assert.False(Row(PrivateChat).IsActive);
-    }
-
-    [Fact]
-    public async Task StopCallback_ClearsScheduleNotify()
-    {
-        AddGroupChannel(PrivateChat, c => c.ScheduleNotify = true);
-
-        await PressAsync(Private, "stop");
-
-        Assert.False(Row(PrivateChat).ScheduleNotify);
-    }
-
-    // ---- assessment regression: schedule explains the outage ----
+    // ---- assessment: the schedule explains the outage ----
 
     private static readonly DateTimeOffset ScheduledOff = ScheduleFixtures.Kyiv(15, 12);
 
     private const string NoticeStart = "🗓 За графіком (черга 45.1) зараз планове стабілізаційне відключення з 11:00.";
-
-    [Fact]
-    public async Task CheckCommand_WhenScheduleSaysOff_RepliesWithTheNotice_InsteadOfQueuing()
-    {
-        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
-        _clock.Now = ScheduledOff;
-        AddChannelWithAddress(PrivateChat);
-
-        await SendAsync(Private, "/check");
-
-        var reply = Assert.Single(_f.Bot.Sent);
-        Assert.StartsWith(NoticeStart, reply.Text);
-        Assert.Contains("Світло очікується о 14:00.", reply.Text);
-        Assert.Contains("Перевірку за адресою на сайті ДТЕК не запускаю.", reply.Text);
-        Assert.Equal(default, reply.ParseMode);
-        Assert.Equal(0, CheckRows());
-        Assert.Empty(_trigger.Events);
-    }
-
-    [Fact]
-    public async Task CheckCallback_WhenScheduleSaysOff_SendsTheNotice_InsteadOfQueuing()
-    {
-        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
-        _clock.Now = ScheduledOff;
-        AddChannelWithAddress(PrivateChat);
-
-        await PressAsync(Private, "chk");
-
-        Assert.StartsWith(NoticeStart, Assert.Single(_f.Bot.Sent).Text);
-        Assert.Equal(0, CheckRows());
-        Assert.Empty(_trigger.Events);
-    }
 
     [Fact]
     public async Task PowerOutPost_WhenScheduleSaysOff_RepliesWithTheNotice_InsteadOfQueuing()
@@ -1905,13 +821,32 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Equal(0, CheckRows());
     }
 
+    [Fact]
+    public async Task PowerOutPost_ScheduleOnAndRegionWideAlert_RepliesOnlyWithTheContext()
+    {
+        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
+        _clock.Now = ScheduleFixtures.Kyiv(15, 15);
+        AddTriggerChannel();
+        StoreRegionState(PopupKind.Accident);
+        StoreGroupState(GroupStatuses.Emergency);
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.StartsWith("ℹ️ На сайті ДТЕК зараз діє загальне повідомлення", text);
+        Assert.DoesNotContain("Для вашої черги", text);
+        Assert.Equal(0, CheckRows());
+    }
+
     // ---- channel membership (my_chat_member) ----
 
     private const long NewChannel = -1003;
     private const long Adder = 77;
 
-    private static Chat Channel(long id = NewChannel, string? title = "Мій канал", string? username = null) =>
+    private static Chat NewChannelChat(long id = NewChannel, string? title = "Мій канал", string? username = null) =>
         new() { Id = id, Type = ChatType.Channel, Title = title, Username = username };
+
+    private static readonly User BotUser = new() { Id = 1, FirstName = "Bot", IsBot = true };
 
     private Update MembershipUpdate(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false) => new()
     {
@@ -1921,24 +856,26 @@ public sealed class BotUpdateHandlerTests : IDisposable
             Chat = chat,
             From = new User { Id = fromId, FirstName = "A", IsBot = fromIsBot },
             Date = DateTime.UtcNow,
-            OldChatMember = new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } },
+            OldChatMember = new ChatMemberLeft { User = BotUser },
             NewChatMember = newMember,
         },
     };
 
     private static ChatMemberAdministrator AdminMember(bool canPost = true) =>
-        new() { User = new User { Id = 1, FirstName = "Bot", IsBot = true }, CanPostMessages = canPost };
+        new() { User = BotUser, CanPostMessages = canPost };
+
+    private static ChatMemberLeft LeftMember() => new() { User = BotUser };
 
     private Task MembershipAsync(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false) =>
-        _handler.HandleAsync(MembershipUpdate(chat, newMember, fromId, fromIsBot), CancellationToken.None);
+        HandleAsync(MembershipUpdate(chat, newMember, fromId, fromIsBot));
 
     private const string ConnectedText =
-        "✅ Канал «Мій канал» підключено.\n\nВідкрийте «🧩 Редактор повідомлень» у меню бота (/start), щоб обрати регіон і адресу.";
+        "✅ Канал «Мій канал» підключено.\n\nВідкрийте редактор (кнопка меню біля поля вводу або /start), щоб обрати регіон і адресу.";
 
     [Fact]
     public async Task BotMadeChannelAdmin_CreatesAnInactiveRow_LinksTheAdder_AndSendsADm()
     {
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         var channel = Row(NewChannel);
         Assert.False(channel.IsActive);
@@ -1952,12 +889,13 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Equal(Adder, dm.ChatId.Identifier);
         Assert.Equal(ConnectedText, dm.Text);
         Assert.Equal(default, dm.ParseMode);
+        Assert.Null(dm.ReplyMarkup);
     }
 
     [Fact]
     public async Task BotWithoutPostRight_GetsAWarningInTheDm()
     {
-        await MembershipAsync(Channel(), AdminMember(canPost: false));
+        await MembershipAsync(NewChannelChat(), AdminMember(canPost: false));
 
         Assert.Equal(
             ConnectedText + "\n\n⚠️ Надайте боту право публікувати повідомлення, інакше він не зможе писати в канал.",
@@ -1967,7 +905,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task BotWithPostRight_GetsNoWarning()
     {
-        await MembershipAsync(Channel(), AdminMember(true));
+        await MembershipAsync(NewChannelChat(), AdminMember(true));
 
         Assert.DoesNotContain("⚠️", Assert.Single(_f.Bot.Sent).Text);
     }
@@ -1975,12 +913,12 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task Title_FallsBackToUsername_ThenKeepsTheExistingTitle()
     {
-        await MembershipAsync(Channel(title: null, username: "mychannel"), AdminMember());
+        await MembershipAsync(NewChannelChat(title: null, username: "mychannel"), AdminMember());
         Assert.Equal("mychannel", Row(NewChannel).Title);
         Assert.Contains("«mychannel»", Assert.Single(_f.Bot.Sent).Text);
 
         _f.Bot.Requests.Clear();
-        await MembershipAsync(Channel(title: null, username: null), AdminMember());
+        await MembershipAsync(NewChannelChat(title: null, username: null), AdminMember());
 
         Assert.Equal("mychannel", Row(NewChannel).Title);
         Assert.Contains("«mychannel»", Assert.Single(_f.Bot.Sent).Text);
@@ -1991,7 +929,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     {
         _f.AddChannel(NewChannel, c => c.Title = "Старий");
 
-        await MembershipAsync(Channel(title: "Новий"), AdminMember());
+        await MembershipAsync(NewChannelChat(title: "Новий"), AdminMember());
 
         Assert.Equal("Новий", Row(NewChannel).Title);
     }
@@ -1999,7 +937,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task ChannelWithoutAnyName_UsesTheIdInTheDm()
     {
-        await MembershipAsync(Channel(title: null, username: null), AdminMember());
+        await MembershipAsync(NewChannelChat(title: null, username: null), AdminMember());
 
         Assert.Contains($"«{NewChannel}»", Assert.Single(_f.Bot.Sent).Text);
     }
@@ -2018,7 +956,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
             c.IsActive = true;
         });
 
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         var channel = Row(NewChannel);
         Assert.True(channel.IsActive);
@@ -2037,7 +975,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     {
         _f.AddChannel(NewChannel, c => c.IsActive = false);
 
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         Assert.False(Row(NewChannel).IsActive);
     }
@@ -2048,7 +986,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = NewChannel, UserId = Adder, LinkedAt = DateTimeOffset.UtcNow });
         _f.Db.SaveChanges();
 
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
     }
@@ -2056,8 +994,8 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task AnotherAdderOfTheSameChannel_IsLinkedToo()
     {
-        await MembershipAsync(Channel(), AdminMember(), fromId: Adder);
-        await MembershipAsync(Channel(), AdminMember(), fromId: 78);
+        await MembershipAsync(NewChannelChat(), AdminMember(), fromId: Adder);
+        await MembershipAsync(NewChannelChat(), AdminMember(), fromId: 78);
 
         var users = _f.Db.ChannelAdmins.AsNoTracking().Select(a => a.UserId).OrderBy(u => u).ToList();
         Assert.Equal([Adder, 78], users);
@@ -2066,9 +1004,9 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task Repeated_AdminUpdates_AreIdempotentForTheDatabase()
     {
-        await MembershipAsync(Channel(), AdminMember());
-        await MembershipAsync(Channel(), AdminMember());
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         Assert.Single(_f.Db.Channels);
         Assert.Single(_f.Db.ChannelAdmins);
@@ -2078,7 +1016,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     public async Task LinkedAdder_CanThenManageTheChannel()
     {
         _f.Bot.SetStatus(Adder, ChatMemberStatus.Administrator);
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
         var access = new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance);
 
         Assert.True(await access.CanManageAsync(NewChannel, Adder, CancellationToken.None));
@@ -2088,7 +1026,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task AdderWhoIsABot_GetsNoDm_AndNoLink_ButTheRowIsCreated()
     {
-        await MembershipAsync(Channel(), AdminMember(), fromId: 4242, fromIsBot: true);
+        await MembershipAsync(NewChannelChat(), AdminMember(), fromId: 4242, fromIsBot: true);
 
         Assert.Empty(_f.Bot.Requests);
         Assert.Empty(_f.Db.ChannelAdmins);
@@ -2100,7 +1038,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     {
         _f.Bot.Failure = _ => FakeTelegramBotClient.Forbidden();
 
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         Assert.Single(_f.Bot.Requests);
         Assert.Equal("Мій канал", Row(NewChannel).Title);
@@ -2123,10 +1061,10 @@ public sealed class BotUpdateHandlerTests : IDisposable
             c.Filter = AlertFilter.EmergencyOnly;
         });
         ChatMember removed = status == ChatMemberStatus.Left
-            ? new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } }
-            : new ChatMemberBanned { User = new User { Id = 1, FirstName = "Bot", IsBot = true } };
+            ? new ChatMemberLeft { User = BotUser }
+            : new ChatMemberBanned { User = BotUser };
 
-        await MembershipAsync(Channel(), removed);
+        await MembershipAsync(NewChannelChat(), removed);
 
         var channel = Row(NewChannel);
         Assert.False(channel.IsActive);
@@ -2144,7 +1082,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task BotRemoved_FromAnUnknownChannel_DoesNothing()
     {
-        await MembershipAsync(Channel(), new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+        await MembershipAsync(NewChannelChat(), LeftMember());
 
         Assert.Empty(_f.Db.Channels);
         Assert.Empty(_f.Db.ChannelAdmins);
@@ -2154,9 +1092,9 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task BotRemoved_KeepsTheAdminLinks()
     {
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
-        await MembershipAsync(Channel(), new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+        await MembershipAsync(NewChannelChat(), LeftMember());
 
         Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
     }
@@ -2164,10 +1102,10 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Fact]
     public async Task RemovedThenReAdded_ReconnectsWithoutActivating()
     {
-        await MembershipAsync(Channel(), AdminMember());
-        await MembershipAsync(Channel(), new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+        await MembershipAsync(NewChannelChat(), AdminMember());
+        await MembershipAsync(NewChannelChat(), LeftMember());
 
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
         Assert.False(Row(NewChannel).IsActive);
         Assert.Single(_f.Db.Channels);
@@ -2180,15 +1118,14 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [InlineData(ChatMemberStatus.Restricted)]
     public async Task OtherStatuses_AreIgnored(ChatMemberStatus status)
     {
-        var user = new User { Id = 1, FirstName = "Bot", IsBot = true };
         ChatMember member = status switch
         {
-            ChatMemberStatus.Member => new ChatMemberMember { User = user },
-            ChatMemberStatus.Creator => new ChatMemberOwner { User = user },
-            _ => new ChatMemberRestricted { User = user },
+            ChatMemberStatus.Member => new ChatMemberMember { User = BotUser },
+            ChatMemberStatus.Creator => new ChatMemberOwner { User = BotUser },
+            _ => new ChatMemberRestricted { User = BotUser },
         };
 
-        await MembershipAsync(Channel(), member);
+        await MembershipAsync(NewChannelChat(), member);
 
         Assert.Empty(_f.Db.Channels);
         Assert.Empty(_f.Db.ChannelAdmins);
@@ -2200,7 +1137,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     {
         _f.AddChannel(NewChannel, c => c.OutageTrigger = true);
 
-        await MembershipAsync(Channel(), new ChatMemberMember { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+        await MembershipAsync(NewChannelChat(), new ChatMemberMember { User = BotUser });
 
         var channel = Row(NewChannel);
         Assert.True(channel.IsActive);
@@ -2217,7 +1154,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         _f.AddChannel(-2000, c => c.OutageTrigger = true);
 
         await MembershipAsync(chat, AdminMember());
-        await MembershipAsync(chat, new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+        await MembershipAsync(chat, LeftMember());
 
         var channel = Row(-2000);
         Assert.True(channel.IsActive);
@@ -2227,82 +1164,21 @@ public sealed class BotUpdateHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task MembershipUpdate_IsNotTreatedAsAMessage_OrACommand()
+    public async Task MembershipUpdate_PostsNothingIntoTheChannelItself()
     {
-        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(NewChannelChat(), AdminMember());
 
-        // Only the DM: nothing is posted into the channel itself.
         Assert.DoesNotContain(_f.Bot.Sent, s => s.ChatId.Identifier == NewChannel);
     }
 
-    // ---- status ----
-
     [Fact]
-    public async Task Status_WithoutSubscription_AsksToChooseRegionFirst()
+    public async Task MembershipUpdate_TakesPrecedenceOverEverythingElseInTheUpdate()
     {
-        await PressAsync(Private, "status");
+        var update = MembershipUpdate(NewChannelChat(), AdminMember());
+        update.Message = new Message { Id = 1, Chat = Private, Text = "/start" };
 
-        Assert.Contains(ChooseRegionFirst, Edit().Text);
-    }
+        await HandleAsync(update);
 
-    [Fact]
-    public async Task Status_WithoutStoredState_SaysNoDataYet()
-    {
-        _f.AddChannel(PrivateChat);
-
-        await PressAsync(Private, "status");
-
-        var text = Edit().Text;
-        Assert.Contains("м. Київ", text);
-        Assert.Contains("Даних ще немає.", text);
-        Assert.DoesNotContain("Перервірено", text);
-    }
-
-    [Theory]
-    [InlineData(PopupKind.Emergency, "🚨 Діють екстрені відключення.")]
-    [InlineData(PopupKind.Accident, "⚠️ Повідомлено про аварію в енергосистемі.")]
-    [InlineData(PopupKind.Unknown, "ℹ️ На сайті є невизначене повідомлення.")]
-    [InlineData(PopupKind.Stabilization, "Діють стабілізаційні відключення (за графіками).")]
-    [InlineData(PopupKind.Cancelled, "Екстрених відключень немає.")]
-    [InlineData(PopupKind.None, "Екстрених відключень немає.")]
-    public async Task Status_ShowsTextForStoredPopupKind(PopupKind kind, string expected)
-    {
-        _f.AddChannel(PrivateChat, c => c.PartId = "right-bank");
-        _f.Db.RegionStates.Add(new RegionState
-        {
-            RegionId = "kyiv",
-            Kind = kind,
-            Hash = "h",
-            ObservedAt = new DateTimeOffset(2026, 7, 15, 12, 0, 0, TimeSpan.Zero),
-            UpdatedAt = DateTimeOffset.UtcNow,
-        });
-        _f.Db.SaveChanges();
-
-        await PressAsync(Private, "status");
-
-        var edit = Edit();
-        Assert.Contains("м. Київ (Правий берег)", edit.Text);
-        Assert.Contains(expected, edit.Text);
-        Assert.Contains("Перервірено: 15.07 15:00 (Київ)", edit.Text);
-        Assert.Contains(Buttons(edit.ReplyMarkup), b => b.CallbackData == "menu");
-    }
-
-    [Fact]
-    public async Task Status_UsesStateOfTheSubscribedRegionOnly()
-    {
-        _f.AddChannel(PrivateChat, regionId: "odesa");
-        _f.Db.RegionStates.Add(new RegionState
-        {
-            RegionId = "kyiv",
-            Kind = PopupKind.Emergency,
-            Hash = "h",
-            ObservedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow,
-        });
-        _f.Db.SaveChanges();
-
-        await PressAsync(Private, "status");
-
-        Assert.Contains("Даних ще немає.", Edit().Text);
+        Assert.Equal(Adder, Assert.Single(_f.Bot.Sent).ChatId.Identifier);
     }
 }
