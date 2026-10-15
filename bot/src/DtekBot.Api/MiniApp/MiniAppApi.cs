@@ -1,4 +1,5 @@
 using DtekBot.Api.Data;
+using DtekBot.Api.Groups;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
@@ -37,7 +38,7 @@ public static class MiniAppApi
         api.MapGet("/bootstrap", (HttpContext http, IOptionsMonitor<DtekSettings> settings) =>
         {
             var regions = settings.CurrentValue.Regions
-                .Select(r => new RegionDto(r.Id, r.Name, r.SiteUrl, r.Parts.Select(p => new PartDto(p.Id, p.Name)).ToList()))
+                .Select(r => new RegionDto(r.Id, r.Name, r.SiteUrl, r.Parts.Select(p => new PartDto(p.Id, p.Name)).ToList(), r.HasGroups))
                 .ToList();
             return Json(new BootstrapDto(UserId(http), regions, MessageTemplate.Placeholders, MessageTemplate.Default, MessageTemplate.MaxLength));
         });
@@ -178,6 +179,13 @@ public static class MiniAppApi
 
             if (region is not null)
             {
+                // A group belongs to one region's power network.
+                if (!string.Equals(channel.RegionId, region.Id, StringComparison.Ordinal))
+                {
+                    channel.GroupId = null;
+                    channel.AddressLabel = null;
+                }
+
                 channel.RegionId = region.Id;
                 channel.PartId = partId;
             }
@@ -217,7 +225,120 @@ public static class MiniAppApi
                 : "";
             return Json(new PreviewResponse(html, errors));
         });
+        api.MapGet("/address/streets", async (
+            string regionId,
+            string? query,
+            IYasnoClient yasno,
+            IOptionsMonitor<DtekSettings> settings,
+            CancellationToken ct) =>
+        {
+            var region = GroupRegion(settings.CurrentValue, regionId);
+            if (region is null)
+            {
+                return Error("Для цього регіону пошук за адресою недоступний.");
+            }
+
+            if ((query?.Trim().Length ?? 0) < 2)
+            {
+                return Json(Array.Empty<AddressItemDto>());
+            }
+
+            var items = await yasno.SearchStreetsAsync(region.YasnoRegionId, region.YasnoDsoId, query!.Trim(), ct);
+            return Json(items.Take(20).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+        });
+
+        api.MapGet("/address/houses", async (
+            string regionId,
+            int streetId,
+            string? query,
+            IYasnoClient yasno,
+            IOptionsMonitor<DtekSettings> settings,
+            CancellationToken ct) =>
+        {
+            var region = GroupRegion(settings.CurrentValue, regionId);
+            if (region is null)
+            {
+                return Error("Для цього регіону пошук за адресою недоступний.");
+            }
+
+            var items = await yasno.SearchHousesAsync(region.YasnoRegionId, region.YasnoDsoId, streetId, query?.Trim() ?? "", ct);
+            return Json(items.Take(50).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+        });
+
+        api.MapPut("/chats/{chatId:long}/address", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            IYasnoClient yasno,
+            IOptionsMonitor<DtekSettings> settings,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            var request = await http.Request.ReadFromJsonAsync<SetAddressRequest>(ApiJson.Options, ct);
+            if (request is null)
+            {
+                return Error("Порожній запит.");
+            }
+
+            if (!await access.CanManageAsync(chatId, userId, ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var region = GroupRegion(settings.CurrentValue, request.RegionId);
+            if (region is null)
+            {
+                return Error("Для цього регіону пошук за адресою недоступний.");
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || channel.RegionId != region.Id)
+            {
+                return Error($"Спершу оберіть регіон «{region.Name}» і збережіть налаштування.");
+            }
+
+            var group = await yasno.GetGroupAsync(region.YasnoRegionId, region.YasnoDsoId, request.StreetId, request.HouseId, ct);
+            if (group is null)
+            {
+                return Error("Не вдалося визначити чергу для цієї адреси. Спробуйте пізніше.");
+            }
+
+            var label = request.Label?.Trim() ?? "";
+            channel.GroupId = group.Id;
+            channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            await db.SaveChangesAsync(ct);
+            return Json(ToSummary(channel, userId));
+        });
+
+        api.MapDelete("/chats/{chatId:long}/address", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            if (!await access.CanManageAsync(chatId, userId, ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null)
+            {
+                return Error("Чат не знайдено.");
+            }
+
+            channel.GroupId = null;
+            channel.AddressLabel = null;
+            await db.SaveChangesAsync(ct);
+            return Json(ToSummary(channel, userId));
+        });
     }
+
+    private static RegionSettings? GroupRegion(DtekSettings settings, string? regionId) =>
+        settings.Regions.FirstOrDefault(r => r.HasGroups && string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
 
     private static long UserId(HttpContext http) => (long)http.Items[UserIdKey]!;
 
@@ -237,7 +358,9 @@ public static class MiniAppApi
             c.Filter,
             c.NotifyOnEnd,
             c.EditInPlace,
-            c.Template);
+            c.Template,
+            c.GroupId,
+            c.AddressLabel);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 }

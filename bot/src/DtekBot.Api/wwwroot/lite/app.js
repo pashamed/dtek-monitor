@@ -233,10 +233,74 @@ function renderEditor(chat) {
     save.disabled = errors.length > 0;
   });
 
+  // Address -> power group (only for regions that support it). Saved separately from the form below.
+  const addrBox = h('div', { class: 'addr' });
+  function renderAddr() {
+    const r = regionName(s.regionId);
+    if (!r || !r.hasGroups) { addrBox.replaceChildren(); return; }
+    const saved = chat.settings;
+    if (saved.regionId !== s.regionId) {
+      addrBox.replaceChildren(h('h2', { text: 'Адреса' }),
+        h('p', { class: 'hint', text: 'Збережіть регіон, щоб вибрати адресу й отримувати сповіщення по своїй черзі.' }));
+      return;
+    }
+    const msg = h('div', { class: 'msg' });
+    const apply = c => { chat = c; state.editing = c; const i = state.chats.findIndex(x => x.chatId === c.chatId); if (i >= 0) state.chats[i] = c; renderAddr(); };
+    if (saved.groupId) {
+      addrBox.replaceChildren(h('h2', { text: 'Адреса' }),
+        h('p', { text: `${saved.addressLabel || 'Адреса'} — черга ${saved.groupId}` }),
+        h('p', { class: 'hint', text: 'Повідомлення надходитимуть, коли для цієї черги почнуться екстрені відключення.' }),
+        h('button', { type: 'button', class: 'btn sec', text: 'Прибрати адресу', onclick: async () => {
+          try { apply(await api('DELETE', '/api/chats/' + encodeURIComponent(chat.chatId) + '/address')); }
+          catch (e) { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); }
+        } }), msg);
+      return;
+    }
+
+    let street = null, seq = 0, timer = 0;
+    const list = h('div', { class: 'picks' });
+    const input = h('input', { type: 'text', placeholder: 'Почніть вводити вулицю', autocomplete: 'off', 'aria-label': 'Вулиця' });
+    const setList = (items, onPick) => list.replaceChildren(...items.map(i =>
+      h('button', { type: 'button', class: 'pick', text: i.name, onclick: () => onPick(i) })));
+
+    async function search() {
+      const my = ++seq, q = input.value.trim();
+      msg.textContent = '';
+      if (q.length < (street ? 1 : 2)) { list.replaceChildren(); return; }
+      try {
+        const url = street
+          ? `/api/address/houses?regionId=${encodeURIComponent(s.regionId)}&streetId=${street.id}&query=${encodeURIComponent(q)}`
+          : `/api/address/streets?regionId=${encodeURIComponent(s.regionId)}&query=${encodeURIComponent(q)}`;
+        const items = await api('GET', url);
+        if (my !== seq) return;
+        if (!items.length) { list.replaceChildren(h('p', { class: 'hint', text: 'Нічого не знайдено.' })); return; }
+        setList(items, street ? pickHouse : pickStreet);
+      } catch (e) { if (my === seq) { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); } }
+    }
+    function pickStreet(i) {
+      street = i; input.value = ''; input.placeholder = `Номер будинку (${i.name})`; input.setAttribute('aria-label', 'Будинок');
+      list.replaceChildren(); input.focus();
+    }
+    async function pickHouse(i) {
+      list.replaceChildren(); msg.className = 'msg'; msg.textContent = 'Визначаю чергу…';
+      try {
+        apply(await api('PUT', '/api/chats/' + encodeURIComponent(chat.chatId) + '/address',
+          { regionId: s.regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}` }));
+        tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success');
+      } catch (e) { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); }
+    }
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 300); });
+    addrBox.replaceChildren(h('h2', { text: 'Адреса' }),
+      h('p', { class: 'hint', text: 'Оберіть адресу, щоб отримувати сповіщення по своїй черзі (за даними Yasno).' }),
+      input, list, msg);
+  }
+  renderAddr();
+  regionSel.addEventListener('change', renderAddr);
+
   show(
     h('button', { class: 'back', text: '← Назад', onclick: () => renderList() }),
     h('h1', { text: chat.title || 'Особистий чат' }),
-    h('h2', { text: 'Регіон' }), regionSel, partSel,
+    h('h2', { text: 'Регіон' }), regionSel, partSel, addrBox,
     h('h2', { text: 'Сповіщення' }),
     toggle('Підписка активна', 'isActive'),
     toggle('Пауза', 'isPaused'),

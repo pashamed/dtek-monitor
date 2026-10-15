@@ -18,6 +18,27 @@ public sealed class Channel
     public bool NotifyOnEnd { get; set; } = true;
     public bool EditInPlace { get; set; } = true;
     public string? Template { get; set; }
+
+    // Power group such as "45.1", resolved from the address the user picked.
+    public string? GroupId { get; set; }
+    public string? AddressLabel { get; set; }
+}
+
+// Latest known status of one power group, as reported by the Yasno planned-outages feed.
+public sealed class GroupState
+{
+    public string RegionId { get; set; } = "";
+    public string GroupId { get; set; } = "";
+    public string Today { get; set; } = "";
+    public string Tomorrow { get; set; } = "";
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public bool IsEmergency => Today == GroupStatuses.Emergency;
+}
+
+public static class GroupStatuses
+{
+    public const string Emergency = "EmergencyShutdowns";
 }
 
 // Which Telegram users may manage a group or channel from the Mini App.
@@ -56,9 +77,19 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<RegionState> RegionStates => Set<RegionState>();
     public DbSet<Delivery> Deliveries => Set<Delivery>();
     public DbSet<ChannelAdmin> ChannelAdmins => Set<ChannelAdmin>();
+    public DbSet<GroupState> GroupStates => Set<GroupState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<GroupState>(e =>
+        {
+            e.HasKey(x => new { x.RegionId, x.GroupId });
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.GroupId).HasMaxLength(16);
+            e.Property(x => x.Today).HasMaxLength(64);
+            e.Property(x => x.Tomorrow).HasMaxLength(64);
+        });
+
         modelBuilder.Entity<Channel>(e =>
         {
             e.HasKey(x => x.ChatId);
@@ -68,7 +99,10 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.Title).HasMaxLength(256);
             e.Property(x => x.Filter).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.Template).HasMaxLength(MessageTemplate.MaxLength);
+            e.Property(x => x.GroupId).HasMaxLength(16);
+            e.Property(x => x.AddressLabel).HasMaxLength(256);
             e.HasIndex(x => new { x.RegionId, x.IsActive });
+            e.HasIndex(x => x.GroupId);
         });
 
         modelBuilder.Entity<ChannelAdmin>(e =>

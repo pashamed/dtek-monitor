@@ -6,6 +6,8 @@
         "Name": "м. Київ",
         "SiteUrl": "https://www.dtek-kem.com.ua/ua/shutdowns",
         "GridStatusSlug": "kyiv",
+        "YasnoRegionId": 25,
+        "YasnoDsoId": 902,
         "Aliases": ["київ", "києві", "столиця", "столиці"],
         "Parts": [
           {

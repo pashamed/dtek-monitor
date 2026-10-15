@@ -34,13 +34,21 @@ public sealed record ChatSettingsDto(
     AlertFilter Filter,
     bool NotifyOnEnd,
     bool EditInPlace,
-    string? Template);
+    string? Template,
+    string? GroupId = null,
+    string? AddressLabel = null);
+
+public sealed record AddressItemDto(int Id, string Name);
+
+public sealed record SetAddressRequest(string RegionId, int StreetId, int HouseId, string Label);
+
+public sealed record GroupStatusDto(string GroupId, string Today, string Tomorrow, bool IsEmergency);
 
 public sealed record ChatSummaryDto(long ChatId, string Title, bool IsPrivate, ChatSettingsDto Settings);
 
 public sealed record PartDto(string Id, string Name);
 
-public sealed record RegionDto(string Id, string Name, string SiteUrl, IReadOnlyList<PartDto> Parts);
+public sealed record RegionDto(string Id, string Name, string SiteUrl, IReadOnlyList<PartDto> Parts, bool HasGroups = false);
 
 public sealed record PlaceholderDto(string Name, string Description, string Example);
 

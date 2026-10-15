@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using DtekBot.Api;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
+using DtekBot.Api.Groups;
 using DtekBot.Api.MiniApp;
 using DtekBot.Api.Parsing;
 using DtekBot.Api.Settings;
@@ -24,6 +25,12 @@ builder.Services.AddDbContext<BotDbContext>(o =>
     o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddHttpClient<IYasnoClient, YasnoClient>(client =>
+{
+    client.BaseAddress = new Uri(YasnoClient.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
+});
 builder.Services.AddSingleton<PopupClassifier>();
 builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 {
@@ -49,6 +56,7 @@ if (app.Configuration.GetValue("Database:AutoMigrate", false))
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapMiniAppApi();
+app.MapGroupIngest();
 
 app.MapPost("/webhook", async (
     Update update,
