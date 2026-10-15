@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using DtekBot.Api;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
+using DtekBot.Api.MiniApp;
 using DtekBot.Api.Parsing;
 using DtekBot.Api.Settings;
 using Microsoft.EntityFrameworkCore;
@@ -31,8 +32,13 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 });
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddScoped<AlertDispatcher>();
+builder.Services.AddScoped<ChatAccessService>();
 
 var app = builder.Build();
+
+// /app is the Blazor WASM Mini App, /lite is the plain HTML/JS one.
+app.UseBlazorFrameworkFiles("/app");
+app.UseStaticFiles();
 
 if (app.Configuration.GetValue("Database:AutoMigrate", false))
 {
@@ -41,6 +47,8 @@ if (app.Configuration.GetValue("Database:AutoMigrate", false))
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapMiniAppApi();
 
 app.MapPost("/webhook", async (
     Update update,
@@ -105,13 +113,14 @@ app.MapPost("/ingest", async (
     {
         state.Kind = result.Kind;
         state.NormalizedText = result.NormalizedText;
+        state.PopupText = body.PopupText?.Trim() is { Length: > 4000 } longText ? longText[..4000] : body.PopupText?.Trim();
         state.Hash = result.Hash;
         state.UpdatedAt = now;
     }
 
     await db.SaveChangesAsync(ct);
 
-    var dispatch = changed ? await dispatcher.DispatchAsync(region, result, ct) : null;
+    var dispatch = changed ? await dispatcher.DispatchAsync(region, result, state.PopupText, ct) : null;
     logger.LogInformation("Ingest {Region}: changed={Changed} dispatch={@Dispatch}", region.Id, changed, dispatch);
 
     return Results.Ok(new
@@ -123,6 +132,9 @@ app.MapPost("/ingest", async (
         dispatch,
     });
 });
+
+app.MapFallbackToFile("/lite/{*path:nonfile}", "lite/index.html");
+app.MapFallbackToFile("/app/{*path:nonfile}", "app/index.html");
 
 app.Run();
 

@@ -1,0 +1,21 @@
+@typeparam TValue
+
+<div class="segmented" role="radiogroup">
+    @foreach (var (value, label) in Options)
+    {
+        var selected = EqualityComparer<TValue>.Default.Equals(value, Value);
+        <button type="button" role="radio" aria-checked="@(selected ? "true" : "false")"
+                class="@(selected ? "active" : null)"
+                @onclick="() => Select(value)">@label</button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<(TValue Value, string Label)> Options { get; set; } = [];
+
+    [Parameter] public TValue? Value { get; set; }
+
+    [Parameter] public EventCallback<TValue> ValueChanged { get; set; }
+
+    private Task Select(TValue value) => ValueChanged.InvokeAsync(value);
+}

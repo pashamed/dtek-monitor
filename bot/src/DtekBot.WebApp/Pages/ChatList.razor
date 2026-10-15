@@ -1,0 +1,87 @@
+@inject ApiClient Api
+
+<header class="topbar">
+    <h1>Ваші чати</h1>
+</header>
+
+@foreach (var chat in Chats)
+{
+    <button type="button" class="card chat-card" @onclick="() => OnSelect.InvokeAsync(chat)">
+        <span class="chat-title">@(chat.IsPrivate ? "👤 " : "👥 ")@chat.Title</span>
+        <span class="chat-sub">@Labels.Subscription(chat.Settings, Regions)</span>
+        @if (chat.Settings.IsPaused)
+        {
+            <span class="badge">Пауза</span>
+        }
+    </button>
+}
+
+<section class="card">
+    <h2>Підключити канал або групу</h2>
+    <p class="hint">Додайте бота до чату (для каналу — як адміністратора) і самі будьте адміністратором цього чату. Потім введіть @@username або числовий id.</p>
+    <div class="field">
+        <input type="text" inputmode="text" autocapitalize="off" autocomplete="off" placeholder="@@channelusername або -100…"
+               @bind="_link" @bind:event="oninput" @onkeydown="OnKeyDown" />
+    </div>
+    @if (_error is not null)
+    {
+        <ul class="errors">
+            <li>@_error</li>
+            @foreach (var detail in _details)
+            {
+                <li>@detail</li>
+            }
+        </ul>
+    }
+    <button type="button" class="btn primary" disabled="@(_busy || string.IsNullOrWhiteSpace(_link))" @onclick="LinkAsync">
+        @(_busy ? "Підключення…" : "Підключити")
+    </button>
+</section>
+
+@code {
+    private string _link = "";
+    private bool _busy;
+    private string? _error;
+    private IReadOnlyList<string> _details = [];
+
+    [Parameter, EditorRequired] public IReadOnlyList<ChatSummaryDto> Chats { get; set; } = [];
+
+    [Parameter, EditorRequired] public IReadOnlyList<RegionDto> Regions { get; set; } = [];
+
+    [Parameter] public EventCallback<ChatSummaryDto> OnSelect { get; set; }
+
+    [Parameter] public EventCallback<ChatSummaryDto> OnLinked { get; set; }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await LinkAsync();
+        }
+    }
+
+    private async Task LinkAsync()
+    {
+        if (_busy || string.IsNullOrWhiteSpace(_link))
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _details = [];
+
+        var result = await Api.LinkChatAsync(_link.Trim());
+        _busy = false;
+        if (result.Ok && result.Value is not null)
+        {
+            _link = "";
+            await OnLinked.InvokeAsync(result.Value);
+        }
+        else
+        {
+            _error = result.Error;
+            _details = result.Details;
+        }
+    }
+}

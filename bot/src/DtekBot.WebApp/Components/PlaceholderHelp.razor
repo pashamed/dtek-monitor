@@ -1,0 +1,16 @@
+<details class="help">
+    <summary>Які є параметри?</summary>
+    <p class="hint">Параметри в фігурних дужках підставляються в повідомлення. Щоб показати дужку буквально, подвойте її: {{ або }}.</p>
+    <dl>
+        @foreach (var p in Placeholders)
+        {
+            <dt><code>{@p.Name}</code> — @p.Description</dt>
+            <dd>Приклад: @p.Example</dd>
+        }
+    </dl>
+    <p class="hint">Дозволене форматування: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;s&gt;, &lt;code&gt;, &lt;pre&gt;, &lt;a href="https://…"&gt;, &lt;tg-spoiler&gt;, &lt;blockquote&gt;.</p>
+</details>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<PlaceholderDto> Placeholders { get; set; } = [];
+}
