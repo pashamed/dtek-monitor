@@ -37,7 +37,20 @@ public sealed record ChatSettingsDto(
     string? Template,
     string? GroupId = null,
     string? AddressLabel = null,
-    bool OutageTrigger = false);
+    bool OutageTrigger = false,
+    bool ScheduleNotify = false,
+    ScheduleImage ScheduleImage = ScheduleImage.Grid);
+
+// Which picture accompanies schedule messages (files from the outage-data-ua repository).
+public enum ScheduleImage
+{
+    Grid,
+    Card,
+    None,
+}
+
+// Exactly what the bot would post for the chat's group right now.
+public sealed record SchedulePreviewDto(string GroupId, string Text, string? ImageUrl);
 
 public sealed record AddressItemDto(int Id, string Name);
 
@@ -55,7 +68,17 @@ public sealed record ChatSummaryDto(long ChatId, string Title, bool IsPrivate, C
 
 public sealed record PartDto(string Id, string Name);
 
-public sealed record RegionDto(string Id, string Name, string SiteUrl, IReadOnlyList<PartDto> Parts, bool HasGroups = false);
+public sealed record RegionDto(
+    string Id,
+    string Name,
+    string SiteUrl,
+    IReadOnlyList<PartDto> Parts,
+    bool HasGroups = false,
+    bool HasSchedules = false);
+
+public sealed record GroupItemDto(string Id, string Name);
+
+public sealed record SetGroupRequest(string RegionId, string GroupId);
 
 public sealed record PlaceholderDto(string Name, string Description, string Example);
 

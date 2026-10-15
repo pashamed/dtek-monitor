@@ -38,6 +38,7 @@ public sealed class ChatUnlinkTests : IDisposable
             c.AddressStreet = "вул. Драгоманова";
             c.AddressHouse = "12";
             c.OutageTrigger = true;
+            c.ScheduleNotify = true;
             c.Template = "<b>{message}</b>";
             c.Filter = DtekBot.Shared.AlertFilter.EmergencyOnly;
             c.IsPaused = true;
@@ -139,6 +140,7 @@ public sealed class ChatUnlinkTests : IDisposable
         var channel = _f.LoadChannel(Chat);
         Assert.True(channel.IsActive);
         Assert.True(channel.OutageTrigger);
+        Assert.True(channel.ScheduleNotify);
         Assert.Equal(before.RegionId, channel.RegionId);
         Assert.Equal("45.1", channel.GroupId);
         Assert.Equal("вул. Драгоманова, 12", channel.AddressLabel);
@@ -181,6 +183,7 @@ public sealed class ChatUnlinkTests : IDisposable
         var channel = _f.LoadChannel(Chat);
         Assert.False(channel.IsActive);
         Assert.False(channel.OutageTrigger);
+        Assert.False(channel.ScheduleNotify);
         Assert.Null(channel.GroupId);
         Assert.Null(channel.AddressLabel);
         Assert.Null(channel.AddressStreet);

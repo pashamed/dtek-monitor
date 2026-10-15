@@ -27,8 +27,18 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
     private readonly DispatcherFixture _f = new();
     private readonly FakeWorkflowTrigger _trigger = new();
+    private readonly FakeScheduleProvider _schedules = new();
+    private readonly TestClock _clock = new(new DateTimeOffset(2026, 10, 15, 9, 0, 0, TimeSpan.FromHours(3)));
     private readonly BotUpdateHandler _handler;
     private int _updateId;
+
+    private OutageAssessmentService NewAssessment() => new(
+        _f.Db,
+        new AddressCheckService(
+            _f.Db, _f.Bot, _trigger, _f.Options, TimeProvider.System, NullLogger<AddressCheckService>.Instance),
+        _schedules,
+        _f.Options,
+        _clock);
 
     public BotUpdateHandlerTests()
     {
@@ -36,10 +46,8 @@ public sealed class BotUpdateHandlerTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:PublicUrl"] = "https://example.test" })
             .Build();
         var access = new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance);
-        var checks = new AddressCheckService(
-            _f.Db, _f.Bot, _trigger, _f.Options, TimeProvider.System, NullLogger<AddressCheckService>.Instance);
         _handler = new BotUpdateHandler(
-            _f.Bot, _f.Db, access, checks, _f.Options, config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
+            _f.Bot, _f.Db, access, NewAssessment(), _f.Options, config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
 
         _f.Bot.SetStatus(AdminUser, ChatMemberStatus.Administrator);
     }
@@ -163,8 +171,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
             _f.Bot,
             _f.Db,
             new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance),
-            new AddressCheckService(
-                _f.Db, _f.Bot, _trigger, _f.Options, TimeProvider.System, NullLogger<AddressCheckService>.Instance),
+            NewAssessment(),
             _f.Options,
             new ConfigurationBuilder().Build(),
             TimeProvider.System,
@@ -1659,6 +1666,573 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
         Assert.Equal(1, CheckRows());
+    }
+
+    // ---- cfg:sched ----
+
+    private Channel AddGroupChannel(long chatId, Action<Channel>? configure = null) =>
+        _f.AddChannel(chatId, c =>
+        {
+            c.GroupId = "45.1";
+            configure?.Invoke(c);
+        });
+
+    [Fact]
+    public async Task Settings_ShowScheduleNotificationsOffByDefault_WithToggleButton()
+    {
+        _f.AddChannel(PrivateChat);
+
+        await PressAsync(Private, "cfg");
+
+        var edit = Edit();
+        Assert.Contains("Сповіщення за графіком: вимкнені", edit.Text);
+        var button = Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:sched");
+        Assert.Equal("Увімкнути сповіщення за графіком", button.Text);
+    }
+
+    [Fact]
+    public async Task Settings_WhenScheduleNotificationsAreOn_ShowEnabledTextAndOppositeButton()
+    {
+        AddGroupChannel(PrivateChat, c => c.ScheduleNotify = true);
+
+        await PressAsync(Private, "cfg");
+
+        var edit = Edit();
+        Assert.Contains("Сповіщення за графіком: увімкнені", edit.Text);
+        Assert.Equal(
+            "Вимкнути сповіщення за графіком",
+            Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:sched").Text);
+    }
+
+    [Fact]
+    public async Task CfgSched_WithGroup_TogglesOnAndOff_AndPersists()
+    {
+        AddGroupChannel(PrivateChat);
+
+        await PressAsync(Private, "cfg:sched");
+
+        Assert.True(Row(PrivateChat).ScheduleNotify);
+        Assert.Equal("Сповіщення за графіком увімкнено", Assert.Single(_f.Bot.Answers).Text);
+        Assert.Contains("Сповіщення за графіком: увімкнені", Edit().Text);
+
+        _f.Bot.Requests.Clear();
+        await PressAsync(Private, "cfg:sched");
+
+        Assert.False(Row(PrivateChat).ScheduleNotify);
+        Assert.Equal("Сповіщення за графіком вимкнено", Assert.Single(_f.Bot.Answers).Text);
+        Assert.Contains("Сповіщення за графіком: вимкнені", Edit().Text);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task CfgSched_WithoutGroup_IsRefusedWithAToast_AndStaysOff(string? groupId)
+    {
+        _f.AddChannel(PrivateChat, c => c.GroupId = groupId);
+
+        await PressAsync(Private, "cfg:sched");
+
+        var answer = Assert.Single(_f.Bot.Answers);
+        Assert.StartsWith("Спершу оберіть адресу або чергу", answer.Text);
+        Assert.Contains("Редактор повідомлень", answer.Text);
+        Assert.False(Row(PrivateChat).ScheduleNotify);
+        Assert.Contains("Сповіщення за графіком: вимкнені", Edit().Text);
+    }
+
+    [Fact]
+    public async Task CfgSched_CanAlwaysBeTurnedOff_EvenWithoutAGroup()
+    {
+        _f.AddChannel(PrivateChat, c => { c.GroupId = null; c.ScheduleNotify = true; });
+
+        await PressAsync(Private, "cfg:sched");
+
+        Assert.False(Row(PrivateChat).ScheduleNotify);
+        Assert.Equal("Сповіщення за графіком вимкнено", Assert.Single(_f.Bot.Answers).Text);
+    }
+
+    [Fact]
+    public async Task CfgSched_WithoutSubscription_AsksToChooseRegionFirst()
+    {
+        await PressAsync(Private, "cfg:sched");
+
+        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Answers).Text);
+        Assert.False(HasRow(PrivateChat));
+    }
+
+    [Fact]
+    public async Task CfgSched_DoesNotTouchOtherSettings()
+    {
+        AddGroupChannel(PrivateChat);
+
+        await PressAsync(Private, "cfg:sched");
+
+        var channel = Row(PrivateChat);
+        Assert.Equal(AlertFilter.All, channel.Filter);
+        Assert.True(channel.NotifyOnEnd);
+        Assert.True(channel.EditInPlace);
+        Assert.False(channel.IsPaused);
+        Assert.False(channel.OutageTrigger);
+    }
+
+    [Fact]
+    public async Task CfgSched_ByGroupAdmin_Works()
+    {
+        AddGroupChannel(GroupChat);
+
+        await PressAsync(Group, "cfg:sched", AdminUser);
+
+        Assert.True(Row(GroupChat).ScheduleNotify);
+    }
+
+    [Fact]
+    public async Task CfgSched_ByNonAdminInGroup_IsRefusedWithAlert_AndNothingChanges()
+    {
+        AddGroupChannel(GroupChat);
+
+        await PressAsync(Group, "cfg:sched", PlainUser);
+
+        var answer = Assert.Single(_f.Bot.Answers);
+        Assert.Equal(NoAccess, answer.Text);
+        Assert.True(answer.ShowAlert);
+        Assert.Empty(_f.Bot.Edits);
+        Assert.False(Row(GroupChat).ScheduleNotify);
+    }
+
+    [Fact]
+    public async Task Stop_ClearsScheduleNotify()
+    {
+        AddGroupChannel(PrivateChat, c => c.ScheduleNotify = true);
+
+        await SendAsync(Private, "/stop");
+
+        Assert.False(Row(PrivateChat).ScheduleNotify);
+        Assert.False(Row(PrivateChat).IsActive);
+    }
+
+    [Fact]
+    public async Task StopCallback_ClearsScheduleNotify()
+    {
+        AddGroupChannel(PrivateChat, c => c.ScheduleNotify = true);
+
+        await PressAsync(Private, "stop");
+
+        Assert.False(Row(PrivateChat).ScheduleNotify);
+    }
+
+    // ---- assessment regression: schedule explains the outage ----
+
+    private static readonly DateTimeOffset ScheduledOff = ScheduleFixtures.Kyiv(15, 12);
+
+    private const string NoticeStart = "🗓 За графіком (черга 45.1) зараз планове стабілізаційне відключення з 11:00.";
+
+    [Fact]
+    public async Task CheckCommand_WhenScheduleSaysOff_RepliesWithTheNotice_InsteadOfQueuing()
+    {
+        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
+        _clock.Now = ScheduledOff;
+        AddChannelWithAddress(PrivateChat);
+
+        await SendAsync(Private, "/check");
+
+        var reply = Assert.Single(_f.Bot.Sent);
+        Assert.StartsWith(NoticeStart, reply.Text);
+        Assert.Contains("Світло очікується о 14:00.", reply.Text);
+        Assert.Contains("Перевірку за адресою на сайті ДТЕК не запускаю.", reply.Text);
+        Assert.Equal(default, reply.ParseMode);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task CheckCallback_WhenScheduleSaysOff_SendsTheNotice_InsteadOfQueuing()
+    {
+        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
+        _clock.Now = ScheduledOff;
+        AddChannelWithAddress(PrivateChat);
+
+        await PressAsync(Private, "chk");
+
+        Assert.StartsWith(NoticeStart, Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WhenScheduleSaysOff_RepliesWithTheNotice_InsteadOfQueuing()
+    {
+        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
+        _clock.Now = ScheduledOff;
+        AddTriggerChannel();
+
+        var post = await PostAsync(SamplePost);
+
+        var reply = Assert.Single(_f.Bot.Sent);
+        Assert.StartsWith(NoticeStart, reply.Text);
+        Assert.Equal(post.ChannelPost!.Id, reply.ReplyParameters?.MessageId);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+        AssertDoesNotSelfTrigger(reply.Text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WhenScheduleSaysOn_StillQueuesTheAddressCheck()
+    {
+        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
+        _clock.Now = ScheduleFixtures.Kyiv(15, 15);
+        AddTriggerChannel();
+
+        await PostAsync(SamplePost);
+
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(1, CheckRows());
+    }
+
+    [Fact]
+    public async Task PowerOutPost_ScheduleOffAndRegionWideAlert_AppendsTheWarning()
+    {
+        _schedules.Snapshots["kyiv"] = ScheduleFixtures.RealSnapshot();
+        _clock.Now = ScheduledOff;
+        AddTriggerChannel();
+        StoreRegionState(PopupKind.Emergency);
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.StartsWith(NoticeStart, text);
+        Assert.EndsWith(
+            "\n\n⚠️ Увага: на сайті ДТЕК зараз діє загальне повідомлення про екстрені відключення чи аварію по регіону, тому графік може не діяти.",
+            text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    // ---- channel membership (my_chat_member) ----
+
+    private const long NewChannel = -1003;
+    private const long Adder = 77;
+
+    private static Chat Channel(long id = NewChannel, string? title = "Мій канал", string? username = null) =>
+        new() { Id = id, Type = ChatType.Channel, Title = title, Username = username };
+
+    private Update MembershipUpdate(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false) => new()
+    {
+        Id = ++_updateId,
+        MyChatMember = new ChatMemberUpdated
+        {
+            Chat = chat,
+            From = new User { Id = fromId, FirstName = "A", IsBot = fromIsBot },
+            Date = DateTime.UtcNow,
+            OldChatMember = new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } },
+            NewChatMember = newMember,
+        },
+    };
+
+    private static ChatMemberAdministrator AdminMember(bool canPost = true) =>
+        new() { User = new User { Id = 1, FirstName = "Bot", IsBot = true }, CanPostMessages = canPost };
+
+    private Task MembershipAsync(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false) =>
+        _handler.HandleAsync(MembershipUpdate(chat, newMember, fromId, fromIsBot), CancellationToken.None);
+
+    private const string ConnectedText =
+        "✅ Канал «Мій канал» підключено.\n\nВідкрийте «🧩 Редактор повідомлень» у меню бота (/start), щоб обрати регіон і адресу.";
+
+    [Fact]
+    public async Task BotMadeChannelAdmin_CreatesAnInactiveRow_LinksTheAdder_AndSendsADm()
+    {
+        await MembershipAsync(Channel(), AdminMember());
+
+        var channel = Row(NewChannel);
+        Assert.False(channel.IsActive);
+        Assert.Equal("Мій канал", channel.Title);
+        Assert.Equal("", channel.RegionId);
+
+        var link = Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
+        Assert.Equal((NewChannel, Adder), (link.ChatId, link.UserId));
+
+        var dm = Assert.Single(_f.Bot.Sent);
+        Assert.Equal(Adder, dm.ChatId.Identifier);
+        Assert.Equal(ConnectedText, dm.Text);
+        Assert.Equal(default, dm.ParseMode);
+    }
+
+    [Fact]
+    public async Task BotWithoutPostRight_GetsAWarningInTheDm()
+    {
+        await MembershipAsync(Channel(), AdminMember(canPost: false));
+
+        Assert.Equal(
+            ConnectedText + "\n\n⚠️ Надайте боту право публікувати повідомлення, інакше він не зможе писати в канал.",
+            Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task BotWithPostRight_GetsNoWarning()
+    {
+        await MembershipAsync(Channel(), AdminMember(true));
+
+        Assert.DoesNotContain("⚠️", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task Title_FallsBackToUsername_ThenKeepsTheExistingTitle()
+    {
+        await MembershipAsync(Channel(title: null, username: "mychannel"), AdminMember());
+        Assert.Equal("mychannel", Row(NewChannel).Title);
+        Assert.Contains("«mychannel»", Assert.Single(_f.Bot.Sent).Text);
+
+        _f.Bot.Requests.Clear();
+        await MembershipAsync(Channel(title: null, username: null), AdminMember());
+
+        Assert.Equal("mychannel", Row(NewChannel).Title);
+        Assert.Contains("«mychannel»", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task Title_IsRefreshedFromTheChat()
+    {
+        _f.AddChannel(NewChannel, c => c.Title = "Старий");
+
+        await MembershipAsync(Channel(title: "Новий"), AdminMember());
+
+        Assert.Equal("Новий", Row(NewChannel).Title);
+    }
+
+    [Fact]
+    public async Task ChannelWithoutAnyName_UsesTheIdInTheDm()
+    {
+        await MembershipAsync(Channel(title: null, username: null), AdminMember());
+
+        Assert.Contains($"«{NewChannel}»", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task ExistingChannelRow_KeepsItsSettings_AndItsActiveState()
+    {
+        _f.AddChannel(NewChannel, c =>
+        {
+            c.PartId = "right-bank";
+            c.Template = "<b>{message}</b>";
+            c.Filter = AlertFilter.EmergencyOnly;
+            c.OutageTrigger = true;
+            c.ScheduleNotify = true;
+            c.GroupId = "45.1";
+            c.IsActive = true;
+        });
+
+        await MembershipAsync(Channel(), AdminMember());
+
+        var channel = Row(NewChannel);
+        Assert.True(channel.IsActive);
+        Assert.Equal("kyiv", channel.RegionId);
+        Assert.Equal("right-bank", channel.PartId);
+        Assert.Equal("<b>{message}</b>", channel.Template);
+        Assert.Equal(AlertFilter.EmergencyOnly, channel.Filter);
+        Assert.True(channel.OutageTrigger);
+        Assert.True(channel.ScheduleNotify);
+        Assert.Equal("45.1", channel.GroupId);
+        Assert.Single(_f.Db.Channels);
+    }
+
+    [Fact]
+    public async Task ExistingInactiveRow_StaysInactive()
+    {
+        _f.AddChannel(NewChannel, c => c.IsActive = false);
+
+        await MembershipAsync(Channel(), AdminMember());
+
+        Assert.False(Row(NewChannel).IsActive);
+    }
+
+    [Fact]
+    public async Task AdderAlreadyLinked_IsNotLinkedTwice()
+    {
+        _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = NewChannel, UserId = Adder, LinkedAt = DateTimeOffset.UtcNow });
+        _f.Db.SaveChanges();
+
+        await MembershipAsync(Channel(), AdminMember());
+
+        Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
+    }
+
+    [Fact]
+    public async Task AnotherAdderOfTheSameChannel_IsLinkedToo()
+    {
+        await MembershipAsync(Channel(), AdminMember(), fromId: Adder);
+        await MembershipAsync(Channel(), AdminMember(), fromId: 78);
+
+        var users = _f.Db.ChannelAdmins.AsNoTracking().Select(a => a.UserId).OrderBy(u => u).ToList();
+        Assert.Equal([Adder, 78], users);
+    }
+
+    [Fact]
+    public async Task Repeated_AdminUpdates_AreIdempotentForTheDatabase()
+    {
+        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(Channel(), AdminMember());
+
+        Assert.Single(_f.Db.Channels);
+        Assert.Single(_f.Db.ChannelAdmins);
+    }
+
+    [Fact]
+    public async Task LinkedAdder_CanThenManageTheChannel()
+    {
+        _f.Bot.SetStatus(Adder, ChatMemberStatus.Administrator);
+        await MembershipAsync(Channel(), AdminMember());
+        var access = new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance);
+
+        Assert.True(await access.CanManageAsync(NewChannel, Adder, CancellationToken.None));
+        Assert.False(await access.CanManageAsync(NewChannel, 999, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AdderWhoIsABot_GetsNoDm_AndNoLink_ButTheRowIsCreated()
+    {
+        await MembershipAsync(Channel(), AdminMember(), fromId: 4242, fromIsBot: true);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Empty(_f.Db.ChannelAdmins);
+        Assert.Equal("Мій канал", Row(NewChannel).Title);
+    }
+
+    [Fact]
+    public async Task DmFailure_IsSwallowed_AndTheChannelIsStillConnected()
+    {
+        _f.Bot.Failure = _ => FakeTelegramBotClient.Forbidden();
+
+        await MembershipAsync(Channel(), AdminMember());
+
+        Assert.Single(_f.Bot.Requests);
+        Assert.Equal("Мій канал", Row(NewChannel).Title);
+        Assert.Single(_f.Db.ChannelAdmins);
+    }
+
+    [Theory]
+    [InlineData(ChatMemberStatus.Left)]
+    [InlineData(ChatMemberStatus.Kicked)]
+    public async Task BotRemoved_DeactivatesTheChannel_AndSwitchesOffReactions_KeepingSettings(ChatMemberStatus status)
+    {
+        _f.AddChannel(NewChannel, c =>
+        {
+            c.PartId = "right-bank";
+            c.Template = "<b>{message}</b>";
+            c.OutageTrigger = true;
+            c.ScheduleNotify = true;
+            c.GroupId = "45.1";
+            c.AddressStreet = "вул. А";
+            c.Filter = AlertFilter.EmergencyOnly;
+        });
+        ChatMember removed = status == ChatMemberStatus.Left
+            ? new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } }
+            : new ChatMemberBanned { User = new User { Id = 1, FirstName = "Bot", IsBot = true } };
+
+        await MembershipAsync(Channel(), removed);
+
+        var channel = Row(NewChannel);
+        Assert.False(channel.IsActive);
+        Assert.False(channel.OutageTrigger);
+        Assert.False(channel.ScheduleNotify);
+        Assert.Equal("kyiv", channel.RegionId);
+        Assert.Equal("right-bank", channel.PartId);
+        Assert.Equal("<b>{message}</b>", channel.Template);
+        Assert.Equal("45.1", channel.GroupId);
+        Assert.Equal("вул. А", channel.AddressStreet);
+        Assert.Equal(AlertFilter.EmergencyOnly, channel.Filter);
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task BotRemoved_FromAnUnknownChannel_DoesNothing()
+    {
+        await MembershipAsync(Channel(), new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+
+        Assert.Empty(_f.Db.Channels);
+        Assert.Empty(_f.Db.ChannelAdmins);
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task BotRemoved_KeepsTheAdminLinks()
+    {
+        await MembershipAsync(Channel(), AdminMember());
+
+        await MembershipAsync(Channel(), new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+
+        Assert.Single(_f.Db.ChannelAdmins.AsNoTracking());
+    }
+
+    [Fact]
+    public async Task RemovedThenReAdded_ReconnectsWithoutActivating()
+    {
+        await MembershipAsync(Channel(), AdminMember());
+        await MembershipAsync(Channel(), new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+
+        await MembershipAsync(Channel(), AdminMember());
+
+        Assert.False(Row(NewChannel).IsActive);
+        Assert.Single(_f.Db.Channels);
+        Assert.Single(_f.Db.ChannelAdmins);
+    }
+
+    [Theory]
+    [InlineData(ChatMemberStatus.Member)]
+    [InlineData(ChatMemberStatus.Creator)]
+    [InlineData(ChatMemberStatus.Restricted)]
+    public async Task OtherStatuses_AreIgnored(ChatMemberStatus status)
+    {
+        var user = new User { Id = 1, FirstName = "Bot", IsBot = true };
+        ChatMember member = status switch
+        {
+            ChatMemberStatus.Member => new ChatMemberMember { User = user },
+            ChatMemberStatus.Creator => new ChatMemberOwner { User = user },
+            _ => new ChatMemberRestricted { User = user },
+        };
+
+        await MembershipAsync(Channel(), member);
+
+        Assert.Empty(_f.Db.Channels);
+        Assert.Empty(_f.Db.ChannelAdmins);
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task OtherStatuses_DoNotTouchAnExistingRow()
+    {
+        _f.AddChannel(NewChannel, c => c.OutageTrigger = true);
+
+        await MembershipAsync(Channel(), new ChatMemberMember { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+
+        var channel = Row(NewChannel);
+        Assert.True(channel.IsActive);
+        Assert.True(channel.OutageTrigger);
+    }
+
+    [Theory]
+    [InlineData(ChatType.Group)]
+    [InlineData(ChatType.Supergroup)]
+    [InlineData(ChatType.Private)]
+    public async Task NonChannelChats_AreIgnored_ForAdminAndRemoval(ChatType type)
+    {
+        var chat = new Chat { Id = -2000, Type = type, Title = "Чат" };
+        _f.AddChannel(-2000, c => c.OutageTrigger = true);
+
+        await MembershipAsync(chat, AdminMember());
+        await MembershipAsync(chat, new ChatMemberLeft { User = new User { Id = 1, FirstName = "Bot", IsBot = true } });
+
+        var channel = Row(-2000);
+        Assert.True(channel.IsActive);
+        Assert.True(channel.OutageTrigger);
+        Assert.Empty(_f.Db.ChannelAdmins);
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task MembershipUpdate_IsNotTreatedAsAMessage_OrACommand()
+    {
+        await MembershipAsync(Channel(), AdminMember());
+
+        // Only the DM: nothing is posted into the channel itself.
+        Assert.DoesNotContain(_f.Bot.Sent, s => s.ChatId.Identifier == NewChannel);
     }
 
     // ---- status ----

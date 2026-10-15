@@ -19,7 +19,7 @@ public sealed class BotUpdateHandler(
     ITelegramBotClient bot,
     BotDbContext db,
     ChatAccessService access,
-    AddressCheckService checks,
+    OutageAssessmentService assessment,
     IOptionsMonitor<DtekSettings> options,
     IConfiguration config,
     TimeProvider time,
@@ -29,7 +29,7 @@ public sealed class BotUpdateHandler(
 
     private static readonly Regex PowerOutPattern = new(@"світло\s+зникло", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    // Reacts to a "power is out" post: a regional emergency is the likely cause, otherwise the address is checked.
+    // Reacts to a "power is out" post. The assessment goes from the cheapest explanation to the DTEK address lookup.
     private async Task HandlePowerOutPostAsync(Message post, CancellationToken ct)
     {
         var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == post.Chat.Id && c.IsActive && c.OutageTrigger, ct);
@@ -38,34 +38,96 @@ public sealed class BotUpdateHandler(
             return;
         }
 
-        var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == channel.RegionId, ct);
-        var lines = new List<string>();
-        if (state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown)
-        {
-            lines.Add("ℹ️ На сайті ДТЕК зараз діє загальне повідомлення про екстрені відключення чи аварію по регіону. Це ймовірна причина, тому перевірку за адресою не запускаю.");
-        }
-        else
-        {
-            var group = channel.GroupId is null
-                ? null
-                : await db.GroupStates.FirstOrDefaultAsync(g => g.RegionId == channel.RegionId && g.GroupId == channel.GroupId, ct);
-            if (group?.IsEmergency == true)
-            {
-                lines.Add($"🚨 Для вашої черги {channel.GroupId} зараз діють екстрені відключення (за даними Yasno).");
-            }
-
-            lines.Add((await checks.RequestAsync(channel, ct)).Message);
-        }
-
         await bot.SendMessage(
             post.Chat.Id,
-            string.Join("\n\n", lines),
+            await assessment.AssessAsync(channel, ct),
             replyParameters: new ReplyParameters { MessageId = post.Id, AllowSendingWithoutReply = true },
             cancellationToken: ct);
     }
 
+    // The bot was added to or removed from a channel. Adding it as an administrator connects the channel to the
+    // person who did it, so nobody has to type a channel name.
+    private async Task HandleMembershipAsync(ChatMemberUpdated change, CancellationToken ct)
+    {
+        var chat = change.Chat;
+        if (chat.Type != ChatType.Channel)
+        {
+            return;
+        }
+
+        var status = change.NewChatMember.Status;
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chat.Id, ct);
+
+        if (status is ChatMemberStatus.Left or ChatMemberStatus.Kicked)
+        {
+            if (channel is not null)
+            {
+                channel.IsActive = false;
+                channel.OutageTrigger = false;
+                channel.ScheduleNotify = false;
+                await db.SaveChangesAsync(ct);
+            }
+
+            return;
+        }
+
+        if (status != ChatMemberStatus.Administrator)
+        {
+            return;
+        }
+
+        var now = time.GetUtcNow();
+        if (channel is null)
+        {
+            channel = new Channel { ChatId = chat.Id, IsActive = false, CreatedAt = now };
+            db.Channels.Add(channel);
+        }
+
+        channel.Title = chat.Title ?? chat.Username ?? channel.Title;
+
+        var adder = change.From;
+        if (!adder.IsBot && !await db.ChannelAdmins.AnyAsync(a => a.ChatId == chat.Id && a.UserId == adder.Id, ct))
+        {
+            db.ChannelAdmins.Add(new ChannelAdmin { ChatId = chat.Id, UserId = adder.Id, LinkedAt = now });
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Bot became an administrator of channel {ChatId}", chat.Id);
+
+        if (adder.IsBot)
+        {
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"✅ Канал «{channel.Title ?? chat.Id.ToString()}» підключено.",
+            "Відкрийте «🧩 Редактор повідомлень» у меню бота (/start), щоб обрати регіон і адресу.",
+        };
+        if (change.NewChatMember is ChatMemberAdministrator { CanPostMessages: not true })
+        {
+            lines.Add("⚠️ Надайте боту право публікувати повідомлення, інакше він не зможе писати в канал.");
+        }
+
+        try
+        {
+            await bot.SendMessage(adder.Id, string.Join("\n\n", lines), cancellationToken: ct);
+        }
+        catch (Telegram.Bot.Exceptions.ApiRequestException ex)
+        {
+            // The person may never have started the bot; the channel still shows up in the editor.
+            logger.LogInformation("Could not notify user {UserId} about channel {ChatId}: {Message}", adder.Id, chat.Id, ex.Message);
+        }
+    }
+
     public async Task HandleAsync(Update update, CancellationToken ct)
     {
+        if (update.MyChatMember is { } membership)
+        {
+            await HandleMembershipAsync(membership, ct);
+            return;
+        }
+
         if (update.CallbackQuery is { } callback)
         {
             await HandleCallbackAsync(callback, ct);
@@ -272,6 +334,7 @@ public sealed class BotUpdateHandler(
             "Оновлення: " + (channel.EditInPlace ? "редагувати те саме повідомлення" : "щоразу нове повідомлення"),
             "Стан: " + (channel.IsPaused ? "⏸ на паузі" : "▶️ активні"),
             "Реакція на «Світло зникло»: " + (channel.OutageTrigger ? "увімкнена" : "вимкнена"),
+            "Сповіщення за графіком: " + (channel.ScheduleNotify ? "увімкнені" : "вимкнені"),
             "Шаблон: " + (string.IsNullOrWhiteSpace(channel.Template) ? "стандартний" : "свій (/template)"));
 
         var keyboard = new InlineKeyboardMarkup(new[]
@@ -281,6 +344,7 @@ public sealed class BotUpdateHandler(
             new[] { InlineKeyboardButton.WithCallbackData(channel.EditInPlace ? "Нові повідомлення замість редагування" : "Редагувати те саме повідомлення", "cfg:edit") },
             new[] { InlineKeyboardButton.WithCallbackData(channel.IsPaused ? "▶️ Відновити" : "⏸ Пауза", "cfg:pause") },
             new[] { InlineKeyboardButton.WithCallbackData(channel.OutageTrigger ? "Не реагувати на «Світло зникло»" : "Реагувати на «Світло зникло»", "cfg:trigger") },
+            new[] { InlineKeyboardButton.WithCallbackData(channel.ScheduleNotify ? "Вимкнути сповіщення за графіком" : "Увімкнути сповіщення за графіком", "cfg:sched") },
             new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "menu") },
         });
 
@@ -313,6 +377,15 @@ public sealed class BotUpdateHandler(
             case "pause":
                 channel.IsPaused = !channel.IsPaused;
                 toast = channel.IsPaused ? "Сповіщення призупинено" : "Сповіщення відновлено";
+                break;
+            case "sched":
+                if (!channel.ScheduleNotify && string.IsNullOrEmpty(channel.GroupId))
+                {
+                    return "Спершу оберіть адресу або чергу в редакторі (кнопка «🧩 Редактор повідомлень»).";
+                }
+
+                channel.ScheduleNotify = !channel.ScheduleNotify;
+                toast = channel.ScheduleNotify ? "Сповіщення за графіком увімкнено" : "Сповіщення за графіком вимкнено";
                 break;
             case "trigger":
                 channel.OutageTrigger = !channel.OutageTrigger;
@@ -492,7 +565,7 @@ public sealed class BotUpdateHandler(
             return "Спершу оберіть регіон: /region kyiv";
         }
 
-        return (await checks.RequestAsync(channel, ct)).Message;
+        return await assessment.AssessAsync(channel, ct);
     }
 
     private async Task<string> UnsubscribeAsync(long chatId, CancellationToken ct)
@@ -510,6 +583,7 @@ public sealed class BotUpdateHandler(
         channel.AddressLabel = null;
         channel.AddressStreet = null;
         channel.AddressHouse = null;
+        channel.ScheduleNotify = false;
         await db.SaveChangesAsync(ct);
         return "Відписано.";
     }
