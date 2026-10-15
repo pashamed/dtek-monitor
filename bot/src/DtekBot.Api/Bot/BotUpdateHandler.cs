@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.RegularExpressions;
+using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
 using DtekBot.Api.MiniApp;
 using DtekBot.Api.Parsing;
@@ -17,12 +19,50 @@ public sealed class BotUpdateHandler(
     ITelegramBotClient bot,
     BotDbContext db,
     ChatAccessService access,
+    AddressCheckService checks,
     IOptionsMonitor<DtekSettings> options,
     IConfiguration config,
     TimeProvider time,
     ILogger<BotUpdateHandler> logger)
 {
     private const string NoAccess = "Керувати ботом можуть лише адміністратори чату.";
+
+    private static readonly Regex PowerOutPattern = new(@"світло\s+зникло", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Reacts to a "power is out" post: a regional emergency is the likely cause, otherwise the address is checked.
+    private async Task HandlePowerOutPostAsync(Message post, CancellationToken ct)
+    {
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == post.Chat.Id && c.IsActive && c.OutageTrigger, ct);
+        if (channel is null)
+        {
+            return;
+        }
+
+        var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == channel.RegionId, ct);
+        var lines = new List<string>();
+        if (state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown)
+        {
+            lines.Add("ℹ️ На сайті ДТЕК зараз діє загальне повідомлення про екстрені відключення чи аварію по регіону. Це ймовірна причина, тому перевірку за адресою не запускаю.");
+        }
+        else
+        {
+            var group = channel.GroupId is null
+                ? null
+                : await db.GroupStates.FirstOrDefaultAsync(g => g.RegionId == channel.RegionId && g.GroupId == channel.GroupId, ct);
+            if (group?.IsEmergency == true)
+            {
+                lines.Add($"🚨 Для вашої черги {channel.GroupId} зараз діють екстрені відключення (за даними Yasno).");
+            }
+
+            lines.Add((await checks.RequestAsync(channel, ct)).Message);
+        }
+
+        await bot.SendMessage(
+            post.Chat.Id,
+            string.Join("\n\n", lines),
+            replyParameters: new ReplyParameters { MessageId = post.Id, AllowSendingWithoutReply = true },
+            cancellationToken: ct);
+    }
 
     public async Task HandleAsync(Update update, CancellationToken ct)
     {
@@ -34,6 +74,14 @@ public sealed class BotUpdateHandler(
 
         var message = update.Message ?? update.ChannelPost;
         var text = message?.Text?.Trim();
+
+        // A power-monitor app posts «Світло зникло» to a channel the bot administers.
+        if (update.ChannelPost is { } post && !string.IsNullOrEmpty(text) && !text.StartsWith('/') && PowerOutPattern.IsMatch(text))
+        {
+            await HandlePowerOutPostAsync(post, ct);
+            return;
+        }
+
         if (message is null || string.IsNullOrEmpty(text) || !text.StartsWith('/'))
         {
             return;
@@ -51,7 +99,7 @@ public sealed class BotUpdateHandler(
             return;
         }
 
-        if (command is not ("/region" or "/stop" or "/template"))
+        if (command is not ("/region" or "/stop" or "/template" or "/check"))
         {
             return;
         }
@@ -59,6 +107,13 @@ public sealed class BotUpdateHandler(
         if (!await IsAuthorizedAsync(chat, message.From?.Id, ct))
         {
             await bot.SendMessage(chat.Id, NoAccess, cancellationToken: ct);
+            return;
+        }
+
+        if (command == "/check")
+        {
+            // Plain text: the reply contains the user's own address.
+            await bot.SendMessage(chat.Id, await CheckAsync(chat.Id, ct), cancellationToken: ct);
             return;
         }
 
@@ -131,6 +186,14 @@ public sealed class BotUpdateHandler(
                 (text, keyboard) = await MainMenuAsync(chat, ct);
                 break;
 
+            case "chk":
+            {
+                await bot.SendMessage(chat.Id, await CheckAsync(chat.Id, ct), cancellationToken: ct);
+                toast = "Запит прийнято";
+                (text, keyboard) = await MainMenuAsync(chat, ct);
+                break;
+            }
+
             case "cfg":
                 if (data.Length == 2)
                 {
@@ -169,12 +232,16 @@ public sealed class BotUpdateHandler(
             new[] { InlineKeyboardButton.WithCallbackData("⚙️ Налаштування", "cfg") },
         };
 
+        if (subscribed && !string.IsNullOrEmpty(channel!.AddressStreet) && !string.IsNullOrEmpty(channel.AddressHouse))
+        {
+            rows.Insert(2, [InlineKeyboardButton.WithCallbackData("⚡ Світла немає? Перевірити адресу", "chk")]);
+        }
+
         // Web App buttons are rejected by Telegram outside private chats.
         var baseUrl = config["App:PublicUrl"]?.TrimEnd('/');
         if (chat.Type == ChatType.Private && !string.IsNullOrEmpty(baseUrl))
         {
-            rows.Add([InlineKeyboardButton.WithWebApp("🧩 Редактор повідомлень (WASM)", new WebAppInfo(baseUrl + "/app/"))]);
-            rows.Add([InlineKeyboardButton.WithWebApp("🧩 Редактор повідомлень (lite)", new WebAppInfo(baseUrl + "/lite/"))]);
+            rows.Add([InlineKeyboardButton.WithWebApp("🧩 Редактор повідомлень", new WebAppInfo(baseUrl + "/lite/"))]);
         }
 
         if (subscribed)
@@ -204,6 +271,7 @@ public sealed class BotUpdateHandler(
             "Про завершення: " + (channel.NotifyOnEnd ? "так" : "ні"),
             "Оновлення: " + (channel.EditInPlace ? "редагувати те саме повідомлення" : "щоразу нове повідомлення"),
             "Стан: " + (channel.IsPaused ? "⏸ на паузі" : "▶️ активні"),
+            "Реакція на «Світло зникло»: " + (channel.OutageTrigger ? "увімкнена" : "вимкнена"),
             "Шаблон: " + (string.IsNullOrWhiteSpace(channel.Template) ? "стандартний" : "свій (/template)"));
 
         var keyboard = new InlineKeyboardMarkup(new[]
@@ -212,6 +280,7 @@ public sealed class BotUpdateHandler(
             new[] { InlineKeyboardButton.WithCallbackData(channel.NotifyOnEnd ? "Не писати про завершення" : "Писати про завершення", "cfg:end") },
             new[] { InlineKeyboardButton.WithCallbackData(channel.EditInPlace ? "Нові повідомлення замість редагування" : "Редагувати те саме повідомлення", "cfg:edit") },
             new[] { InlineKeyboardButton.WithCallbackData(channel.IsPaused ? "▶️ Відновити" : "⏸ Пауза", "cfg:pause") },
+            new[] { InlineKeyboardButton.WithCallbackData(channel.OutageTrigger ? "Не реагувати на «Світло зникло»" : "Реагувати на «Світло зникло»", "cfg:trigger") },
             new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "menu") },
         });
 
@@ -244,6 +313,10 @@ public sealed class BotUpdateHandler(
             case "pause":
                 channel.IsPaused = !channel.IsPaused;
                 toast = channel.IsPaused ? "Сповіщення призупинено" : "Сповіщення відновлено";
+                break;
+            case "trigger":
+                channel.OutageTrigger = !channel.OutageTrigger;
+                toast = channel.OutageTrigger ? "Реагуватиму на «Світло зникло»" : "Не реагуватиму на «Світло зникло»";
                 break;
             default:
                 return null;
@@ -411,6 +484,17 @@ public sealed class BotUpdateHandler(
         return $"Підписано: {region.Name}" + (partName is null ? "" : $" ({partName})");
     }
 
+    private async Task<string> CheckAsync(long chatId, CancellationToken ct)
+    {
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId && c.IsActive, ct);
+        if (channel is null)
+        {
+            return "Спершу оберіть регіон: /region kyiv";
+        }
+
+        return (await checks.RequestAsync(channel, ct)).Message;
+    }
+
     private async Task<string> UnsubscribeAsync(long chatId, CancellationToken ct)
     {
         var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
@@ -420,6 +504,12 @@ public sealed class BotUpdateHandler(
         }
 
         channel.IsActive = false;
+
+        // The saved address is personal data, so it goes with the subscription.
+        channel.GroupId = null;
+        channel.AddressLabel = null;
+        channel.AddressStreet = null;
+        channel.AddressHouse = null;
         await db.SaveChangesAsync(ct);
         return "Відписано.";
     }

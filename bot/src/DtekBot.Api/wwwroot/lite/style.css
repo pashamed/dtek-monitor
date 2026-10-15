@@ -59,3 +59,4 @@ summary{cursor:pointer;min-height:32px;font-weight:600}
 .linkrow .btn{width:auto;flex:none;padding:12px 16px}
 .picks{display:flex;flex-direction:column;gap:6px;margin:0 0 8px}
 .pick{text-align:left;min-height:48px;border:0;border-radius:10px;background:var(--sec);color:var(--fg);padding:10px 12px;font:inherit;cursor:pointer;overflow-wrap:anywhere}
+.btn.danger{background:transparent;color:#d33;border:1px solid #d33;font-weight:500;margin:0 0 24px}

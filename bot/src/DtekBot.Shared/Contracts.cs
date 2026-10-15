@@ -36,11 +36,18 @@ public sealed record ChatSettingsDto(
     bool EditInPlace,
     string? Template,
     string? GroupId = null,
-    string? AddressLabel = null);
+    string? AddressLabel = null,
+    bool OutageTrigger = false);
 
 public sealed record AddressItemDto(int Id, string Name);
 
-public sealed record SetAddressRequest(string RegionId, int StreetId, int HouseId, string Label);
+public sealed record SetAddressRequest(
+    string RegionId,
+    int StreetId,
+    int HouseId,
+    string Label,
+    string? Street = null,
+    string? House = null);
 
 public sealed record GroupStatusDto(string GroupId, string Today, string Tomorrow, bool IsEmergency);
 

@@ -5,7 +5,7 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
   repository_dispatch:
-    types: [check-dtek, check-emergency]
+    types: [check-dtek, check-emergency, check-addresses]
 
 concurrency:
   group: ${{ github.workflow }}
@@ -71,6 +71,7 @@ jobs:
           fi
 
       - name: Run monitoring script
+        if: github.event.action != 'check-addresses'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -83,10 +84,17 @@ jobs:
         run: node ./src/monitor.js
 
       - name: Check all regions for the shared bot
-        if: always() && env.INGEST_URL != ''
+        if: always() && env.INGEST_URL != '' && github.event.action != 'check-addresses'
         continue-on-error: true
         timeout-minutes: 5
         run: node ./src/ingest-regions.js
+
+      # Cheap when nothing is queued (one HTTP request); any run also drains requests whose dispatch failed.
+      - name: Check pending addresses for the shared bot
+        if: always() && env.INGEST_URL != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node ./src/check-addresses.js
 
       - name: Commit updated artifacts
         run: |

@@ -42,7 +42,10 @@ public sealed class DispatcherFixture : IDisposable
 
         _connection = new SqliteConnection("DataSource=:memory:");
         _connection.Open();
-        Db = new BotDbContext(new DbContextOptionsBuilder<BotDbContext>().UseSqlite(_connection).Options);
+        Db = new BotDbContext(new DbContextOptionsBuilder<BotDbContext>()
+            .UseSqlite(_connection)
+            .ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCustomizer, UtcTicksModelCustomizer>()
+            .Options);
         Db.Database.EnsureCreated();
 
         Bot = new FakeTelegramBotClient();
