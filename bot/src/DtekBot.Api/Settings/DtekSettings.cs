@@ -7,6 +7,7 @@ public sealed class DtekSettings
     public List<RegionSettings> Regions { get; set; } = [];
     public ClassificationSettings Classification { get; set; } = new();
     public PollingSettings Polling { get; set; } = new();
+    public AddressCheckSettings AddressChecks { get; set; } = new();
 }
 
 public sealed class RegionSettings
@@ -42,4 +43,15 @@ public sealed class ClassificationSettings
 public sealed class PollingSettings
 {
     public int CancelRecheckDelaySeconds { get; set; } = 30;
+}
+
+// Limits that keep on-demand address checks from hammering GitHub Actions and the DTEK site.
+public sealed class AddressCheckSettings
+{
+    public int ChatCooldownMinutes { get; set; } = 10;
+    public int DailyLimitPerChat { get; set; } = 20;
+    public int ResultCacheMinutes { get; set; } = 5;
+    public int DispatchMinIntervalMinutes { get; set; } = 3;
+    public int MaxStreetsPerRun { get; set; } = 20;
+    public int RequestTimeoutMinutes { get; set; } = 15;
 }

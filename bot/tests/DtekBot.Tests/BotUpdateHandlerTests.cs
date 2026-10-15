@@ -1,4 +1,5 @@
 using DtekBot.Api.Bot;
+using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
 using DtekBot.Api.MiniApp;
 using DtekBot.Api.Parsing;
@@ -25,6 +26,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     private const long PlainUser = 2;
 
     private readonly DispatcherFixture _f = new();
+    private readonly FakeWorkflowTrigger _trigger = new();
     private readonly BotUpdateHandler _handler;
     private int _updateId;
 
@@ -34,8 +36,10 @@ public sealed class BotUpdateHandlerTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:PublicUrl"] = "https://example.test" })
             .Build();
         var access = new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance);
+        var checks = new AddressCheckService(
+            _f.Db, _f.Bot, _trigger, _f.Options, TimeProvider.System, NullLogger<AddressCheckService>.Instance);
         _handler = new BotUpdateHandler(
-            _f.Bot, _f.Db, access, _f.Options, config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
+            _f.Bot, _f.Db, access, checks, _f.Options, config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
 
         _f.Bot.SetStatus(AdminUser, ChatMemberStatus.Administrator);
     }
@@ -118,7 +122,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Equal(["regions", "status", "cfg"], callbacks);
 
         var webApps = buttons.Where(b => b.WebApp is not null).Select(b => b.WebApp!.Url).ToList();
-        Assert.Equal(["https://example.test/app/", "https://example.test/lite/"], webApps);
+        Assert.Equal(["https://example.test/lite/"], webApps);
     }
 
     [Fact]
@@ -159,6 +163,8 @@ public sealed class BotUpdateHandlerTests : IDisposable
             _f.Bot,
             _f.Db,
             new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance),
+            new AddressCheckService(
+                _f.Db, _f.Bot, _trigger, _f.Options, TimeProvider.System, NullLogger<AddressCheckService>.Instance),
             _f.Options,
             new ConfigurationBuilder().Build(),
             TimeProvider.System,
@@ -844,6 +850,815 @@ public sealed class BotUpdateHandlerTests : IDisposable
         await SendAsync(Group, "/template {message}", AdminUser);
 
         Assert.Equal("{message}", Row(GroupChat).Template);
+    }
+
+    // ---- «Світло зникло» channel posts ----
+
+    private const string SamplePost = "🔴 14:24 Світло зникло\n🕓 Воно було 17год 23хв\n🗓 Очікуємо за графіком о 18:00";
+
+    private static readonly System.Text.RegularExpressions.Regex PowerOutPattern =
+        new(@"світло\s+зникло", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private Channel AddTriggerChannel(Action<Channel>? configure = null, bool withAddress = true) =>
+        _f.AddChannel(ChannelChat, c =>
+        {
+            c.OutageTrigger = true;
+            if (withAddress)
+            {
+                c.AddressStreet = "вул. Драгоманова";
+                c.AddressHouse = "12";
+                c.AddressLabel = "вул. Драгоманова, 12";
+                c.GroupId = "45.1";
+            }
+
+            configure?.Invoke(c);
+        });
+
+    private async Task<Update> PostAsync(string text)
+    {
+        var update = ChannelPostUpdate(text);
+        await _handler.HandleAsync(update, CancellationToken.None);
+        return update;
+    }
+
+    private void StoreRegionState(PopupKind kind, string regionId = "kyiv")
+    {
+        _f.Db.RegionStates.Add(new RegionState
+        {
+            RegionId = regionId,
+            Kind = kind,
+            Hash = "h",
+            ObservedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        _f.Db.SaveChanges();
+    }
+
+    private void StoreGroupState(string today, string groupId = "45.1", string regionId = "kyiv")
+    {
+        _f.Db.GroupStates.Add(new GroupState
+        {
+            RegionId = regionId,
+            GroupId = groupId,
+            Today = today,
+            Tomorrow = "ScheduleApplies",
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        _f.Db.SaveChanges();
+    }
+
+    private static void AssertDoesNotSelfTrigger(string text) =>
+        Assert.DoesNotMatch(PowerOutPattern, text);
+
+    [Fact]
+    public async Task PowerOutPost_WithAddress_RepliesToThePostWithQueuedCheck()
+    {
+        AddTriggerChannel();
+
+        var post = await PostAsync(SamplePost);
+
+        var reply = Assert.Single(_f.Bot.Sent);
+        Assert.Equal(ChannelChat, reply.ChatId.Identifier);
+        Assert.Equal(post.ChannelPost!.Id, reply.ReplyParameters?.MessageId);
+        Assert.Contains("⏳", reply.Text);
+        Assert.DoesNotContain("Для вашої черги", reply.Text);
+        Assert.Equal(default, reply.ParseMode);
+        Assert.Null(reply.LinkPreviewOptions);
+
+        var check = Assert.Single(_f.Db.AddressChecks.AsNoTracking());
+        Assert.Equal(ChannelChat, check.ChatId);
+        Assert.Equal(AddressCheckStatus.Pending, check.Status);
+        Assert.Equal(["check-addresses"], _trigger.Events);
+        AssertDoesNotSelfTrigger(reply.Text);
+    }
+
+    [Theory]
+    [InlineData("Світло зникло")]
+    [InlineData("світло зникло")]
+    [InlineData("СВІТЛО ЗНИКЛО")]
+    [InlineData("СвІтЛо ЗнИкЛо")]
+    [InlineData("Світло   зникло")]
+    [InlineData("Світло\nзникло")]
+    [InlineData("Світло\r\nзникло")]
+    [InlineData("Світло\tзникло")]
+    [InlineData("Увага! світло зникло!!!")]
+    [InlineData("🔴 14:24 Світло зникло")]
+    public async Task PowerOutPost_PhraseVariations_AreRecognised(string text)
+    {
+        AddTriggerChannel();
+
+        await PostAsync(text);
+
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Theory]
+    [InlineData("🟢 15:10 Світло з'явилось\n🕓 Його не було 0год 46хв")]
+    [InlineData("Світло є")]
+    [InlineData("Світло не зникло")]
+    [InlineData("Світла зникло")]
+    [InlineData("Світлозникло")]
+    [InlineData("Світло, зникло")]
+    [InlineData("зникло світло")]
+    [InlineData("привіт всім")]
+    public async Task UnrelatedChannelPosts_DoNothing(string text)
+    {
+        AddTriggerChannel();
+
+        await PostAsync(text);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task ChannelPostWithoutText_DoesNothing()
+    {
+        AddTriggerChannel();
+        var update = new Update { Id = 1, ChannelPost = new Message { Id = 5, Chat = MakeChat(ChannelChat, ChatType.Channel, "Канал") } };
+
+        await _handler.HandleAsync(update, CancellationToken.None);
+
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Theory]
+    [InlineData(ChatType.Private, PrivateChat)]
+    [InlineData(ChatType.Group, GroupChat)]
+    [InlineData(ChatType.Supergroup, GroupChat)]
+    public async Task OrdinaryMessages_WithThePhrase_AreIgnored(ChatType type, long chatId)
+    {
+        _f.AddChannel(chatId, c =>
+        {
+            c.OutageTrigger = true;
+            c.AddressStreet = "вул. Драгоманова";
+            c.AddressHouse = "12";
+        });
+        var chat = MakeChat(chatId, type, "Чат", "user");
+
+        await SendAsync(chat, SamplePost, AdminUser);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WhenTriggerIsOff_DoesNothing()
+    {
+        AddTriggerChannel(c => c.OutageTrigger = false);
+
+        await PostAsync(SamplePost);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WhenChannelIsInactive_DoesNothing()
+    {
+        AddTriggerChannel(c => c.IsActive = false);
+
+        await PostAsync(SamplePost);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WhenChannelHasNoRow_DoesNothing()
+    {
+        await PostAsync(SamplePost);
+
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task PowerOutPost_OnlyConcernsTheChannelItWasPostedIn()
+    {
+        AddTriggerChannel();
+        _f.AddChannel(-1999, c => { c.OutageTrigger = true; c.AddressStreet = "s"; c.AddressHouse = "1"; });
+
+        await PostAsync(SamplePost);
+
+        Assert.Equal(ChannelChat, Assert.Single(_f.Bot.Sent).ChatId.Identifier);
+        Assert.Equal(ChannelChat, Assert.Single(_f.Db.AddressChecks.AsNoTracking()).ChatId);
+    }
+
+    [Theory]
+    [InlineData(PopupKind.Emergency)]
+    [InlineData(PopupKind.Accident)]
+    [InlineData(PopupKind.Unknown)]
+    public async Task PowerOutPost_WithRegionWideAlert_RepliesWithContext_AndSkipsAddressCheck(PopupKind kind)
+    {
+        AddTriggerChannel();
+        StoreRegionState(kind);
+
+        var post = await PostAsync(SamplePost);
+
+        var reply = Assert.Single(_f.Bot.Sent);
+        Assert.StartsWith("ℹ️ На сайті ДТЕК зараз діє загальне повідомлення", reply.Text);
+        Assert.Contains("перевірку за адресою не запускаю", reply.Text);
+        Assert.Equal(post.ChannelPost!.Id, reply.ReplyParameters?.MessageId);
+        Assert.Equal(default, reply.ParseMode);
+        Assert.DoesNotContain("⏳", reply.Text);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+        AssertDoesNotSelfTrigger(reply.Text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WithRegionWideAlert_IgnoresGroupStateAndMissingAddress()
+    {
+        AddTriggerChannel(withAddress: false);
+        StoreRegionState(PopupKind.Emergency);
+        StoreGroupState(GroupStatuses.Emergency);
+
+        await PostAsync(SamplePost);
+
+        var reply = Assert.Single(_f.Bot.Sent);
+        Assert.StartsWith("ℹ️", reply.Text);
+        Assert.DoesNotContain("Для вашої черги", reply.Text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Theory]
+    [InlineData(PopupKind.None)]
+    [InlineData(PopupKind.Stabilization)]
+    [InlineData(PopupKind.Cancelled)]
+    public async Task PowerOutPost_WithoutRegionWideAlert_RunsAddressCheck(PopupKind kind)
+    {
+        AddTriggerChannel();
+        StoreRegionState(kind);
+
+        await PostAsync(SamplePost);
+
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(1, CheckRows());
+        Assert.Single(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_RegionStateOfAnotherRegion_IsIgnored()
+    {
+        AddTriggerChannel();
+        StoreRegionState(PopupKind.Emergency, "odesa");
+
+        await PostAsync(SamplePost);
+
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WithGroupEmergency_PrependsGroupLine_ThenQueuedMessage()
+    {
+        AddTriggerChannel();
+        StoreGroupState(GroupStatuses.Emergency);
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        var parts = text.Split("\n\n");
+        Assert.Equal(2, parts.Length);
+        Assert.Equal("🚨 Для вашої черги 45.1 зараз діють екстрені відключення (за даними Yasno).", parts[0]);
+        Assert.StartsWith("⏳", parts[1]);
+        Assert.Equal(1, CheckRows());
+        AssertDoesNotSelfTrigger(text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_GroupEmergencyWithoutAddress_ShowsGroupLineAndNoAddressText()
+    {
+        AddTriggerChannel(c => { c.AddressStreet = null; c.AddressHouse = null; });
+        StoreGroupState(GroupStatuses.Emergency);
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.StartsWith("🚨 Для вашої черги 45.1", text);
+        Assert.Contains("Спершу оберіть адресу", text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Theory]
+    [InlineData("ScheduleApplies", "45.1", "kyiv")]
+    [InlineData("WaitingForSchedule", "45.1", "kyiv")]
+    [InlineData(GroupStatuses.Emergency, "46.1", "kyiv")]
+    [InlineData(GroupStatuses.Emergency, "45.1", "odesa")]
+    public async Task PowerOutPost_GroupLine_OnlyForOwnGroupInEmergency(string today, string groupId, string regionId)
+    {
+        AddTriggerChannel();
+        StoreGroupState(today, groupId, regionId);
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.DoesNotContain("Для вашої черги", text);
+        Assert.StartsWith("⏳", text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WithoutGroupId_HasNoGroupLine()
+    {
+        AddTriggerChannel(c => c.GroupId = null);
+        StoreGroupState(GroupStatuses.Emergency);
+
+        await PostAsync(SamplePost);
+
+        Assert.DoesNotContain("Для вашої черги", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WithoutAddress_RepliesWithNoAddressText()
+    {
+        AddTriggerChannel(withAddress: false);
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.Contains("Спершу оберіть адресу", text);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+        AssertDoesNotSelfTrigger(text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_ForRegionWithoutGroups_SaysCheckIsUnavailable()
+    {
+        _f.AddChannel(ChannelChat, c =>
+        {
+            c.RegionId = "odesa";
+            c.OutageTrigger = true;
+            c.AddressStreet = "s";
+            c.AddressHouse = "1";
+        }, "odesa");
+
+        await PostAsync(SamplePost);
+
+        Assert.Contains("поки недоступна", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task PowerOutPost_Twice_SecondReportsPendingCheck()
+    {
+        AddTriggerChannel();
+        await PostAsync(SamplePost);
+        _f.Bot.Requests.Clear();
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.Contains("ще виконують", text);
+        Assert.Equal(1, CheckRows());
+        Assert.Single(_trigger.Events);
+        AssertDoesNotSelfTrigger(text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_WithFreshCachedResult_RepliesWithItWithoutQueueing()
+    {
+        AddTriggerChannel();
+        _f.Db.AddressResults.Add(new AddressResult
+        {
+            RegionId = "kyiv",
+            Street = "вул. Драгоманова",
+            House = "12",
+            Found = true,
+            SubType = "Планове",
+            StartDate = "14:00",
+            EndDate = "18:00",
+            CheckedAt = DateTimeOffset.UtcNow,
+        });
+        _f.Db.SaveChanges();
+
+        await PostAsync(SamplePost);
+
+        var text = Assert.Single(_f.Bot.Sent).Text;
+        Assert.StartsWith("⏰", text);
+        Assert.Equal(0, CheckRows());
+        AssertDoesNotSelfTrigger(text);
+    }
+
+    [Fact]
+    public async Task ChannelPostCommands_StillWork_OnATriggerChannel()
+    {
+        _f.AddChannel(ChannelChat, c => c.OutageTrigger = true);
+
+        await _handler.HandleAsync(ChannelPostUpdate("/template {message} деталі"), CancellationToken.None);
+
+        Assert.Equal("{message} деталі", Row(ChannelChat).Template);
+        Assert.StartsWith("Збережено.", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    [Fact]
+    public async Task ChannelPostStartCommand_StillShowsMenu()
+    {
+        AddTriggerChannel();
+
+        await _handler.HandleAsync(ChannelPostUpdate("/start"), CancellationToken.None);
+
+        Assert.Contains("Вітаю!", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task ChannelPostRegionCommand_StillSubscribes()
+    {
+        await _handler.HandleAsync(ChannelPostUpdate("/region kyiv right-bank"), CancellationToken.None);
+
+        var channel = Row(ChannelChat);
+        Assert.True(channel.IsActive);
+        Assert.False(channel.OutageTrigger);
+        Assert.Equal("right-bank", channel.PartId);
+    }
+
+    // ---- cfg:trigger ----
+
+    [Fact]
+    public async Task Settings_ShowTriggerOffByDefault_WithToggleButton()
+    {
+        _f.AddChannel(PrivateChat);
+
+        await PressAsync(Private, "cfg");
+
+        var edit = Edit();
+        Assert.Contains("Реакція на «Світло зникло»: вимкнена", edit.Text);
+        var button = Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:trigger");
+        Assert.Equal("Реагувати на «Світло зникло»", button.Text);
+    }
+
+    [Fact]
+    public async Task Settings_WhenTriggerOn_ShowEnabledTextAndOppositeButton()
+    {
+        _f.AddChannel(PrivateChat, c => c.OutageTrigger = true);
+
+        await PressAsync(Private, "cfg");
+
+        var edit = Edit();
+        Assert.Contains("Реакція на «Світло зникло»: увімкнена", edit.Text);
+        Assert.Equal(
+            "Не реагувати на «Світло зникло»",
+            Assert.Single(Buttons(edit.ReplyMarkup), b => b.CallbackData == "cfg:trigger").Text);
+    }
+
+    [Fact]
+    public async Task CfgTrigger_TogglesAndPersists()
+    {
+        _f.AddChannel(PrivateChat);
+
+        await PressAsync(Private, "cfg:trigger");
+
+        Assert.True(Row(PrivateChat).OutageTrigger);
+        Assert.Equal("Реагуватиму на «Світло зникло»", Assert.Single(_f.Bot.Answers).Text);
+        var edit = Edit();
+        Assert.Contains("Реакція на «Світло зникло»: увімкнена", edit.Text);
+        Assert.Contains(Buttons(edit.ReplyMarkup), b => b.Text == "Не реагувати на «Світло зникло»");
+
+        _f.Bot.Requests.Clear();
+        await PressAsync(Private, "cfg:trigger");
+
+        Assert.False(Row(PrivateChat).OutageTrigger);
+        Assert.Equal("Не реагуватиму на «Світло зникло»", Assert.Single(_f.Bot.Answers).Text);
+        Assert.Contains("вимкнена", Edit().Text);
+    }
+
+    [Fact]
+    public async Task CfgTrigger_DoesNotTouchOtherSettings()
+    {
+        _f.AddChannel(PrivateChat);
+
+        await PressAsync(Private, "cfg:trigger");
+
+        var channel = Row(PrivateChat);
+        Assert.Equal(AlertFilter.All, channel.Filter);
+        Assert.True(channel.NotifyOnEnd);
+        Assert.True(channel.EditInPlace);
+        Assert.False(channel.IsPaused);
+    }
+
+    [Fact]
+    public async Task CfgTrigger_WithoutSubscription_AsksToChooseRegionFirst()
+    {
+        await PressAsync(Private, "cfg:trigger");
+
+        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Answers).Text);
+        Assert.False(HasRow(PrivateChat));
+    }
+
+    [Fact]
+    public async Task CfgTrigger_ByGroupAdmin_Works()
+    {
+        _f.AddChannel(GroupChat);
+
+        await PressAsync(Group, "cfg:trigger", AdminUser);
+
+        Assert.True(Row(GroupChat).OutageTrigger);
+    }
+
+    [Fact]
+    public async Task CfgTrigger_ByNonAdminInGroup_IsRefusedWithAlert_AndNothingChanges()
+    {
+        _f.AddChannel(GroupChat);
+
+        await PressAsync(Group, "cfg:trigger", PlainUser);
+
+        var answer = Assert.Single(_f.Bot.Answers);
+        Assert.Equal(NoAccess, answer.Text);
+        Assert.True(answer.ShowAlert);
+        Assert.Empty(_f.Bot.Edits);
+        Assert.False(Row(GroupChat).OutageTrigger);
+    }
+
+    [Fact]
+    public async Task Trigger_EndToEnd_ToggleOnThenPostReacts()
+    {
+        _f.AddChannel(ChannelChat, c =>
+        {
+            c.AddressStreet = "вул. Драгоманова";
+            c.AddressHouse = "12";
+        });
+        var channelChat = MakeChat(ChannelChat, ChatType.Channel, "Канал");
+
+        await PostAsync(SamplePost);
+        Assert.Empty(_f.Bot.Requests);
+
+        await _handler.HandleAsync(CallbackUpdate(channelChat, "cfg:trigger", AdminUser), CancellationToken.None);
+        _f.Bot.Requests.Clear();
+        await PostAsync(SamplePost);
+
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+    }
+
+    // ---- /check and address menu ----
+
+    private Channel AddChannelWithAddress(long chatId, Action<Channel>? configure = null) =>
+        _f.AddChannel(chatId, c =>
+        {
+            c.AddressStreet = "вул. Драгоманова";
+            c.AddressHouse = "12";
+            c.AddressLabel = "вул. Драгоманова, 12";
+            c.GroupId = "45.1";
+            configure?.Invoke(c);
+        });
+
+    private int CheckRows() => _f.Db.AddressChecks.AsNoTracking().Count();
+
+    [Fact]
+    public async Task Check_WithoutSubscription_AsksToChooseRegionFirst()
+    {
+        await SendAsync(Private, "/check");
+
+        Assert.Contains(ChooseRegionFirst, Reply());
+        Assert.Empty(_trigger.Events);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task Check_WithInactiveSubscription_AsksToChooseRegionFirst()
+    {
+        AddChannelWithAddress(PrivateChat, c => c.IsActive = false);
+
+        await SendAsync(Private, "/check");
+
+        Assert.Contains(ChooseRegionFirst, Reply());
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task Check_WithoutSavedAddress_SaysToPickOne()
+    {
+        _f.AddChannel(PrivateChat);
+
+        await SendAsync(Private, "/check");
+
+        Assert.Contains("адресу", Reply());
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task Check_WithAddress_QueuesCheck_AndRepliesWithPlainText()
+    {
+        AddChannelWithAddress(PrivateChat);
+
+        await SendAsync(Private, "/check");
+
+        var request = Assert.Single(_f.Bot.Sent);
+        Assert.Contains("⏳", request.Text);
+        Assert.Equal(default, request.ParseMode);
+        Assert.Null(request.LinkPreviewOptions);
+        Assert.Equal(1, CheckRows());
+        Assert.Equal(["check-addresses"], _trigger.Events);
+    }
+
+    [Fact]
+    public async Task Check_AcceptsBotSuffix_AndIgnoresArguments()
+    {
+        AddChannelWithAddress(PrivateChat);
+
+        await SendAsync(Private, "/check@dtek_test_bot вул. Інша, 5");
+
+        Assert.Contains("⏳", Reply());
+        Assert.Equal("вул. Драгоманова", _f.Db.AddressChecks.AsNoTracking().Single().Street);
+    }
+
+    [Fact]
+    public async Task Check_WithFreshResult_RepliesWithResultAsPlainText_WithoutQueueing()
+    {
+        AddChannelWithAddress(PrivateChat);
+        _f.Db.AddressResults.Add(new AddressResult
+        {
+            RegionId = "kyiv",
+            Street = "вул. Драгоманова",
+            House = "12",
+            Found = true,
+            SubType = "Аварійне відключення <b>",
+            CheckedAt = DateTimeOffset.UtcNow,
+        });
+        _f.Db.SaveChanges();
+
+        await SendAsync(Private, "/check");
+
+        var request = Assert.Single(_f.Bot.Sent);
+        Assert.Contains("🚨", request.Text);
+        Assert.Contains("вул. Драгоманова, 12", request.Text);
+        Assert.Contains("<b>", request.Text);
+        Assert.Equal(default, request.ParseMode);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task Check_Twice_SecondIsRefusedWhilePending()
+    {
+        AddChannelWithAddress(PrivateChat);
+        await SendAsync(Private, "/check");
+        _f.Bot.Requests.Clear();
+
+        await SendAsync(Private, "/check");
+
+        Assert.Contains("ще виконують", Reply());
+        Assert.Equal(1, CheckRows());
+        Assert.Single(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task CheckCallback_SendsResultMessage_AnswersCallback_AndRefreshesMenu()
+    {
+        AddChannelWithAddress(PrivateChat);
+
+        await PressAsync(Private, "chk");
+
+        var message = Assert.Single(_f.Bot.Sent);
+        Assert.Equal(PrivateChat, message.ChatId.Identifier);
+        Assert.Contains("⏳", message.Text);
+        Assert.Equal(default, message.ParseMode);
+
+        var answer = Assert.Single(_f.Bot.Answers);
+        Assert.Equal("Запит прийнято", answer.Text);
+        Assert.Contains("Підписка:", Edit().Text);
+        Assert.Equal(1, CheckRows());
+        Assert.Single(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task CheckCallback_WithoutSubscription_SendsChooseRegionMessage()
+    {
+        await PressAsync(Private, "chk");
+
+        Assert.Contains(ChooseRegionFirst, Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Theory]
+    [InlineData(true, "вул. Драгоманова", "12", true)]
+    [InlineData(true, "вул. Драгоманова", null, false)]
+    [InlineData(true, null, "12", false)]
+    [InlineData(true, "", "", false)]
+    [InlineData(true, null, null, false)]
+    [InlineData(false, "вул. Драгоманова", "12", false)]
+    public async Task MainMenu_ShowsCheckButton_OnlyForActiveChannelWithFullAddress(
+        bool active, string? street, string? house, bool expectButton)
+    {
+        _f.AddChannel(PrivateChat, c =>
+        {
+            c.IsActive = active;
+            c.AddressStreet = street;
+            c.AddressHouse = house;
+        });
+
+        await SendAsync(Private, "/start");
+
+        var buttons = Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup);
+        var check = buttons.SingleOrDefault(b => b.CallbackData == "chk");
+        Assert.Equal(expectButton, check is not null);
+        if (check is not null)
+        {
+            Assert.Equal("⚡ Світла немає? Перевірити адресу", check.Text);
+        }
+    }
+
+    [Fact]
+    public async Task MainMenu_WithoutChannel_HasNoCheckButton()
+    {
+        await SendAsync(Private, "/start");
+
+        Assert.DoesNotContain(Buttons(Assert.Single(_f.Bot.Sent).ReplyMarkup), b => b.CallbackData == "chk");
+    }
+
+    [Fact]
+    public async Task Stop_ClearsGroupAndAddressData()
+    {
+        AddChannelWithAddress(PrivateChat);
+
+        await SendAsync(Private, "/stop");
+
+        var channel = Row(PrivateChat);
+        Assert.False(channel.IsActive);
+        Assert.Null(channel.GroupId);
+        Assert.Null(channel.AddressLabel);
+        Assert.Null(channel.AddressStreet);
+        Assert.Null(channel.AddressHouse);
+    }
+
+    [Fact]
+    public async Task StopCallback_ClearsGroupAndAddressData_AndHidesCheckButton()
+    {
+        AddChannelWithAddress(PrivateChat);
+
+        await PressAsync(Private, "stop");
+
+        var channel = Row(PrivateChat);
+        Assert.Null(channel.GroupId);
+        Assert.Null(channel.AddressStreet);
+        Assert.DoesNotContain(Buttons(Edit().ReplyMarkup), b => b.CallbackData == "chk");
+    }
+
+    [Fact]
+    public async Task Resubscribing_AfterStop_DoesNotBringTheAddressBack()
+    {
+        AddChannelWithAddress(PrivateChat);
+        await SendAsync(Private, "/stop");
+
+        await SendAsync(Private, "/region kyiv");
+
+        var channel = Row(PrivateChat);
+        Assert.True(channel.IsActive);
+        Assert.Null(channel.AddressStreet);
+        Assert.Null(channel.GroupId);
+    }
+
+    [Fact]
+    public async Task Check_InGroup_ByNonAdmin_IsRefused()
+    {
+        AddChannelWithAddress(GroupChat);
+
+        await SendAsync(Group, "/check", PlainUser);
+
+        Assert.Equal(NoAccess, Reply());
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task CheckCallback_InGroup_ByNonAdmin_IsRefusedWithAlert()
+    {
+        AddChannelWithAddress(GroupChat);
+
+        await PressAsync(Group, "chk", PlainUser);
+
+        var answer = Assert.Single(_f.Bot.Answers);
+        Assert.Equal(NoAccess, answer.Text);
+        Assert.True(answer.ShowAlert);
+        Assert.Empty(_f.Bot.Sent);
+        Assert.Empty(_f.Bot.Edits);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task Check_InGroup_ByAdmin_Works()
+    {
+        AddChannelWithAddress(GroupChat);
+
+        await SendAsync(Group, "/check", AdminUser);
+
+        Assert.Contains("⏳", Reply());
+        Assert.Equal(1, CheckRows());
+    }
+
+    [Fact]
+    public async Task CheckCallback_InGroup_ByAdmin_Works()
+    {
+        AddChannelWithAddress(GroupChat);
+
+        await PressAsync(Group, "chk", AdminUser);
+
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal(1, CheckRows());
     }
 
     // ---- status ----

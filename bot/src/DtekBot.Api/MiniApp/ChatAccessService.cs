@@ -6,9 +6,60 @@ using Telegram.Bot.Types.Enums;
 
 namespace DtekBot.Api.MiniApp;
 
+public enum UnlinkOutcome
+{
+    NotLinked,
+    Unlinked,
+
+    // The caller was the last linked admin, so the chat's subscription and personal data were removed too.
+    UnlinkedAndUnsubscribed,
+}
+
 public sealed class ChatAccessService(ITelegramBotClient bot, BotDbContext db, ILogger<ChatAccessService> logger)
 {
     private static User? _me;
+
+    // Takes a group or channel off the user's list. Works even if the user is no longer an admin there.
+    public async Task<UnlinkOutcome> UnlinkAsync(long chatId, long userId, DateTimeOffset now, CancellationToken ct)
+    {
+        var link = await db.ChannelAdmins.FirstOrDefaultAsync(a => a.ChatId == chatId && a.UserId == userId, ct);
+        if (link is null)
+        {
+            return UnlinkOutcome.NotLinked;
+        }
+
+        db.ChannelAdmins.Remove(link);
+        var stillManaged = await db.ChannelAdmins.AnyAsync(a => a.ChatId == chatId && a.UserId != userId, ct);
+        if (stillManaged)
+        {
+            await db.SaveChangesAsync(ct);
+            return UnlinkOutcome.Unlinked;
+        }
+
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+        if (channel is not null)
+        {
+            channel.IsActive = false;
+            channel.OutageTrigger = false;
+            channel.GroupId = null;
+            channel.AddressLabel = null;
+            channel.AddressStreet = null;
+            channel.AddressHouse = null;
+        }
+
+        // Queued address checks for a chat nobody manages any more are dropped without a reply.
+        var pending = await db.AddressChecks
+            .Where(c => c.ChatId == chatId && c.Status == AddressCheckStatus.Pending)
+            .ToListAsync(ct);
+        foreach (var check in pending)
+        {
+            check.Status = AddressCheckStatus.Expired;
+            check.CompletedAt = now;
+        }
+
+        await db.SaveChangesAsync(ct);
+        return UnlinkOutcome.UnlinkedAndUnsubscribed;
+    }
 
     // Asks Telegram, so it also covers admins demoted after they linked a chat.
     public async Task<bool> IsAdminAsync(long chatId, long userId, CancellationToken ct)

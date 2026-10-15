@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using DtekBot.Api;
 using DtekBot.Api.Bot;
+using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
 using DtekBot.Api.MiniApp;
@@ -40,11 +41,19 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddScoped<AlertDispatcher>();
 builder.Services.AddScoped<ChatAccessService>();
+builder.Services.AddScoped<AddressCheckService>();
+builder.Services.AddHttpClient<IWorkflowTrigger, GitHubWorkflowTrigger>(client =>
+{
+    client.BaseAddress = new Uri("https://api.github.com/");
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+    client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+});
 
 var app = builder.Build();
 
-// /app is the Blazor WASM Mini App, /lite is the plain HTML/JS one.
-app.UseBlazorFrameworkFiles("/app");
+// The Mini App (plain HTML/JS) lives in wwwroot/lite.
 app.UseStaticFiles();
 
 if (app.Configuration.GetValue("Database:AutoMigrate", false))
@@ -57,12 +66,14 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapMiniAppApi();
 app.MapGroupIngest();
+app.MapAddressCheckIngest();
 
 app.MapPost("/webhook", async (
     Update update,
     HttpRequest request,
     BotUpdateHandler handler,
     IConfiguration config,
+    ILogger<Program> logger,
     CancellationToken ct) =>
 {
     var header = request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString();
@@ -71,7 +82,16 @@ app.MapPost("/webhook", async (
         return Results.Unauthorized();
     }
 
-    await handler.HandleAsync(update, ct);
+    try
+    {
+        await handler.HandleAsync(update, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        // Returning an error would make Telegram redeliver the same update over and over.
+        logger.LogError(ex, "Update {UpdateId} failed", update.Id);
+    }
+
     return Results.Ok();
 });
 
@@ -142,7 +162,6 @@ app.MapPost("/ingest", async (
 });
 
 app.MapFallbackToFile("/lite/{*path:nonfile}", "lite/index.html");
-app.MapFallbackToFile("/app/{*path:nonfile}", "app/index.html");
 
 app.Run();
 

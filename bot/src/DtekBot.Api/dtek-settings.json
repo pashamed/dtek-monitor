@@ -74,6 +74,14 @@
     },
     "Polling": {
       "CancelRecheckDelaySeconds": 30
+    },
+    "AddressChecks": {
+      "ChatCooldownMinutes": 10,
+      "DailyLimitPerChat": 20,
+      "ResultCacheMinutes": 5,
+      "DispatchMinIntervalMinutes": 3,
+      "MaxStreetsPerRun": 20,
+      "RequestTimeoutMinutes": 15
     }
   }
 }

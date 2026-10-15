@@ -19,9 +19,62 @@ public sealed class Channel
     public bool EditInPlace { get; set; } = true;
     public string? Template { get; set; }
 
-    // Power group such as "45.1", resolved from the address the user picked.
+    // Check the saved address when this chat gets a «Світло зникло» post (from a power-monitor app).
+    public bool OutageTrigger { get; set; }
     public string? GroupId { get; set; }
     public string? AddressLabel { get; set; }
+
+    // Street and house exactly as the address picker produced them; these are what the DTEK site is queried with.
+    public string? AddressStreet { get; set; }
+    public string? AddressHouse { get; set; }
+}
+
+public enum AddressCheckStatus
+{
+    Pending,
+    Done,
+    Expired,
+}
+
+// A user's "the power is off, is it local?" request, waiting for the workflow to check the DTEK site.
+public sealed class AddressCheck
+{
+    public long Id { get; set; }
+    public long ChatId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string Street { get; set; } = "";
+    public string House { get; set; } = "";
+    public string Label { get; set; } = "";
+    public AddressCheckStatus Status { get; set; }
+    public DateTimeOffset RequestedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+// Latest DTEK answer for one house; doubles as the short-lived cache that spares the DTEK site.
+public sealed class AddressResult
+{
+    public string RegionId { get; set; } = "";
+    public string Street { get; set; } = "";
+    public string House { get; set; } = "";
+    public bool Found { get; set; }
+    public string SubType { get; set; } = "";
+    public string StartDate { get; set; } = "";
+    public string EndDate { get; set; } = "";
+    public string Type { get; set; } = "";
+    public DateTimeOffset CheckedAt { get; set; }
+
+    public bool HasOutage => Found && (SubType != "" || StartDate != "" || EndDate != "" || Type != "");
+
+    // Same rule as the personal monitor: only avariyni/ekstreni are unplanned.
+    public bool IsEmergency => HasOutage
+        && (SubType.Contains("авар", StringComparison.OrdinalIgnoreCase)
+            || SubType.Contains("екст", StringComparison.OrdinalIgnoreCase));
+}
+
+public sealed class KeyValue
+{
+    public string Key { get; set; } = "";
+    public string Value { get; set; } = "";
 }
 
 // Latest known status of one power group, as reported by the Yasno planned-outages feed.
@@ -78,9 +131,45 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<Delivery> Deliveries => Set<Delivery>();
     public DbSet<ChannelAdmin> ChannelAdmins => Set<ChannelAdmin>();
     public DbSet<GroupState> GroupStates => Set<GroupState>();
+    public DbSet<AddressCheck> AddressChecks => Set<AddressCheck>();
+    public DbSet<AddressResult> AddressResults => Set<AddressResult>();
+    public DbSet<KeyValue> KeyValues => Set<KeyValue>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<AddressCheck>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.Street).HasMaxLength(256);
+            e.Property(x => x.House).HasMaxLength(64);
+            e.Property(x => x.Label).HasMaxLength(256);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+            e.HasIndex(x => new { x.Status, x.RegionId });
+            e.HasIndex(x => new { x.ChatId, x.RequestedAt });
+        });
+
+        modelBuilder.Entity<AddressResult>(e =>
+        {
+            e.HasKey(x => new { x.RegionId, x.Street, x.House });
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.Street).HasMaxLength(256);
+            e.Property(x => x.House).HasMaxLength(64);
+            e.Property(x => x.SubType).HasMaxLength(512);
+            e.Property(x => x.StartDate).HasMaxLength(64);
+            e.Property(x => x.EndDate).HasMaxLength(64);
+            e.Property(x => x.Type).HasMaxLength(256);
+            e.Ignore(x => x.HasOutage);
+            e.Ignore(x => x.IsEmergency);
+        });
+
+        modelBuilder.Entity<KeyValue>(e =>
+        {
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasMaxLength(64);
+            e.Property(x => x.Value).HasMaxLength(256);
+        });
+
         modelBuilder.Entity<GroupState>(e =>
         {
             e.HasKey(x => new { x.RegionId, x.GroupId });
@@ -101,6 +190,8 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.Template).HasMaxLength(MessageTemplate.MaxLength);
             e.Property(x => x.GroupId).HasMaxLength(16);
             e.Property(x => x.AddressLabel).HasMaxLength(256);
+            e.Property(x => x.AddressStreet).HasMaxLength(256);
+            e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.HasIndex(x => new { x.RegionId, x.IsActive });
             e.HasIndex(x => x.GroupId);
         });

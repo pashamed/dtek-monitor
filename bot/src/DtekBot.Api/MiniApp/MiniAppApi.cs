@@ -184,6 +184,8 @@ public static class MiniAppApi
                 {
                     channel.GroupId = null;
                     channel.AddressLabel = null;
+                    channel.AddressStreet = null;
+                    channel.AddressHouse = null;
                 }
 
                 channel.RegionId = region.Id;
@@ -196,6 +198,7 @@ public static class MiniAppApi
             channel.NotifyOnEnd = dto.NotifyOnEnd;
             channel.EditInPlace = dto.EditInPlace;
             channel.Template = template;
+            channel.OutageTrigger = dto.OutageTrigger;
             await db.SaveChangesAsync(ct);
 
             return Json(ToSummary(channel, userId));
@@ -265,6 +268,25 @@ public static class MiniAppApi
             return Json(items.Take(50).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
         });
 
+        api.MapDelete("/chats/{chatId:long}", async (
+            long chatId,
+            HttpContext http,
+            ChatAccessService access,
+            TimeProvider time,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            if (chatId == userId)
+            {
+                return Error("Особистий чат не можна видалити зі списку. Вимкніть підписку в налаштуваннях.");
+            }
+
+            var outcome = await access.UnlinkAsync(chatId, userId, time.GetUtcNow(), ct);
+            return outcome == UnlinkOutcome.NotLinked
+                ? Results.Json(new ApiError("Чат не знайдено у вашому списку."), ApiJson.Options, statusCode: 404)
+                : Json(new { unsubscribed = outcome == UnlinkOutcome.UnlinkedAndUnsubscribed });
+        });
+
         api.MapPut("/chats/{chatId:long}/address", async (
             long chatId,
             HttpContext http,
@@ -307,6 +329,8 @@ public static class MiniAppApi
             var label = request.Label?.Trim() ?? "";
             channel.GroupId = group.Id;
             channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            channel.AddressStreet = CleanPart(request.Street, 256);
+            channel.AddressHouse = CleanPart(request.House, 64);
             await db.SaveChangesAsync(ct);
             return Json(ToSummary(channel, userId));
         });
@@ -332,9 +356,23 @@ public static class MiniAppApi
 
             channel.GroupId = null;
             channel.AddressLabel = null;
+            channel.AddressStreet = null;
+            channel.AddressHouse = null;
             await db.SaveChangesAsync(ct);
             return Json(ToSummary(channel, userId));
         });
+    }
+
+    // The street and house are later sent to the DTEK site, so only plain text of sane length is kept.
+    private static string? CleanPart(string? value, int max)
+    {
+        var text = value?.Trim();
+        if (string.IsNullOrEmpty(text) || text.Length > max || text.Any(char.IsControl))
+        {
+            return null;
+        }
+
+        return text;
     }
 
     private static RegionSettings? GroupRegion(DtekSettings settings, string? regionId) =>
@@ -360,7 +398,8 @@ public static class MiniAppApi
             c.EditInPlace,
             c.Template,
             c.GroupId,
-            c.AddressLabel);
+            c.AddressLabel,
+            c.OutageTrigger);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 }

@@ -285,7 +285,7 @@ function renderEditor(chat) {
       list.replaceChildren(); msg.className = 'msg'; msg.textContent = 'Визначаю чергу…';
       try {
         apply(await api('PUT', '/api/chats/' + encodeURIComponent(chat.chatId) + '/address',
-          { regionId: s.regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}` }));
+          { regionId: s.regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}`, street: street.name, house: i.name }));
         tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success');
       } catch (e) { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); }
     }
@@ -297,6 +297,23 @@ function renderEditor(chat) {
   renderAddr();
   regionSel.addEventListener('change', renderAddr);
 
+  // Linked groups and channels can be taken off the list; the private chat can only be unsubscribed.
+  const removeBtn = chat.isPrivate ? null : h('button', { type: 'button', class: 'btn danger', text: 'Видалити зі списку', onclick: async () => {
+    const ask = 'Видалити цей чат зі списку? Якщо ви єдиний, хто ним керує, сповіщення буде вимкнено, а збережену адресу видалено.';
+    const ok = await new Promise(resolve => tg.showConfirm ? tg.showConfirm(ask, resolve) : resolve(confirm(ask)));
+    if (!ok) return;
+    removeBtn.disabled = true;
+    try {
+      await api('DELETE', '/api/chats/' + encodeURIComponent(chat.chatId));
+      state.chats = state.chats.filter(x => x.chatId !== chat.chatId);
+      renderList('Чат видалено зі списку.');
+    } catch (e) {
+      removeBtn.disabled = false;
+      status.className = 'msg err';
+      status.replaceChildren(...errorText(e).map(x => h('div', { text: x })));
+    }
+  } });
+
   show(
     h('button', { class: 'back', text: '← Назад', onclick: () => renderList() }),
     h('h1', { text: chat.title || 'Особистий чат' }),
@@ -305,6 +322,7 @@ function renderEditor(chat) {
     toggle('Підписка активна', 'isActive'),
     toggle('Пауза', 'isPaused'),
     toggle('Писати про завершення', 'notifyOnEnd'),
+    toggle('Реагувати на «Світло зникло» (перевіряти адресу)', 'outageTrigger'),
     h('h2', { text: 'Які сповіщення' }),
     seg([['All', 'Усі'], ['EmergencyOnly', 'Лише екстрені та аварії']], () => s.filter, v => { s.filter = v; }),
     h('h2', { text: 'Оновлення' }),
@@ -313,7 +331,8 @@ function renderEditor(chat) {
     tpl, counter, errBox, chips, reset, help,
     h('h2', { text: 'Попередній перегляд' }),
     seg(KINDS, () => kind, v => { kind = v; }, schedulePreview),
-    bubble, status, save);
+    bubble, status, save,
+    removeBtn ? h('h2', { text: 'Керування' }) : null, removeBtn);
 
   updateUi();
   runPreview();
