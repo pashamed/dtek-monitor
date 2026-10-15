@@ -35,6 +35,9 @@ public sealed class PartSettings
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public List<string> Aliases { get; set; } = [];
+
+    // Parts implied by this one: an alert for a bank also concerns the city districts on it.
+    public List<string> Children { get; set; } = [];
 }
 
 public sealed class ClassificationSettings

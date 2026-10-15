@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs"
 import { chromium } from "playwright"
 
+import { structurePopup } from "./popup-llm.js"
+
 const SETTINGS_PATH = new URL(
   "../bot/src/DtekBot.Api/dtek-settings.json",
   import.meta.url
@@ -74,7 +76,9 @@ async function readRegion(browser, region) {
   }
 }
 
-async function ingest(regionId, popupText) {
+async function ingest(region, popupText) {
+  const regionId = region.Id
+  const structured = await structurePopup(region, popupText)
   const response = await fetch(INGEST_URL, {
     method: "POST",
     headers: {
@@ -85,6 +89,7 @@ async function ingest(regionId, popupText) {
       regionId,
       popupText,
       observedAt: new Date().toISOString(),
+      ...(structured ? { structured } : {}),
     }),
     signal: AbortSignal.timeout(60000),
   })
@@ -163,7 +168,7 @@ async function run() {
             ? `ℹ️ ${region.Id}: popup found (${result.popupText.length} chars)`
             : `✅ ${region.Id}: no popup`
         )
-        await ingest(region.Id, result.popupText)
+        await ingest(region, result.popupText)
       } catch (error) {
         failures++
         console.error(`⚠️ ${region.Id}: ${error.message}`)

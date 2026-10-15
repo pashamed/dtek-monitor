@@ -15,6 +15,8 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
 
     public List<object> Requests { get; } = [];
 
+    public List<CancellationToken> RequestTokens { get; } = [];
+
     // Return an exception to make that request fail (the request is still recorded).
     public Func<object, Exception?>? Failure { get; set; }
 
@@ -36,6 +38,8 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
     public Task<TResponse> SendRequest<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
         Requests.Add(request);
+        RequestTokens.Add(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var failure = Failure?.Invoke(request);
         if (failure is not null)
@@ -48,6 +52,9 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
             SendMessageRequest => new Message { Id = _nextMessageId++, Chat = new Chat { Id = 0 } },
             EditMessageTextRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
             AnswerCallbackQueryRequest => true,
+            SetChatMenuButtonRequest => true,
+            DeleteMessageRequest => true,
+            SetMyCommandsRequest => true,
             SendPhotoRequest => NewPhotoMessage(),
             EditMessageMediaRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
             EditMessageCaptionRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
@@ -71,6 +78,8 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
     public IEnumerable<EditMessageMediaRequest> MediaEdits => Requests.OfType<EditMessageMediaRequest>();
 
     public IEnumerable<EditMessageCaptionRequest> CaptionEdits => Requests.OfType<EditMessageCaptionRequest>();
+
+    public IEnumerable<DeleteMessageRequest> Deletes => Requests.OfType<DeleteMessageRequest>();
 
     private Message NewPhotoMessage() => new()
     {
