@@ -71,10 +71,10 @@ public sealed class AlertDispatcher(
             Outcome outcome;
             if (eligible)
             {
-                var text = Render(channel, region, kind, result, popupText, now);
+                var text = Render(channel, region, kind, PartNames(region, result), popupText, now);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, region, delivery, text, result.Hash, now, ct),
+                    () => SendOrEditAsync(channel, region.Id, delivery, text, result.Hash, now, ct),
                     ct);
             }
             else if (delivery is not null)
@@ -83,7 +83,7 @@ public sealed class AlertDispatcher(
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
-                        () => SendEndAsync(channel, region, delivery, result, popupText, now, ct),
+                        () => SendEndAsync(channel, region, delivery, PartNames(region, result), popupText, now, ct),
                         ct)
                     : Outcome.Closed;
 
@@ -114,9 +114,85 @@ public sealed class AlertDispatcher(
         return new DispatchSummary(sent, edited, closed, failed);
     }
 
+    // Group alerts keep their own delivery threads, keyed apart from the region-wide ones.
+    public static string GroupDeliveryKey(string regionId, string groupId) => $"{regionId}:group:{groupId}";
+
+    public async Task<DispatchSummary> DispatchGroupAsync(
+        RegionSettings region,
+        string groupId,
+        bool isEmergency,
+        CancellationToken ct)
+    {
+        int sent = 0, edited = 0, closed = 0, failed = 0;
+        var now = time.GetUtcNow();
+        var key = GroupDeliveryKey(region.Id, groupId);
+        var hash = $"group:{groupId}:{(isEmergency ? "emergency" : "ok")}";
+
+        var channels = await db.Channels
+            .Where(c => c.RegionId == region.Id && c.GroupId == groupId && c.IsActive)
+            .ToListAsync(ct);
+        var openDeliveries = await db.Deliveries
+            .Where(d => d.RegionId == key && !d.IsClosed)
+            .ToListAsync(ct);
+
+        // Chats that dropped this group or unsubscribed: close silently.
+        var chatIds = channels.Select(c => c.ChatId).ToHashSet();
+        foreach (var stale in openDeliveries.Where(d => !chatIds.Contains(d.ChatId)))
+        {
+            stale.IsClosed = true;
+            stale.UpdatedAt = now;
+        }
+
+        var partNames = new List<string> { $"черга {groupId}" };
+        foreach (var channel in channels)
+        {
+            var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
+            Outcome outcome;
+            if (isEmergency && !channel.IsPaused)
+            {
+                var text = Render(channel, region, AlertKind.Emergency, partNames, null, now);
+                outcome = await TrySendAsync(
+                    channel,
+                    () => SendOrEditAsync(channel, key, delivery, text, hash, now, ct),
+                    ct);
+            }
+            else if (delivery is not null)
+            {
+                outcome = !channel.IsPaused && channel.NotifyOnEnd
+                    ? await TrySendAsync(
+                        channel,
+                        () => SendEndAsync(channel, region, delivery, partNames, null, now, ct),
+                        ct)
+                    : Outcome.Closed;
+                delivery.IsClosed = true;
+                delivery.UpdatedAt = now;
+            }
+            else
+            {
+                continue;
+            }
+
+            switch (outcome)
+            {
+                case Outcome.Sent: sent++; break;
+                case Outcome.Edited: edited++; break;
+                case Outcome.Closed: closed++; break;
+                case Outcome.Failed: failed++; break;
+            }
+
+            if (outcome is not Outcome.Unchanged)
+            {
+                await Task.Delay(SendSpacing, ct);
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+        return new DispatchSummary(sent, edited, closed, failed);
+    }
+
     private async Task<Outcome> SendOrEditAsync(
         Channel channel,
-        RegionSettings region,
+        string deliveryKey,
         Delivery? delivery,
         string text,
         string hash,
@@ -160,7 +236,7 @@ public sealed class AlertDispatcher(
             db.Deliveries.Add(new Delivery
             {
                 ChatId = channel.ChatId,
-                RegionId = region.Id,
+                RegionId = deliveryKey,
                 TelegramMessageId = message.Id,
                 ContentHash = hash,
                 UpdatedAt = now,
@@ -179,12 +255,12 @@ public sealed class AlertDispatcher(
         Channel channel,
         RegionSettings region,
         Delivery delivery,
-        PopupClassification result,
+        IReadOnlyList<string> partNames,
         string? popupText,
         DateTimeOffset now,
         CancellationToken ct)
     {
-        var text = Render(channel, region, AlertKind.Ended, result, popupText, now);
+        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now);
         await WithMarkupFallback(
             text,
             t => bot.SendMessage(
@@ -206,16 +282,18 @@ public sealed class AlertDispatcher(
         Channel channel,
         RegionSettings region,
         AlertKind kind,
-        PopupClassification result,
+        IReadOnlyList<string> partNames,
         string? popupText,
         DateTimeOffset now)
     {
-        var partNames = result.PartIds
-            .Select(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Name ?? id)
-            .ToList();
         var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText);
         return MessageTemplate.Render(channel.Template, values);
     }
+
+    private static List<string> PartNames(RegionSettings region, PopupClassification result) =>
+        result.PartIds
+            .Select(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Name ?? id)
+            .ToList();
 
     // A saved template is validated, but if Telegram still rejects its markup the alert must go out.
     private async Task<T> WithMarkupFallback<T>(string text, Func<string, Task<T>> call, Channel channel)

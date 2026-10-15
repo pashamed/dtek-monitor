@@ -93,15 +93,61 @@ async function ingest(regionId, popupText) {
   if (!response.ok) throw new Error(`ingest returned ${response.status}`)
 }
 
+async function ingestGroups(region) {
+  const url = `https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/${region.YasnoRegionId}/dsos/${region.YasnoDsoId}/planned-outages`
+  const feed = await fetch(url, { signal: AbortSignal.timeout(30000) })
+  if (!feed.ok) throw new Error(`Yasno returned ${feed.status}`)
+
+  const data = await feed.json()
+  const groups = Object.fromEntries(
+    Object.entries(data)
+      .filter(([, value]) => value?.today?.status)
+      .map(([id, value]) => [
+        id,
+        { today: value.today.status, tomorrow: value.tomorrow?.status ?? "" },
+      ])
+  )
+  if (Object.keys(groups).length === 0) {
+    throw new Error("Yasno returned no groups")
+  }
+
+  const response = await fetch(`${INGEST_URL.replace(/\/+$/, "")}/groups`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ingest-secret": INGEST_SECRET,
+    },
+    body: JSON.stringify({ regionId: region.Id, groups }),
+    signal: AbortSignal.timeout(60000),
+  })
+  const body = await response.text()
+  const emergencies = Object.values(groups).filter(
+    (group) => group.today === "EmergencyShutdowns"
+  ).length
+  console.log(
+    `📡 ${region.Id} groups: ${Object.keys(groups).length} groups, ${emergencies} in emergency, HTTP ${response.status} ${body.slice(0, 300)}`
+  )
+  if (!response.ok) throw new Error(`group ingest returned ${response.status}`)
+}
+
 async function run() {
   if (!INGEST_URL || !INGEST_SECRET) {
     console.log("INGEST_URL / INGEST_SECRET not set, skipping.")
     return
   }
 
-  const browser = await chromium.launch({ headless: true })
   let failures = 0
 
+  for (const region of loadRegions().filter((r) => r.YasnoRegionId)) {
+    try {
+      await ingestGroups(region)
+    } catch (error) {
+      failures++
+      console.error(`⚠️ ${region.Id} groups: ${error.message}`)
+    }
+  }
+
+  const browser = await chromium.launch({ headless: true })
   try {
     for (const region of loadRegions()) {
       console.log(`🌀 ${region.Id}: ${region.SiteUrl}`)

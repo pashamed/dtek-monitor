@@ -27,6 +27,10 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("AddressLabel")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -37,6 +41,10 @@ namespace DtekBot.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("GroupId")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
@@ -65,6 +73,8 @@ namespace DtekBot.Api.Data.Migrations
                         .HasColumnType("nvarchar(256)");
 
                     b.HasKey("ChatId");
+
+                    b.HasIndex("GroupId");
 
                     b.HasIndex("RegionId", "IsActive");
 
@@ -124,6 +134,34 @@ namespace DtekBot.Api.Data.Migrations
                     b.HasIndex("ChatId", "RegionId");
 
                     b.ToTable("Deliveries");
+                });
+
+            modelBuilder.Entity("DtekBot.Api.Data.GroupState", b =>
+                {
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("GroupId")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("Today")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Tomorrow")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("RegionId", "GroupId");
+
+                    b.ToTable("GroupStates");
                 });
 
             modelBuilder.Entity("DtekBot.Api.Data.RegionState", b =>

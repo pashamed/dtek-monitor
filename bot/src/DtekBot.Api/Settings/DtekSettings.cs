@@ -15,6 +15,11 @@ public sealed class RegionSettings
     public string Name { get; set; } = "";
     public string SiteUrl { get; set; } = "";
     public string GridStatusSlug { get; set; } = "";
+
+    // Set only for regions covered by the Yasno address and group API (Kyiv).
+    public int YasnoRegionId { get; set; }
+    public int YasnoDsoId { get; set; }
+    public bool HasGroups => YasnoRegionId > 0 && YasnoDsoId > 0;
     public List<string> Aliases { get; set; } = [];
     public List<PartSettings> Parts { get; set; } = [];
 }
