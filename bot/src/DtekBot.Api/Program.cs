@@ -6,6 +6,7 @@ using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
 using DtekBot.Api.MiniApp;
 using DtekBot.Api.Parsing;
+using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -35,13 +36,27 @@ builder.Services.AddHttpClient<IYasnoClient, YasnoClient>(client =>
 builder.Services.AddSingleton<PopupClassifier>();
 builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 {
-    var token = sp.GetRequiredService<IConfiguration>()["Bot:Token"];
-    return new TelegramBotClient(string.IsNullOrWhiteSpace(token) ? "0:unset" : token);
+    var config = sp.GetRequiredService<IConfiguration>();
+    var token = config["Bot:Token"];
+
+    // Bot:ApiBaseUrl lets tests point the client at a fake Telegram server; it is unset in production.
+    var baseUrl = config["Bot:ApiBaseUrl"];
+    return new TelegramBotClient(new TelegramBotClientOptions(
+        string.IsNullOrWhiteSpace(token) ? "0:unset" : token,
+        string.IsNullOrWhiteSpace(baseUrl) ? null : baseUrl));
 });
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddScoped<AlertDispatcher>();
 builder.Services.AddScoped<ChatAccessService>();
 builder.Services.AddScoped<AddressCheckService>();
+builder.Services.AddScoped<OutageAssessmentService>();
+builder.Services.AddScoped<ScheduleNotifier>();
+builder.Services.AddSingleton<IScheduleProvider, ScheduleProvider>();
+builder.Services.AddHttpClient(ScheduleProvider.ClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
+});
 builder.Services.AddHttpClient<IWorkflowTrigger, GitHubWorkflowTrigger>(client =>
 {
     client.BaseAddress = new Uri("https://api.github.com/");
@@ -67,6 +82,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapMiniAppApi();
 app.MapGroupIngest();
 app.MapAddressCheckIngest();
+app.MapScheduleTick();
 
 app.MapPost("/webhook", async (
     Update update,

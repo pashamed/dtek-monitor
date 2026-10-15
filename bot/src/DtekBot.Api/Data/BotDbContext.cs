@@ -21,12 +21,42 @@ public sealed class Channel
 
     // Check the saved address when this chat gets a «Світло зникло» post (from a power-monitor app).
     public bool OutageTrigger { get; set; }
+
+    // Post and edit schedule messages for the chat's group (needs GroupId).
+    public bool ScheduleNotify { get; set; }
+    public ScheduleImage ScheduleImage { get; set; } = ScheduleImage.Grid;
     public string? GroupId { get; set; }
     public string? AddressLabel { get; set; }
 
     // Street and house exactly as the address picker produced them; these are what the DTEK site is queried with.
     public string? AddressStreet { get; set; }
     public string? AddressHouse { get; set; }
+}
+
+public enum SchedulePhase
+{
+    Off,
+    On,
+}
+
+// The one schedule message a chat currently shows; it is edited while the outage progresses.
+public sealed class ScheduleThread
+{
+    public long ChatId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string GroupId { get; set; } = "";
+    public int MessageId { get; set; }
+    public bool IsPhoto { get; set; }
+    public SchedulePhase Phase { get; set; }
+
+    // Start of the outage this message is about (unix seconds); identifies the episode.
+    public long EpisodeStart { get; set; }
+    public string ContentHash { get; set; } = "";
+    public string ImageVersion { get; set; } = "";
+
+    // The picture kind the message was posted with (a text-only fallback still remembers the requested kind).
+    public ScheduleImage ImageKind { get; set; } = ScheduleImage.Grid;
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 public enum AddressCheckStatus
@@ -134,9 +164,22 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<AddressCheck> AddressChecks => Set<AddressCheck>();
     public DbSet<AddressResult> AddressResults => Set<AddressResult>();
     public DbSet<KeyValue> KeyValues => Set<KeyValue>();
+    public DbSet<ScheduleThread> ScheduleThreads => Set<ScheduleThread>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<ScheduleThread>(e =>
+        {
+            e.HasKey(x => x.ChatId);
+            e.Property(x => x.ChatId).ValueGeneratedNever();
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.GroupId).HasMaxLength(16);
+            e.Property(x => x.Phase).HasConversion<string>().HasMaxLength(8);
+            e.Property(x => x.ContentHash).HasMaxLength(64);
+            e.Property(x => x.ImageVersion).HasMaxLength(64);
+            e.Property(x => x.ImageKind).HasConversion<string>().HasMaxLength(8);
+        });
+
         modelBuilder.Entity<AddressCheck>(e =>
         {
             e.HasKey(x => x.Id);
@@ -190,6 +233,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.Template).HasMaxLength(MessageTemplate.MaxLength);
             e.Property(x => x.GroupId).HasMaxLength(16);
             e.Property(x => x.AddressLabel).HasMaxLength(256);
+            e.Property(x => x.ScheduleImage).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.AddressStreet).HasMaxLength(256);
             e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.HasIndex(x => new { x.RegionId, x.IsActive });

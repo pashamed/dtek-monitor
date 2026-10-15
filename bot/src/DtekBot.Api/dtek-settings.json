@@ -6,6 +6,7 @@
         "Name": "м. Київ",
         "SiteUrl": "https://www.dtek-kem.com.ua/ua/shutdowns",
         "GridStatusSlug": "kyiv",
+        "OutageDataFile": "kyiv",
         "YasnoRegionId": 25,
         "YasnoDsoId": 902,
         "Aliases": ["київ", "києві", "столиця", "столиці"],
@@ -27,6 +28,7 @@
         "Name": "Київська область",
         "SiteUrl": "https://www.dtek-krem.com.ua/ua/shutdowns",
         "GridStatusSlug": "kyiv-oblast",
+        "OutageDataFile": "kyiv-region",
         "Aliases": ["київщина", "київщині", "київська область", "київській області"],
         "Parts": [
           { "Id": "brovary", "Name": "Броварський район", "Aliases": ["броварськ"] },
@@ -40,6 +42,7 @@
         "Name": "Дніпропетровська область",
         "SiteUrl": "https://www.dtek-dnem.com.ua/ua/shutdowns",
         "GridStatusSlug": "dnipropetrovsk",
+        "OutageDataFile": "dnipro",
         "Aliases": ["дніпропетровщина", "дніпропетровщині", "дніпропетровська область"],
         "Parts": []
       },
@@ -48,6 +51,7 @@
         "Name": "Одеська область",
         "SiteUrl": "https://www.dtek-oem.com.ua/ua/shutdowns",
         "GridStatusSlug": "odesa",
+        "OutageDataFile": "odesa",
         "Aliases": ["одещина", "одещині", "одеська область", "одеса"],
         "Parts": []
       },
@@ -74,6 +78,11 @@
     },
     "Polling": {
       "CancelRecheckDelaySeconds": 30
+    },
+    "Schedules": {
+      "BaseUrl": "https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/",
+      "CacheMinutes": 5,
+      "MaxStaleMinutes": 120
     },
     "AddressChecks": {
       "ChatCooldownMinutes": 10,

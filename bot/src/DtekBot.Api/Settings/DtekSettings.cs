@@ -8,6 +8,7 @@ public sealed class DtekSettings
     public ClassificationSettings Classification { get; set; } = new();
     public PollingSettings Polling { get; set; } = new();
     public AddressCheckSettings AddressChecks { get; set; } = new();
+    public ScheduleSettings Schedules { get; set; } = new();
 }
 
 public sealed class RegionSettings
@@ -21,6 +22,10 @@ public sealed class RegionSettings
     public int YasnoRegionId { get; set; }
     public int YasnoDsoId { get; set; }
     public bool HasGroups => YasnoRegionId > 0 && YasnoDsoId > 0;
+
+    // File name (without .json) in the outage-data-ua repo: data/<name>.json and images/<name>/.
+    public string OutageDataFile { get; set; } = "";
+    public bool HasSchedules => !string.IsNullOrEmpty(OutageDataFile);
     public List<string> Aliases { get; set; } = [];
     public List<PartSettings> Parts { get; set; } = [];
 }
@@ -43,6 +48,16 @@ public sealed class ClassificationSettings
 public sealed class PollingSettings
 {
     public int CancelRecheckDelaySeconds { get; set; } = 30;
+}
+
+// Schedules come from the public outage-data-ua repository (MIT), which republishes DTEK data every few minutes.
+public sealed class ScheduleSettings
+{
+    public string BaseUrl { get; set; } = "https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/";
+    public int CacheMinutes { get; set; } = 5;
+
+    // A failed refresh keeps serving the last good copy for this long.
+    public int MaxStaleMinutes { get; set; } = 120;
 }
 
 // Limits that keep on-demand address checks from hammering GitHub Actions and the DTEK site.

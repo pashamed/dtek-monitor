@@ -1,5 +1,6 @@
 using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
+using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
@@ -38,7 +39,7 @@ public static class MiniAppApi
         api.MapGet("/bootstrap", (HttpContext http, IOptionsMonitor<DtekSettings> settings) =>
         {
             var regions = settings.CurrentValue.Regions
-                .Select(r => new RegionDto(r.Id, r.Name, r.SiteUrl, r.Parts.Select(p => new PartDto(p.Id, p.Name)).ToList(), r.HasGroups))
+                .Select(r => new RegionDto(r.Id, r.Name, r.SiteUrl, r.Parts.Select(p => new PartDto(p.Id, p.Name)).ToList(), r.HasGroups, r.HasSchedules))
                 .ToList();
             return Json(new BootstrapDto(UserId(http), regions, MessageTemplate.Placeholders, MessageTemplate.Default, MessageTemplate.MaxLength));
         });
@@ -72,7 +73,7 @@ public static class MiniAppApi
             var target = request?.Chat?.Trim();
             if (string.IsNullOrEmpty(target))
             {
-                return Error("Вкажіть @імʼя каналу або числовий id чату.");
+                return Error("Вкажіть @імʼя каналу.");
             }
 
             Telegram.Bot.Types.ChatFullInfo chat;
@@ -84,7 +85,7 @@ public static class MiniAppApi
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return Error("Чат не знайдено. Додайте бота до каналу чи групи та спробуйте ще раз.");
+                return Error("Канал не знайдено. Додайте бота адміністратором у канал і спробуйте ще раз.");
             }
 
             if (chat.Type is ChatType.Private)
@@ -92,14 +93,19 @@ public static class MiniAppApi
                 return Error("Особистий чат підключати не потрібно, він уже є у списку.");
             }
 
+            if (chat.Type is not ChatType.Channel)
+            {
+                return Error("Підключіть канал, а не групу: бот публікує сповіщення в каналах.");
+            }
+
             if (!await access.BotIsMemberAsync(chat.Id, ct))
             {
-                return Error("Бот не доданий до цього чату.");
+                return Error("Бот не доданий до цього каналу.");
             }
 
             if (!await access.IsAdminAsync(chat.Id, userId, ct))
             {
-                return Error("Керувати чатом можуть лише його адміністратори.");
+                return Error("Керувати каналом можуть лише його адміністратори.");
             }
 
             var now = time.GetUtcNow();
@@ -186,6 +192,7 @@ public static class MiniAppApi
                     channel.AddressLabel = null;
                     channel.AddressStreet = null;
                     channel.AddressHouse = null;
+                    channel.ScheduleNotify = false;
                 }
 
                 channel.RegionId = region.Id;
@@ -199,6 +206,11 @@ public static class MiniAppApi
             channel.EditInPlace = dto.EditInPlace;
             channel.Template = template;
             channel.OutageTrigger = dto.OutageTrigger;
+
+            // Schedule messages need a group and a region that has schedules.
+            var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
+            channel.ScheduleNotify = dto.ScheduleNotify && channel.GroupId is not null && regionHasSchedules;
+            channel.ScheduleImage = dto.ScheduleImage;
             await db.SaveChangesAsync(ct);
 
             return Json(ToSummary(channel, userId));
@@ -358,8 +370,120 @@ public static class MiniAppApi
             channel.AddressLabel = null;
             channel.AddressStreet = null;
             channel.AddressHouse = null;
+            channel.ScheduleNotify = false;
             await db.SaveChangesAsync(ct);
             return Json(ToSummary(channel, userId));
+        });
+
+        api.MapGet("/schedules/groups", async (
+            string regionId,
+            IOptionsMonitor<DtekSettings> settings,
+            IScheduleProvider schedules,
+            CancellationToken ct) =>
+        {
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                r.HasSchedules && string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null)
+            {
+                return Error("Для цього регіону графіки недоступні.");
+            }
+
+            var snapshot = await schedules.GetAsync(region.Id, ct);
+            return snapshot is null
+                ? Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503)
+                : Json(snapshot.GroupIds.Select(id => new GroupItemDto(id, $"Черга {id}")).ToList());
+        });
+
+        // Manual group choice, for regions without the address picker.
+        api.MapPut("/chats/{chatId:long}/group", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            IScheduleProvider schedules,
+            IOptionsMonitor<DtekSettings> settings,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            var request = await http.Request.ReadFromJsonAsync<SetGroupRequest>(ApiJson.Options, ct);
+            if (request is null)
+            {
+                return Error("Порожній запит.");
+            }
+
+            if (!await access.CanManageAsync(chatId, userId, ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                r.HasSchedules && string.Equals(r.Id, request.RegionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null)
+            {
+                return Error("Для цього регіону графіки недоступні.");
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || channel.RegionId != region.Id)
+            {
+                return Error($"Спершу оберіть регіон «{region.Name}» і збережіть налаштування.");
+            }
+
+            var snapshot = await schedules.GetAsync(region.Id, ct);
+            if (snapshot is null)
+            {
+                return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
+            }
+
+            if (snapshot.Find(request.GroupId ?? "") is null)
+            {
+                return Error("Невідома черга.");
+            }
+
+            // A hand-picked group only replaces the detected one: the saved address stays for the DTEK check.
+            channel.GroupId = request.GroupId;
+            await db.SaveChangesAsync(ct);
+            return Json(ToSummary(channel, userId));
+        });
+
+        // What the bot would post for this group right now, so the user sees the picture and text before enabling it.
+        api.MapGet("/schedules/preview", async (
+            string regionId,
+            string groupId,
+            string? kind,
+            IOptionsMonitor<DtekSettings> settings,
+            IScheduleProvider schedules,
+            TimeProvider time,
+            CancellationToken ct) =>
+        {
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                r.HasSchedules && string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null)
+            {
+                return Error("Для цього регіону графіки недоступні.");
+            }
+
+            var snapshot = await schedules.GetAsync(region.Id, ct);
+            if (snapshot is null)
+            {
+                return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
+            }
+
+            var now = time.GetUtcNow();
+            var status = snapshot.StatusAt(groupId, now);
+            if (status is null)
+            {
+                return Error("Для цієї черги немає даних графіка.");
+            }
+
+            var imageKind = Enum.TryParse<ScheduleImage>(kind, ignoreCase: true, out var parsed) ? parsed : ScheduleImage.Grid;
+            var text = status.IsOff
+                ? ScheduleText.OffMessage(region.Name, groupId, status, now)
+                : ScheduleText.OnMessage(region.Name, groupId, status, null, now);
+            return Json(new SchedulePreviewDto(
+                groupId,
+                text,
+                ScheduleText.ImageUrl(settings.CurrentValue.Schedules, snapshot.DataFile, groupId, snapshot.Version, imageKind)));
         });
     }
 
@@ -399,7 +523,9 @@ public static class MiniAppApi
             c.Template,
             c.GroupId,
             c.AddressLabel,
-            c.OutageTrigger);
+            c.OutageTrigger,
+            c.ScheduleNotify,
+            c.ScheduleImage);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 }

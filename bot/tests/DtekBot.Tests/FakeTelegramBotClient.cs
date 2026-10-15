@@ -48,6 +48,9 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
             SendMessageRequest => new Message { Id = _nextMessageId++, Chat = new Chat { Id = 0 } },
             EditMessageTextRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
             AnswerCallbackQueryRequest => true,
+            SendPhotoRequest => NewPhotoMessage(),
+            EditMessageMediaRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
+            EditMessageCaptionRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
             GetMeRequest => new User { Id = BotId, IsBot = true, FirstName = "DtekBot", Username = "dtek_test_bot" },
             GetChatMemberRequest member => MemberFor(member.UserId),
             _ => throw new NotSupportedException($"Fake bot does not handle {request.GetType().Name}."),
@@ -62,6 +65,19 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
     public void SetStatus(long userId, ChatMemberStatus status) => MemberStatuses[userId] = status;
 
     public IEnumerable<AnswerCallbackQueryRequest> Answers => Requests.OfType<AnswerCallbackQueryRequest>();
+
+    public IEnumerable<SendPhotoRequest> Photos => Requests.OfType<SendPhotoRequest>();
+
+    public IEnumerable<EditMessageMediaRequest> MediaEdits => Requests.OfType<EditMessageMediaRequest>();
+
+    public IEnumerable<EditMessageCaptionRequest> CaptionEdits => Requests.OfType<EditMessageCaptionRequest>();
+
+    private Message NewPhotoMessage() => new()
+    {
+        Id = _nextMessageId++,
+        Chat = new Chat { Id = 0 },
+        Photo = [new PhotoSize { FileId = "f", FileUniqueId = "u", Width = 10, Height = 10 }],
+    };
 
     private ChatMember MemberFor(long userId)
     {

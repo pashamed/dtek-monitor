@@ -171,6 +171,14 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("ScheduleImage")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("nvarchar(8)");
+
+                    b.Property<bool>("ScheduleNotify")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Template")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
@@ -320,6 +328,58 @@ namespace DtekBot.Api.Data.Migrations
                     b.HasKey("RegionId");
 
                     b.ToTable("RegionStates");
+                });
+
+            modelBuilder.Entity("DtekBot.Api.Data.ScheduleThread", b =>
+                {
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("EpisodeStart")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("GroupId")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("ImageKind")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("nvarchar(8)");
+
+                    b.Property<string>("ImageVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<bool>("IsPhoto")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("MessageId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("nvarchar(8)");
+
+                    b.Property<string>("RegionId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("ChatId");
+
+                    b.ToTable("ScheduleThreads");
                 });
 #pragma warning restore 612, 618
         }

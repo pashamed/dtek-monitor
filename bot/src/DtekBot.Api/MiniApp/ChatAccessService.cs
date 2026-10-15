@@ -41,6 +41,7 @@ public sealed class ChatAccessService(ITelegramBotClient bot, BotDbContext db, I
         {
             channel.IsActive = false;
             channel.OutageTrigger = false;
+            channel.ScheduleNotify = false;
             channel.GroupId = null;
             channel.AddressLabel = null;
             channel.AddressStreet = null;
