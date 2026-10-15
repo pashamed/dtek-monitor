@@ -1,0 +1,206 @@
+@inject ApiClient Api
+@inject TelegramService Telegram
+
+<header class="topbar">
+    <button type="button" class="back" @onclick="OnBack">‹ Назад</button>
+    <h1>@Chat.Title</h1>
+</header>
+
+<section class="card">
+    <div class="field">
+        <label for="region">Регіон</label>
+        <select id="region" @bind="RegionId">
+            <option value="">— Оберіть регіон —</option>
+            @foreach (var region in Bootstrap.Regions)
+            {
+                <option value="@region.Id">@region.Name</option>
+            }
+        </select>
+    </div>
+
+    <div class="field">
+        <label for="part">Частина регіону</label>
+        <select id="part" @bind="PartId" disabled="@(Region is null)">
+            <option value="">Весь регіон</option>
+            @if (Region is not null)
+            {
+                @foreach (var part in Region.Parts)
+                {
+                    <option value="@part.Id">@part.Name</option>
+                }
+            }
+        </select>
+    </div>
+
+    <label class="switch-row">
+        <span>Підписка активна</span>
+        <input type="checkbox" class="switch" @bind="_isActive" />
+    </label>
+
+    <label class="switch-row">
+        <span>Пауза</span>
+        <input type="checkbox" class="switch" @bind="_isPaused" />
+    </label>
+
+    <div class="field">
+        <label>Які сповіщення</label>
+        <Segmented TValue="AlertFilter" Options="FilterOptions" @bind-Value="_filter" />
+    </div>
+
+    <label class="switch-row">
+        <span>Писати про завершення</span>
+        <input type="checkbox" class="switch" @bind="_notifyOnEnd" />
+    </label>
+
+    <div class="field">
+        <label>Оновлення</label>
+        <Segmented TValue="bool" Options="UpdateOptions" @bind-Value="_editInPlace" />
+    </div>
+</section>
+
+<section class="card">
+    <TemplateEditor Value="@_template"
+                    ValueChanged="OnTemplateChanged"
+                    Errors="_errors"
+                    Placeholders="Bootstrap.Placeholders"
+                    DefaultTemplate="@Bootstrap.DefaultTemplate"
+                    MaxLength="@Bootstrap.MaxTemplateLength"
+                    Region="@(Region ?? Bootstrap.Regions.FirstOrDefault())"
+                    Part="@Part" />
+</section>
+
+<div class="savebar">
+    @if (_serverError is not null)
+    {
+        <ul class="errors">
+            <li>@_serverError</li>
+            @foreach (var detail in _serverDetails)
+            {
+                <li>@detail</li>
+            }
+        </ul>
+    }
+    else if (_saved)
+    {
+        <div class="ok">Збережено ✓</div>
+    }
+    else if (NeedsRegion)
+    {
+        <div class="hint">Оберіть регіон або вимкніть підписку.</div>
+    }
+
+    <button type="button" class="btn primary" disabled="@(!CanSave)" @onclick="SaveAsync">
+        @(_saving ? "Збереження…" : "Зберегти")
+    </button>
+</div>
+
+@code {
+    private static readonly IReadOnlyList<(AlertFilter, string)> FilterOptions =
+        [(AlertFilter.All, "Усі"), (AlertFilter.EmergencyOnly, "Лише екстрені та аварії")];
+
+    private static readonly IReadOnlyList<(bool, string)> UpdateOptions =
+        [(true, "Редагувати те саме повідомлення"), (false, "Щоразу нове повідомлення")];
+
+    private string? _regionId;
+    private string? _partId;
+    private bool _isActive;
+    private bool _isPaused;
+    private AlertFilter _filter;
+    private bool _notifyOnEnd;
+    private bool _editInPlace;
+    private string _template = "";
+    private IReadOnlyList<string> _errors = [];
+    private bool _saving;
+    private bool _saved;
+    private string? _serverError;
+    private IReadOnlyList<string> _serverDetails = [];
+
+    [Parameter, EditorRequired] public ChatSummaryDto Chat { get; set; } = default!;
+
+    [Parameter, EditorRequired] public BootstrapDto Bootstrap { get; set; } = default!;
+
+    [Parameter] public EventCallback OnBack { get; set; }
+
+    [Parameter] public EventCallback<ChatSummaryDto> OnSaved { get; set; }
+
+    private RegionDto? Region => Bootstrap.Regions.FirstOrDefault(r => r.Id == _regionId);
+
+    private PartDto? Part => Region?.Parts.FirstOrDefault(p => p.Id == _partId);
+
+    private string RegionId
+    {
+        get => _regionId ?? "";
+        set
+        {
+            var next = string.IsNullOrEmpty(value) ? null : value;
+            if (next != _regionId)
+            {
+                _partId = null;
+            }
+
+            _regionId = next;
+        }
+    }
+
+    private string PartId
+    {
+        get => _partId ?? "";
+        set => _partId = string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    private bool NeedsRegion => _isActive && Region is null;
+
+    private bool CanSave => !_saving && _errors.Count == 0 && !NeedsRegion;
+
+    protected override void OnInitialized()
+    {
+        var s = Chat.Settings;
+        _regionId = s.RegionId;
+        _partId = s.PartId;
+        _isActive = s.IsActive;
+        _isPaused = s.IsPaused;
+        _filter = s.Filter;
+        _notifyOnEnd = s.NotifyOnEnd;
+        _editInPlace = s.EditInPlace;
+        _template = string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template;
+        _errors = MessageTemplate.Validate(_template);
+    }
+
+    private void OnTemplateChanged(string value)
+    {
+        _template = value;
+        _errors = MessageTemplate.Validate(value);
+        _saved = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSave)
+        {
+            return;
+        }
+
+        _saving = true;
+        _saved = false;
+        _serverError = null;
+        _serverDetails = [];
+
+        var template = string.IsNullOrWhiteSpace(_template) || _template == Bootstrap.DefaultTemplate ? null : _template;
+        var settings = new ChatSettingsDto(_regionId, _partId, _isActive, _isPaused, _filter, _notifyOnEnd, _editInPlace, template);
+        var result = await Api.SaveChatAsync(Chat.ChatId, settings);
+
+        _saving = false;
+        if (result.Ok && result.Value is not null)
+        {
+            _saved = true;
+            await Telegram.HapticAsync("success");
+            await OnSaved.InvokeAsync(result.Value);
+        }
+        else
+        {
+            _serverError = result.Error;
+            _serverDetails = result.Details;
+            await Telegram.HapticAsync("error");
+        }
+    }
+}

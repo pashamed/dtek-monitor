@@ -1,0 +1,90 @@
+@inject TelegramService Telegram
+
+<div class="field">
+    <label for="@TextAreaId">Шаблон повідомлення</label>
+    <textarea id="@TextAreaId" rows="8" maxlength="@MaxLength" spellcheck="false"
+              value="@Value" @oninput="OnInput"></textarea>
+    <div class="counter @(Value.Length >= MaxLength ? "warn" : null)">@Value.Length / @MaxLength</div>
+
+    @if (Errors.Count > 0)
+    {
+        <ul class="errors">
+            @foreach (var error in Errors)
+            {
+                <li>@error</li>
+            }
+        </ul>
+    }
+</div>
+
+<div class="chips" aria-label="Параметри">
+    @foreach (var p in Placeholders)
+    {
+        <button type="button" class="chip" @onmousedown:preventDefault @onclick="() => InsertAsync(p.Name)">{@p.Name}</button>
+    }
+</div>
+
+<button type="button" class="btn secondary" @onclick="Reset">Скинути до стандартного</button>
+
+<PlaceholderHelp Placeholders="Placeholders" />
+
+<div class="field">
+    <label>Попередній перегляд</label>
+    <Segmented TValue="AlertKind" Options="KindOptions" @bind-Value="_kind" />
+    <div class="bubble">
+        @if (Errors.Count == 0)
+        {
+            @((MarkupString)PreviewHtml())
+        }
+        else
+        {
+            <span class="hint">Виправте помилки, щоб побачити попередній перегляд.</span>
+        }
+    </div>
+</div>
+
+@code {
+    private const string TextAreaId = "template-editor";
+
+    private static readonly IReadOnlyList<(AlertKind, string)> KindOptions =
+        Enum.GetValues<AlertKind>().Select(k => (k, Labels.KindLabel(k))).ToList();
+
+    private AlertKind _kind = AlertKind.Emergency;
+
+    [Parameter] public string Value { get; set; } = "";
+
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter] public IReadOnlyList<string> Errors { get; set; } = [];
+
+    [Parameter, EditorRequired] public IReadOnlyList<PlaceholderDto> Placeholders { get; set; } = [];
+
+    [Parameter, EditorRequired] public string DefaultTemplate { get; set; } = "";
+
+    [Parameter] public int MaxLength { get; set; } = MessageTemplate.MaxLength;
+
+    [Parameter] public RegionDto? Region { get; set; }
+
+    [Parameter] public PartDto? Part { get; set; }
+
+    private Task OnInput(ChangeEventArgs e) => ValueChanged.InvokeAsync(e.Value as string ?? "");
+
+    private Task Reset() => ValueChanged.InvokeAsync(DefaultTemplate);
+
+    private async Task InsertAsync(string name)
+    {
+        var next = await Telegram.InsertAtCaretAsync(TextAreaId, "{" + name + "}", MaxLength);
+        if (next is not null)
+        {
+            await ValueChanged.InvokeAsync(next);
+        }
+    }
+
+    // Only called when Validate returned no errors, so the result is safe for MarkupString.
+    private string PreviewHtml() => MessageTemplate.RenderPreviewHtml(
+        Value,
+        _kind,
+        Region?.Name ?? "Регіон",
+        Part is null ? [] : [Part.Name],
+        Region?.SiteUrl ?? "");
+}

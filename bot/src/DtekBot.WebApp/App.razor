@@ -1,0 +1,117 @@
+@inject ApiClient Api
+@inject TelegramService Telegram
+
+@switch (_state)
+{
+    case State.Loading:
+        <div class="center-page">
+            <div class="spinner"></div>
+            <p>Завантаження…</p>
+        </div>
+        break;
+    case State.NotTelegram:
+        <div class="center-page">
+            <p>Відкрийте цей застосунок із Telegram (кнопка в меню бота).</p>
+        </div>
+        break;
+    case State.Failed:
+        <div class="center-page">
+            <p class="error-text">@_error</p>
+            <button type="button" class="btn primary" @onclick="LoadAsync">Спробувати ще раз</button>
+        </div>
+        break;
+    default:
+        <main class="app">
+            @if (SelectedChat is { } chat)
+            {
+                <ChatEditor @key="chat.ChatId" Chat="chat" Bootstrap="_bootstrap!" OnBack="GoBack" OnSaved="OnSaved" />
+            }
+            else
+            {
+                <ChatList Chats="_chats" Regions="_bootstrap!.Regions" OnSelect="Select" OnLinked="OnLinked" />
+            }
+        </main>
+        break;
+}
+
+@code {
+    private enum State { Loading, NotTelegram, Failed, Ready }
+
+    private State _state = State.Loading;
+    private string? _error;
+    private BootstrapDto? _bootstrap;
+    private List<ChatSummaryDto> _chats = [];
+    private long? _selectedId;
+
+    private ChatSummaryDto? SelectedChat => _chats.FirstOrDefault(c => c.ChatId == _selectedId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Telegram.ReadyAsync();
+        await Telegram.ExpandAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _state = State.Loading;
+        if (string.IsNullOrEmpty(await Telegram.GetInitDataAsync()))
+        {
+            _state = State.NotTelegram;
+            return;
+        }
+
+        var bootstrap = await Api.GetBootstrapAsync();
+        var chats = bootstrap.Ok ? await Api.GetChatsAsync() : null;
+
+        if (bootstrap.Unauthorized || chats?.Unauthorized == true)
+        {
+            _state = State.NotTelegram;
+        }
+        else if (!bootstrap.Ok || chats is not { Ok: true })
+        {
+            _error = bootstrap.Error ?? chats?.Error ?? "Не вдалося завантажити дані.";
+            _state = State.Failed;
+        }
+        else
+        {
+            _bootstrap = bootstrap.Value;
+            _chats = chats.Value!;
+            _state = State.Ready;
+        }
+    }
+
+    private async Task Select(ChatSummaryDto chat)
+    {
+        _selectedId = chat.ChatId;
+        await Telegram.ShowBackButtonAsync(() => _ = InvokeAsync(GoBack));
+    }
+
+    private async Task GoBack()
+    {
+        _selectedId = null;
+        await Telegram.HideBackButtonAsync();
+        StateHasChanged();
+    }
+
+    private void OnSaved(ChatSummaryDto saved) => Upsert(saved);
+
+    private async Task OnLinked(ChatSummaryDto linked)
+    {
+        Upsert(linked);
+        await Select(linked);
+    }
+
+    private void Upsert(ChatSummaryDto chat)
+    {
+        var index = _chats.FindIndex(c => c.ChatId == chat.ChatId);
+        if (index >= 0)
+        {
+            _chats[index] = chat;
+        }
+        else
+        {
+            _chats.Add(chat);
+        }
+    }
+}

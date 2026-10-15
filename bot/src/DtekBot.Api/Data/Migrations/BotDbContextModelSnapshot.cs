@@ -30,7 +30,21 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<bool>("EditInPlace")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Filter")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
                     b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPaused")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("NotifyOnEnd")
                         .HasColumnType("bit");
 
                     b.Property<string>("PartId")
@@ -42,11 +56,37 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("Template")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
                     b.HasKey("ChatId");
 
                     b.HasIndex("RegionId", "IsActive");
 
                     b.ToTable("Channels");
+                });
+
+            modelBuilder.Entity("DtekBot.Api.Data.ChannelAdmin", b =>
+                {
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("UserId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("LinkedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("ChatId", "UserId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("ChannelAdmins");
                 });
 
             modelBuilder.Entity("DtekBot.Api.Data.Delivery", b =>
@@ -108,6 +148,10 @@ namespace DtekBot.Api.Data.Migrations
 
                     b.Property<DateTimeOffset>("ObservedAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("PopupText")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");

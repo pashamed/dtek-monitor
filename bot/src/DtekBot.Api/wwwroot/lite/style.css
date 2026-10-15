@@ -1,0 +1,59 @@
+:root{
+  --bg:var(--tg-theme-bg-color,#fff);
+  --fg:var(--tg-theme-text-color,#000);
+  --hint:var(--tg-theme-hint-color,#707579);
+  --btn:var(--tg-theme-button-color,#3390ec);
+  --btn-fg:var(--tg-theme-button-text-color,#fff);
+  --sec:var(--tg-theme-secondary-bg-color,#f1f1f2);
+  --link:var(--tg-theme-link-color,#2481cc);
+  --err:#d93025;
+  --ok:#2e9e4f;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;overflow-x:hidden}
+body{background:var(--bg);color:var(--fg);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+main{padding:12px 12px calc(24px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto}
+h1{font-size:20px;margin:4px 0 12px}
+h2{font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--hint);margin:20px 0 8px;font-weight:600}
+.hint{color:var(--hint);font-size:14px;margin:6px 0}
+.card{display:block;width:100%;text-align:left;background:var(--sec);color:var(--fg);border:0;border-radius:12px;padding:14px;margin:0 0 8px;font:inherit;min-height:56px;cursor:pointer}
+.card b{display:block;overflow-wrap:anywhere}
+.card span{color:var(--hint);font-size:14px}
+.badge{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:10px;background:var(--btn);color:var(--btn-fg)!important;font-size:12px!important}
+input[type=text],select,textarea{width:100%;font:inherit;font-size:16px;color:var(--fg);background:var(--sec);border:1px solid transparent;border-radius:10px;padding:12px;min-height:48px;margin:0 0 8px}
+textarea{min-height:160px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--btn)}
+button{font:inherit;font-size:16px}
+.btn{display:block;width:100%;min-height:48px;border:0;border-radius:10px;background:var(--btn);color:var(--btn-fg);padding:12px;font-weight:600;cursor:pointer}
+.btn.sec{background:var(--sec);color:var(--link);font-weight:500}
+.btn:disabled{opacity:.5;cursor:default}
+.back{background:none;border:0;color:var(--link);padding:8px 0;min-height:44px;cursor:pointer}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:6px 0;border-bottom:1px solid var(--sec)}
+.row input[type=checkbox]{width:26px;height:26px;flex:none;accent-color:var(--btn)}
+.seg{display:flex;background:var(--sec);border-radius:10px;padding:3px;margin:0 0 8px}
+.seg button{flex:1;min-height:44px;border:0;border-radius:8px;background:none;color:var(--fg);padding:6px 4px;cursor:pointer}
+.seg button.on{background:var(--btn);color:var(--btn-fg);font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.chip{min-height:36px;border:0;border-radius:18px;background:var(--sec);color:var(--link);padding:4px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;cursor:pointer}
+.counter{text-align:right;color:var(--hint);font-size:13px;margin:-4px 0 6px}
+.errs{color:var(--err);font-size:14px;margin:0 0 8px;overflow-wrap:anywhere}
+.errs div{margin:2px 0}
+.msg{margin:10px 0;font-size:15px;overflow-wrap:anywhere}
+.msg.ok{color:var(--ok)}
+.msg.err{color:var(--err)}
+.bubble{background:var(--sec);border-radius:14px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;min-height:44px}
+.bubble a{color:var(--link)}
+.bubble blockquote{margin:4px 0;padding-left:10px;border-left:3px solid var(--btn)}
+.bubble tg-spoiler{background:var(--hint);color:transparent;border-radius:4px}
+.bubble tg-spoiler:hover{color:inherit}
+.bubble pre,.bubble code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px}
+.bubble pre{white-space:pre-wrap;margin:4px 0}
+details{background:var(--sec);border-radius:12px;padding:10px 14px;margin:12px 0}
+summary{cursor:pointer;min-height:32px;font-weight:600}
+.ph{padding:8px 0;border-top:1px solid var(--bg);font-size:14px;overflow-wrap:anywhere}
+.ph code{color:var(--link);font-weight:600}
+.ph small{display:block;color:var(--hint)}
+.save{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom));margin-top:16px}
+.linkrow{display:flex;gap:8px}
+.linkrow input{margin:0}
+.linkrow .btn{width:auto;flex:none;padding:12px 16px}
