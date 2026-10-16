@@ -19,8 +19,6 @@ public sealed class BotUpdateHandler(
     TimeProvider time,
     ILogger<BotUpdateHandler> logger)
 {
-    private static readonly Regex PowerOutPattern = new(@"світло\s+зникло", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     public async Task HandleAsync(Update update, CancellationToken ct)
     {
         if (update.MyChatMember is { } membership)
@@ -47,10 +45,10 @@ public sealed class BotUpdateHandler(
             return;
         }
 
-        // A power-monitor app posts «Світло зникло» to a channel the bot administers.
-        if (update.ChannelPost is { } post && !text.StartsWith('/') && PowerOutPattern.IsMatch(text))
+        // A power-monitor app posts «Світло зникло» (or the channel's own phrase) to a channel the bot administers.
+        if (update.ChannelPost is { } post && !text.StartsWith('/'))
         {
-            await HandlePowerOutPostAsync(post, ct);
+            await HandleChannelPostAsync(post, text, ct);
             return;
         }
 
@@ -62,10 +60,19 @@ public sealed class BotUpdateHandler(
     }
 
     // Reacts to a "power is out" post. The assessment goes from the cheapest explanation to the DTEK address lookup.
-    private async Task HandlePowerOutPostAsync(Message post, CancellationToken ct)
+    // Every post of a trigger-enabled channel is remembered (a few of them) so the editor can warn about a wrong phrase.
+    private async Task HandleChannelPostAsync(Message post, string text, CancellationToken ct)
     {
         var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == post.Chat.Id && c.IsActive && c.OutageTrigger, ct);
         if (channel is null)
+        {
+            return;
+        }
+
+        channel.RecentPosts = OutageTriggerMatcher.AppendRecent(channel.RecentPosts, text);
+        await db.SaveChangesAsync(ct);
+
+        if (!OutageTriggerMatcher.IsMatch(channel.OutageTriggerPattern, text))
         {
             return;
         }
@@ -111,9 +118,7 @@ public sealed class BotUpdateHandler(
         {
             if (channel is not null)
             {
-                channel.IsActive = false;
-                channel.OutageTrigger = false;
-                channel.ScheduleNotify = false;
+                await ChannelReset.ResetAsync(db, channel, ct);
                 await db.SaveChangesAsync(ct);
             }
 
@@ -126,10 +131,30 @@ public sealed class BotUpdateHandler(
         }
 
         var now = time.GetUtcNow();
+        var managed = channel is not null && await db.ChannelAdmins.AnyAsync(a => a.ChatId == chat.Id, ct);
+
+        // Telegram also reports changes of the bot's own rights; that is not a (re)connection, so it neither links
+        // the person who changed them (a channel removed from the list must stay removed) nor resets anything.
+        if (change.OldChatMember.Status == ChatMemberStatus.Administrator)
+        {
+            if (channel is not null && managed)
+            {
+                channel.Title = chat.Title ?? chat.Username ?? channel.Title;
+                await db.SaveChangesAsync(ct);
+            }
+
+            return;
+        }
+
         if (channel is null)
         {
             channel = new Channel { ChatId = chat.Id, IsActive = false, CreatedAt = now };
             db.Channels.Add(channel);
+        }
+        else if (!managed)
+        {
+            // Nobody manages it any more, so whatever was left over from before is not wanted.
+            await ChannelReset.ResetAsync(db, channel, ct);
         }
 
         channel.Title = chat.Title ?? chat.Username ?? channel.Title;

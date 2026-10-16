@@ -464,6 +464,21 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
     }
 
+    [Fact]
+    public async Task PowerOutPost_CustomPhrase_ReplacesTheDefault_AndPostsAreRemembered()
+    {
+        AddTriggerChannel(c => c.OutageTriggerPattern = "зараз світло зникло");
+
+        await PostAsync("🔴 14:24 Світло зникло");
+        Assert.Empty(_f.Bot.Sent);
+
+        await PostAsync("Увага, зараз світло зникло!");
+        Assert.Contains("⏳", Assert.Single(_f.Bot.Sent).Text);
+
+        var recent = OutageTriggerMatcher.ParseRecent(Row(ChannelChat).RecentPosts);
+        Assert.Equal(["🔴 14:24 Світло зникло", "Увага, зараз світло зникло!"], recent);
+    }
+
     [Theory]
     [InlineData("🟢 15:10 Світло з'явилось\n🕓 Його не було 0год 46хв")]
     [InlineData("Світло є")]
@@ -848,7 +863,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
     private static readonly User BotUser = new() { Id = 1, FirstName = "Bot", IsBot = true };
 
-    private Update MembershipUpdate(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false) => new()
+    private Update MembershipUpdate(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false, ChatMember? oldMember = null) => new()
     {
         Id = ++_updateId,
         MyChatMember = new ChatMemberUpdated
@@ -856,7 +871,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
             Chat = chat,
             From = new User { Id = fromId, FirstName = "A", IsBot = fromIsBot },
             Date = DateTime.UtcNow,
-            OldChatMember = new ChatMemberLeft { User = BotUser },
+            OldChatMember = oldMember ?? new ChatMemberLeft { User = BotUser },
             NewChatMember = newMember,
         },
     };
@@ -866,8 +881,8 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
     private static ChatMemberLeft LeftMember() => new() { User = BotUser };
 
-    private Task MembershipAsync(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false) =>
-        HandleAsync(MembershipUpdate(chat, newMember, fromId, fromIsBot));
+    private Task MembershipAsync(Chat chat, ChatMember newMember, long fromId = Adder, bool fromIsBot = false, ChatMember? oldMember = null) =>
+        HandleAsync(MembershipUpdate(chat, newMember, fromId, fromIsBot, oldMember));
 
     private const string ConnectedText =
         "✅ Канал «Мій канал» підключено.\n\nВідкрийте редактор (кнопка меню біля поля вводу або /start), щоб обрати регіон і адресу.";
@@ -943,7 +958,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task ExistingChannelRow_KeepsItsSettings_AndItsActiveState()
+    public async Task ExistingChannelRowManagedByAnotherAdmin_KeepsItsSettings_AndItsActiveState()
     {
         _f.AddChannel(NewChannel, c =>
         {
@@ -955,6 +970,8 @@ public sealed class BotUpdateHandlerTests : IDisposable
             c.GroupId = "45.1";
             c.IsActive = true;
         });
+        _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = NewChannel, UserId = 78, LinkedAt = DateTimeOffset.UtcNow });
+        _f.Db.SaveChanges();
 
         await MembershipAsync(NewChannelChat(), AdminMember());
 
@@ -1048,18 +1065,23 @@ public sealed class BotUpdateHandlerTests : IDisposable
     [Theory]
     [InlineData(ChatMemberStatus.Left)]
     [InlineData(ChatMemberStatus.Kicked)]
-    public async Task BotRemoved_DeactivatesTheChannel_AndSwitchesOffReactions_KeepingSettings(ChatMemberStatus status)
+    public async Task BotRemoved_ResetsTheChannelToANewUnsubscribedOne_AndDropsItsThreadsAndOpenDeliveries(ChatMemberStatus status)
     {
         _f.AddChannel(NewChannel, c =>
         {
-            c.PartId = "right-bank";
-            c.Template = "<b>{message}</b>";
-            c.OutageTrigger = true;
-            c.ScheduleNotify = true;
-            c.GroupId = "45.1";
-            c.AddressStreet = "вул. А";
-            c.Filter = AlertFilter.EmergencyOnly;
+            ChannelAssert.Customize(c);
+            c.Title = "Мій канал";
         });
+        _f.AddOpenDelivery(NewChannel, 1);
+        _f.AddOpenDelivery(ChannelChat, 2);
+        _f.Db.Deliveries.Add(new Delivery { ChatId = NewChannel, RegionId = "kyiv", TelegramMessageId = 3, ContentHash = "h", IsClosed = true, UpdatedAt = DateTimeOffset.UtcNow });
+        foreach (var chat in new[] { NewChannel, ChannelChat })
+        {
+            _f.Db.ScheduleThreads.Add(new ScheduleThread { ChatId = chat, RegionId = "kyiv", GroupId = "45.1", MessageId = 5, UpdatedAt = DateTimeOffset.UtcNow });
+            _f.Db.SchedulePostThreads.Add(new SchedulePostThread { ChatId = chat, RegionId = "kyiv", GroupId = "45.1", MessageId = 6, DateKey = "2026-07-15", UpdatedAt = DateTimeOffset.UtcNow });
+        }
+
+        _f.Db.SaveChanges();
         ChatMember removed = status == ChatMemberStatus.Left
             ? new ChatMemberLeft { User = BotUser }
             : new ChatMemberBanned { User = BotUser };
@@ -1067,16 +1089,93 @@ public sealed class BotUpdateHandlerTests : IDisposable
         await MembershipAsync(NewChannelChat(), removed);
 
         var channel = Row(NewChannel);
-        Assert.False(channel.IsActive);
-        Assert.False(channel.OutageTrigger);
-        Assert.False(channel.ScheduleNotify);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Equal("right-bank", channel.PartId);
-        Assert.Equal("<b>{message}</b>", channel.Template);
-        Assert.Equal("45.1", channel.GroupId);
-        Assert.Equal("вул. А", channel.AddressStreet);
-        Assert.Equal(AlertFilter.EmergencyOnly, channel.Filter);
+        ChannelAssert.IsCleanUnsubscribed(channel);
+        Assert.Equal("Мій канал", channel.Title);
+        Assert.Equal([ChannelChat], _f.Db.ScheduleThreads.AsNoTracking().Select(t => t.ChatId).ToList());
+        Assert.Equal([ChannelChat], _f.Db.SchedulePostThreads.AsNoTracking().Select(t => t.ChatId).ToList());
+        Assert.Empty(_f.Db.Deliveries.AsNoTracking().Where(d => d.ChatId == NewChannel && !d.IsClosed));
+        Assert.Single(_f.Db.Deliveries.AsNoTracking().Where(d => d.ChatId == NewChannel && d.IsClosed));
+        Assert.Single(_f.Db.Deliveries.AsNoTracking().Where(d => d.ChatId == ChannelChat));
         Assert.Empty(_f.Bot.Requests);
+    }
+
+    // Re-adding the bot after the channel's last admin removed it from the list gives a brand-new channel.
+    [Fact]
+    public async Task ReAdded_AfterTheLastAdminUnlinked_IsACleanUnsubscribedChannel()
+    {
+        _f.AddChannel(NewChannel, c =>
+        {
+            ChannelAssert.Customize(c);
+            c.Title = "Старий";
+        });
+
+        await MembershipAsync(NewChannelChat(title: "Новий"), AdminMember());
+
+        var channel = Row(NewChannel);
+        ChannelAssert.IsCleanUnsubscribed(channel);
+        Assert.Equal("Новий", channel.Title);
+        Assert.Equal(Adder, Assert.Single(_f.Db.ChannelAdmins.AsNoTracking()).UserId);
+    }
+
+    [Fact]
+    public async Task ReAdded_WhileAnotherAdminStillManagesIt_KeepsTheirSettings()
+    {
+        _f.AddChannel(NewChannel, ChannelAssert.Customize);
+        _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = NewChannel, UserId = 78, LinkedAt = DateTimeOffset.UtcNow });
+        _f.Db.SaveChanges();
+
+        await MembershipAsync(NewChannelChat(), AdminMember());
+
+        var channel = Row(NewChannel);
+        Assert.True(channel.IsActive);
+        Assert.Equal("kyiv", channel.RegionId);
+        Assert.Equal("45.1", channel.GroupId);
+        Assert.Equal(2, _f.Db.ChannelAdmins.AsNoTracking().Count());
+    }
+
+    // Telegram also sends my_chat_member when the bot's rights change; that must not bring a removed channel back.
+    [Fact]
+    public async Task RightsChange_OfAChannelNobodyManages_DoesNotRelinkTheActor_NorTouchSettings()
+    {
+        _f.AddChannel(NewChannel, c => c.Title = "Мій канал");
+
+        await MembershipAsync(NewChannelChat(), AdminMember(), oldMember: AdminMember(canPost: false));
+
+        Assert.Empty(_f.Db.ChannelAdmins);
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Equal("Мій канал", Row(NewChannel).Title);
+    }
+
+    [Fact]
+    public async Task RightsChange_OfAManagedChannel_KeepsEverything_WithoutADm()
+    {
+        _f.AddChannel(NewChannel, ChannelAssert.Customize);
+        _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = NewChannel, UserId = 78, LinkedAt = DateTimeOffset.UtcNow });
+        _f.Db.SaveChanges();
+
+        await MembershipAsync(NewChannelChat(), AdminMember(), fromId: 79, oldMember: AdminMember(canPost: false));
+
+        Assert.True(Row(NewChannel).IsActive);
+        Assert.Equal([78L], _f.Db.ChannelAdmins.AsNoTracking().Select(a => a.UserId).ToList());
+        Assert.Empty(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task UnlinkedThenReAdded_EndToEnd_IsCleanAndUnsubscribed()
+    {
+        await MembershipAsync(NewChannelChat(), AdminMember());
+        _f.Db.Channels.Single(c => c.ChatId == NewChannel).IsActive = true;
+        _f.Db.SaveChanges();
+        var access = new ChatAccessService(_f.Bot, _f.Db, NullLogger<ChatAccessService>.Instance);
+        await access.UnlinkAsync(NewChannel, Adder, DateTimeOffset.UtcNow, CancellationToken.None);
+
+        await MembershipAsync(NewChannelChat(), AdminMember(), oldMember: AdminMember(canPost: false));
+        Assert.Empty(_f.Db.ChannelAdmins);
+
+        await MembershipAsync(NewChannelChat(), AdminMember());
+
+        Assert.False(Row(NewChannel).IsActive);
+        Assert.Single(_f.Db.ChannelAdmins);
     }
 
     [Fact]

@@ -265,7 +265,7 @@ public class MessageTemplateTests
     [InlineData(AlertKind.Emergency, "\U0001F6A8")]
     [InlineData(AlertKind.Accident, "\u26A0")]
     [InlineData(AlertKind.Unknown, "\u2139")]
-    [InlineData(AlertKind.Ended, "\u2705")]
+    [InlineData(AlertKind.Ended, "\u2139\uFE0F")]
     public void RenderPreviewHtml_ContainsEmojiAndRegionName(AlertKind kind, string emoji)
     {
         var html = MessageTemplate.RenderPreviewHtml(null, kind, "м. Київ", [], "https://x.y");

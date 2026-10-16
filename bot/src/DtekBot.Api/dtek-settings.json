@@ -10,76 +10,58 @@
         "YasnoRegionId": 25,
         "YasnoDsoId": 902,
         "Aliases": ["київ", "києві", "столиця", "столиці"],
+        "RetiredPartLabels": { "right-bank": "Правий берег", "left-bank": "Лівий берег" },
+        "RetiredParts": { "right-bank": ["holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi"], "left-bank": ["darnytskyi", "desnianskyi", "dniprovskyi"] },
         "Parts": [
-          {
-            "Id": "right-bank",
-            "Name": "Правий берег",
-            "Aliases": ["правого", "правий", "правому", "правобереж"],
-            "Children": [
-              "holosiivskyi",
-              "obolonskyi",
-              "pecherskyi",
-              "podilskyi",
-              "sviatoshynskyi",
-              "solomianskyi",
-              "shevchenkivskyi"
-            ]
-          },
-          {
-            "Id": "left-bank",
-            "Name": "Лівий берег",
-            "Aliases": ["лівого", "лівий", "лівому", "лівобереж"],
-            "Children": ["darnytskyi", "desnianskyi", "dniprovskyi"]
-          },
           {
             "Id": "holosiivskyi",
             "Name": "Голосіївський район",
-            "Aliases": ["голосіївськ"]
+            "Aliases": ["голосіївськ", "правого", "правий", "правому", "правобереж"]
           },
           {
             "Id": "darnytskyi",
             "Name": "Дарницький район",
-            "Aliases": ["дарницьк"]
+            "Aliases": ["дарницьк", "лівого", "лівий", "лівому", "лівобереж"]
           },
           {
             "Id": "desnianskyi",
             "Name": "Деснянський район",
-            "Aliases": ["деснянськ"]
+            "Aliases": ["деснянськ", "лівого", "лівий", "лівому", "лівобереж"]
           },
           {
             "Id": "dniprovskyi",
             "Name": "Дніпровський район",
-            "Aliases": ["дніпровськ"]
+            "Aliases": ["дніпровськ", "лівого", "лівий", "лівому", "лівобереж"]
           },
           {
             "Id": "obolonskyi",
             "Name": "Оболонський район",
-            "Aliases": ["оболонськ"]
+            "Aliases": ["оболонськ", "правого", "правий", "правому", "правобереж"]
           },
           {
             "Id": "pecherskyi",
             "Name": "Печерський район",
-            "Aliases": ["печерськ"]
+            "Aliases": ["печерськ", "правого", "правий", "правому", "правобереж"]
           },
           {
             "Id": "podilskyi",
             "Name": "Подільський район",
-            "Aliases": ["подільськ"]
+            "Aliases": ["подільськ", "правого", "правий", "правому", "правобереж"]
           },
           {
             "Id": "sviatoshynskyi",
             "Name": "Святошинський район",
-            "Aliases": ["святошинськ"]
+            "Aliases": ["святошинськ", "правого", "правий", "правому", "правобереж"]
           },
           {
             "Id": "solomianskyi",
             "Name": "Солом'янський район",
-            "Aliases": ["солом'янськ", "солом’янськ", "соломянськ"]
+            "Aliases": ["солом'янськ", "солом’янськ", "соломянськ", "правого", "правий", "правому", "правобереж"]
           },
           {
             "Id": "shevchenkivskyi",
             "Name": "Шевченківський район",
-            "Aliases": ["шевченківськ"]
+            "Aliases": ["шевченківськ", "правого", "правий", "правому", "правобереж"]
           }
         ]
       },
@@ -330,6 +312,11 @@
       "BaseUrl": "https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/",
       "CacheMinutes": 5,
       "MaxStaleMinutes": 120
+    },
+    "Grid": {
+      "FeedUrl": "https://raw.githubusercontent.com/lasercat12/ua-power-status/main/data/regions.json",
+      "CacheMinutes": 1,
+      "MaxAgeMinutes": 45
     },
     "AddressChecks": {
       "ChatCooldownMinutes": 10,

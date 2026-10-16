@@ -21,7 +21,7 @@ public class SettingsSanityTests
     }
 
     [Theory]
-    [InlineData("kyiv", 12)]
+    [InlineData("kyiv", 10)]
     [InlineData("kyiv-oblast", 7)]
     [InlineData("dnipropetrovsk", 7)]
     [InlineData("odesa", 11)]
@@ -120,16 +120,45 @@ public class SettingsSanityTests
     }
 
     [Fact]
-    public void Children_ExactParents_AreTheKyivBanksAndKramatorsk()
+    public void Children_ExactParents_AreOnlyKramatorsk()
     {
         var parents = Settings.Regions
             .SelectMany(r => r.Parts.Where(p => p.Children.Count > 0).Select(p => $"{r.Id}/{p.Id}"))
             .ToList();
 
-        Assert.Equal(["kyiv/right-bank", "kyiv/left-bank", "donetsk/kramatorsk"], parents);
-        Assert.Equal(7, Region("kyiv").Parts.Single(p => p.Id == "right-bank").Children.Count);
-        Assert.Equal(3, Region("kyiv").Parts.Single(p => p.Id == "left-bank").Children.Count);
+        Assert.Equal(["donetsk/kramatorsk"], parents);
         Assert.Equal(3, Region("donetsk").Parts.Single(p => p.Id == "kramatorsk").Children.Count);
+    }
+
+    [Fact]
+    public void KyivBanks_AreNotParts_ButTheirKeywordsLiveOnTheirDistricts_AndTheOldIdsAreRetired()
+    {
+        var kyiv = Region("kyiv");
+        string[] right = ["holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi"];
+        string[] left = ["darnytskyi", "desnianskyi", "dniprovskyi"];
+
+        Assert.DoesNotContain(kyiv.Parts, p => p.Id is "right-bank" or "left-bank");
+        Assert.Equal(right, kyiv.RetiredParts["right-bank"]);
+        Assert.Equal(left, kyiv.RetiredParts["left-bank"]);
+        foreach (var part in kyiv.Parts)
+        {
+            Assert.Equal(right.Contains(part.Id), part.Aliases.Contains("правобереж"));
+            Assert.Equal(left.Contains(part.Id), part.Aliases.Contains("лівобереж"));
+        }
+    }
+
+    [Fact]
+    public void RetiredParts_NeverClashWithCurrentParts_AndPointToExistingOnes()
+    {
+        foreach (var region in Settings.Regions)
+        {
+            var known = region.Parts.Select(p => p.Id).ToHashSet();
+            foreach (var (retired, replacements) in region.RetiredParts)
+            {
+                Assert.DoesNotContain(retired, known);
+                Assert.All(replacements, id => Assert.Contains(id, known));
+            }
+        }
     }
 
     [Fact]
@@ -173,9 +202,10 @@ public class SettingsSanityTests
             {
                 foreach (var b in region.Parts.Where(p => p.Id != a.Id))
                 {
+                    // Identical aliases are the Kyiv bank keywords that all districts of a bank share on purpose.
                     foreach (var left in a.Aliases)
                     {
-                        Assert.DoesNotContain(b.Aliases, right => right.Contains(left, StringComparison.Ordinal));
+                        Assert.DoesNotContain(b.Aliases, right => right != left && right.Contains(left, StringComparison.Ordinal));
                     }
                 }
             }
@@ -224,8 +254,6 @@ public class SettingsSanityTests
     {
         Assert.Equal("м. Київ", Region("kyiv").Name);
         Assert.Equal("https://www.dtek-kem.com.ua/ua/shutdowns", Region("kyiv").SiteUrl);
-        Assert.Equal("Правий берег", Region("kyiv").Parts.Single(p => p.Id == "right-bank").Name);
-        Assert.Equal("Лівий берег", Region("kyiv").Parts.Single(p => p.Id == "left-bank").Name);
     }
 
     [Fact]

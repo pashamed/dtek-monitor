@@ -1,0 +1,17 @@
+namespace DtekBot.Shared;
+
+// The Svitlobot channel key is a secret: it is only ever sent to the server (SetSvitlobotKeyRequest) and never returned.
+public sealed record SetSvitlobotKeyRequest(string? Key);
+
+public sealed record SvitlobotTemplateDto(int Id, string Name);
+
+// Live state of the channel's Svitlobot schedule. Without a stored key: HasKey false, no templates, no schedule.
+public sealed record SvitlobotStateDto(bool HasKey, IReadOnlyList<SvitlobotTemplateDto> Templates, bool HasSchedule);
+
+public sealed record SetSvitlobotTemplateRequest(int TemplateId);
+
+// Optional body of the push call; a missing body or field means true: "possible" (maybe) outages count as outages.
+public sealed record SvitlobotPushRequest(bool? IncludeMaybe = null);
+
+// Answer of the write calls; HasSchedule is the state of the Svitlobot schedule afterwards.
+public sealed record SvitlobotResultDto(string Message, bool HasSchedule);

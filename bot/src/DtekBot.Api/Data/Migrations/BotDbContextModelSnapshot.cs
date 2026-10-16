@@ -162,6 +162,10 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<bool>("OutageTrigger")
                         .HasColumnType("bit");
 
+                    b.Property<string>("OutageTriggerPattern")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<string>("PartId")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
@@ -169,6 +173,9 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("PartIds")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("RecentPosts")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("RegionId")
                         .IsRequired()
@@ -200,6 +207,13 @@ namespace DtekBot.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("SlotSettings")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SvitlobotKey")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
 
                     b.Property<string>("Template")
                         .HasMaxLength(1000)
@@ -276,6 +290,35 @@ namespace DtekBot.Api.Data.Migrations
                     b.ToTable("Deliveries");
                 });
 
+            modelBuilder.Entity("DtekBot.Api.Data.GridState", b =>
+                {
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("FeedGeneratedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("Since")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("RegionId");
+
+                    b.ToTable("GridStates");
+                });
+
             modelBuilder.Entity("DtekBot.Api.Data.GroupState", b =>
                 {
                     b.Property<string>("RegionId")
@@ -342,6 +385,10 @@ namespace DtekBot.Api.Data.Migrations
 
                     b.Property<DateTimeOffset>("ObservedAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("PartIds")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
 
                     b.Property<string>("PopupText")
                         .HasMaxLength(4000)

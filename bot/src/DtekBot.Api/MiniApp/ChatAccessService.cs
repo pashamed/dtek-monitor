@@ -39,13 +39,7 @@ public sealed class ChatAccessService(ITelegramBotClient bot, BotDbContext db, I
         var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
         if (channel is not null)
         {
-            channel.IsActive = false;
-            channel.OutageTrigger = false;
-            channel.ScheduleNotify = false;
-            channel.GroupId = null;
-            channel.AddressLabel = null;
-            channel.AddressStreet = null;
-            channel.AddressHouse = null;
+            await ChannelReset.ResetAsync(db, channel, ct);
         }
 
         // Queued address checks for a chat nobody manages any more are dropped without a reply.

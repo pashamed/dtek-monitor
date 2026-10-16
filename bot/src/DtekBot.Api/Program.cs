@@ -3,11 +3,13 @@ using DtekBot.Api;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
+using DtekBot.Api.Grid;
 using DtekBot.Api.Groups;
 using DtekBot.Api.MiniApp;
 using DtekBot.Api.Parsing;
 using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
+using DtekBot.Api.Svitlobot;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
@@ -34,6 +36,16 @@ builder.Services.AddHttpClient<IYasnoClient, YasnoClient>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
 });
 builder.Services.AddSingleton<PopupClassifier>();
+builder.Services.AddSingleton<SvitlobotKeyProtector>();
+// The channel key is in the query string: no request logging for this client.
+builder.Services.AddHttpClient<ISvitlobotClient, SvitlobotClient>(client =>
+{
+    var baseUrl = builder.Configuration["Svitlobot:BaseUrl"];
+    client.BaseAddress = new Uri(string.IsNullOrWhiteSpace(baseUrl) ? SvitlobotClient.DefaultBaseUrl : baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.MaxResponseContentBufferSize = 256 * 1024;
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
+}).RemoveAllLoggers();
 builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
@@ -48,6 +60,14 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddHostedService<BotMenuInitializer>();
 builder.Services.AddScoped<AlertDispatcher>();
+builder.Services.AddScoped<RegionAlertCoordinator>();
+builder.Services.AddScoped<DtekBot.Api.Grid.GridTickService>();
+builder.Services.AddSingleton<DtekBot.Api.Grid.IGridStatusProvider, DtekBot.Api.Grid.GridStatusProvider>();
+builder.Services.AddHttpClient(DtekBot.Api.Grid.GridStatusProvider.ClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
+});
 builder.Services.AddScoped<ChatAccessService>();
 builder.Services.AddScoped<AddressCheckService>();
 builder.Services.AddScoped<OutageAssessmentService>();
@@ -86,6 +106,7 @@ app.MapMiniAppApi();
 app.MapGroupIngest();
 app.MapAddressCheckIngest();
 app.MapScheduleTick();
+app.MapGridTick();
 
 app.MapPost("/webhook", async (
     Update update,
@@ -119,7 +140,7 @@ app.MapPost("/ingest", async (
     HttpRequest request,
     BotDbContext db,
     PopupClassifier classifier,
-    AlertDispatcher dispatcher,
+    RegionAlertCoordinator coordinator,
     IOptionsMonitor<DtekSettings> settings,
     TimeProvider time,
     IConfiguration config,
@@ -162,12 +183,13 @@ app.MapPost("/ingest", async (
         state.NormalizedText = result.NormalizedText;
         state.PopupText = body.PopupText?.Trim() is { Length: > 4000 } longText ? longText[..4000] : body.PopupText?.Trim();
         state.Hash = result.Hash;
+        state.PartIdList = result.PartIds;
         state.UpdatedAt = now;
     }
 
     await db.SaveChangesAsync(ct);
 
-    var dispatch = changed ? await dispatcher.DispatchAsync(region, result, state.PopupText, ct) : null;
+    var dispatch = changed ? await coordinator.RecomputeAsync(region.Id, ct) : null;
     logger.LogInformation("Ingest {Region}: changed={Changed} dispatch={@Dispatch}", region.Id, changed, dispatch);
 
     return Results.Ok(new

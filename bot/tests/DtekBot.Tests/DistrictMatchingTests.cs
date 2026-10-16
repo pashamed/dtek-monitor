@@ -293,7 +293,7 @@ public sealed class DistrictMatchingTests : IDisposable
         Assert.Equal(new(0, 0, 1, 0), summary);
         var reply = _f.Bot.Sent.Last();
         Assert.Equal(original.TelegramMessageId, reply.ReplyParameters?.MessageId);
-        Assert.Contains("✅", reply.Text);
+        Assert.Contains("ℹ️", reply.Text);
         Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
     }
 
@@ -369,10 +369,10 @@ public sealed class DistrictMatchingTests : IDisposable
         Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
     }
 
-    // ---- Kyiv: banks stand for their districts ----
+    // ---- Kyiv: the banks are no longer parts; their keywords live on the districts ----
 
     [Fact]
-    public async Task Kyiv_RightBankAlert_ReachesDistrictAndBankChannels_ButNotLeftBank()
+    public async Task Kyiv_RightBankAlert_ReachesDistrictAndLegacyBankChannels_ButNotLeftBank()
     {
         var kyiv = _f.Kyiv;
         _f.AddChannel(ChatA, c => c.PartIdList = ["obolonskyi"]);
@@ -389,7 +389,35 @@ public sealed class DistrictMatchingTests : IDisposable
     }
 
     [Fact]
-    public async Task Kyiv_SingleDistrictAlert_DoesNotReachTheWholeBankChannel()
+    public async Task Kyiv_LegacyBankIds_AreRewrittenToTheirDistricts_WhenTheRegionIsDispatched()
+    {
+        _f.AddChannel(ChatA, c => c.PartId = "right-bank");
+        _f.AddChannel(ChatB, c => c.PartIds = "left-bank,pecherskyi");
+
+        await _f.DispatchAsync("");
+
+        Assert.Equal(
+            ["holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi"],
+            _f.LoadChannel(ChatA).PartIdList);
+        Assert.Null(_f.LoadChannel(ChatA).PartId);
+        Assert.Equal(["darnytskyi", "desnianskyi", "dniprovskyi", "pecherskyi"], _f.LoadChannel(ChatB).PartIdList);
+    }
+
+    [Fact]
+    public async Task Kyiv_RightBankKeyword_ReachesExactlyTheRightBankDistricts()
+    {
+        _f.AddChannel(ChatA, c => c.PartIdList = ["shevchenkivskyi"]);
+        _f.AddChannel(ChatB, c => c.PartIdList = ["dniprovskyi"]);
+
+        var result = _f.Classifier.Classify("kyiv", DispatcherFixture.AccidentRightBankText);
+        await _f.Dispatcher.DispatchAsync(_f.Kyiv, result, DispatcherFixture.AccidentRightBankText, CancellationToken.None);
+
+        Assert.Single(_f.Bot.SentTo(ChatA));
+        Assert.Empty(_f.Bot.SentTo(ChatB));
+    }
+
+    [Fact]
+    public async Task Kyiv_SingleDistrictAlert_DoesNotReachTheLegacyWholeBankChannel()
     {
         _f.AddChannel(ChatA, c => c.PartIdList = ["right-bank"]);
         _f.AddChannel(ChatB, c => c.PartIdList = ["darnytskyi"]);

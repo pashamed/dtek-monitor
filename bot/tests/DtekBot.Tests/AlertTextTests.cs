@@ -62,7 +62,7 @@ public class AlertTextTests
     [InlineData(AlertKind.Emergency, "\U0001F6A8")]
     [InlineData(AlertKind.Accident, "\u26A0")]
     [InlineData(AlertKind.Unknown, "\u2139")]
-    [InlineData(AlertKind.Ended, "\u2705")]
+    [InlineData(AlertKind.Ended, "\u2139")]
     public void Values_EmojiMatchesKind(AlertKind kind, string emoji)
     {
         Assert.Contains(emoji, Build(kind: kind)["emoji"]);

@@ -9,6 +9,7 @@ using Telegram.Bot.Exceptions;
 using Telegram.Bot.Requests;
 using Telegram.Bot.Types.Enums;
 using static DtekBot.Tests.ScheduleFixtures;
+using ChatFullInfo = Telegram.Bot.Types.ChatFullInfo;
 
 namespace DtekBot.Tests;
 
@@ -44,7 +45,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         ScheduleImage postImage = ScheduleImage.Grid,
         bool outageTrigger = false,
         IReadOnlyList<string>? partIds = null,
-        string? partId = null) =>
+        string? partId = null,
+        IReadOnlyDictionary<string, SlotSettingDto>? slotSettings = null) =>
         new(
             regionId,
             partId,
@@ -64,7 +66,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             postMode,
             postImage,
             eventMode,
-            templates);
+            templates,
+            null,
+            slotSettings);
 
     private static Dictionary<string, string> Map(params (string Slot, string Text)[] items) =>
         items.ToDictionary(i => i.Slot, i => i.Text);
@@ -135,7 +139,6 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var bootstrap = (await (await client.GetAsync("/api/bootstrap")).ReadAsync<BootstrapDto>())!;
 
         Assert.Equal(userId, bootstrap.UserId);
-        Assert.Equal(MessageTemplate.Default, bootstrap.DefaultTemplate);
         Assert.Equal(MessageTemplate.MaxLength, bootstrap.MaxTemplateLength);
         Assert.Equal(
             ["emergency", "ended", "regional", "local", "schedule", "off", "on"],
@@ -143,13 +146,17 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(MessageSlots.All.Count, bootstrap.TemplateSlots!.Count);
         foreach (var (expected, actual) in MessageSlots.All.Zip(bootstrap.TemplateSlots!))
         {
-            Assert.Equal(expected.DefaultTemplate, actual.DefaultTemplate);
+            Assert.Equal(PlaceholderNames.ToDisplay(expected.DefaultTemplate), actual.DefaultTemplate);
             Assert.Equal(expected.Group, actual.Group);
             Assert.Equal(expected.Title, actual.Title);
-            Assert.Equal(expected.Placeholders.Select(p => p.Name), actual.Placeholders.Select(p => p.Name));
+            Assert.Equal(expected.Placeholders.Select(p => PlaceholderNames.Table[p.Name]), actual.Placeholders.Select(p => p.Name));
+            Assert.Equal(expected.Placeholders.Select(p => p.Name), actual.Placeholders.Select(p => p.Key));
+            Assert.Equal(expected.Placeholders.Select(p => p.Description), actual.Placeholders.Select(p => p.Description));
         }
 
-        Assert.Equal(MessageTemplate.Placeholders.Select(p => p.Name), bootstrap.Placeholders.Select(p => p.Name));
+        Assert.Equal(PlaceholderNames.ToDisplay(MessageTemplate.Default), bootstrap.DefaultTemplate);
+        Assert.Equal(MessageTemplate.Placeholders.Select(p => PlaceholderNames.Table[p.Name]), bootstrap.Placeholders.Select(p => p.Name));
+        Assert.Equal(MessageTemplate.Placeholders.Select(p => p.Name), bootstrap.Placeholders.Select(p => p.Key));
     }
 
     [Fact]
@@ -162,7 +169,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var kyiv = bootstrap.Regions.Single(r => r.Id == "kyiv");
         Assert.True(kyiv.HasGroups);
         Assert.True(kyiv.HasSchedules);
-        Assert.Equal(12, kyiv.Parts.Count);
+        Assert.Equal(10, kyiv.Parts.Count);
+        Assert.DoesNotContain(kyiv.Parts, p => p.Id is "right-bank" or "left-bank");
         var donetsk = bootstrap.Regions.Single(r => r.Id == "donetsk");
         Assert.False(donetsk.HasGroups);
         Assert.False(donetsk.HasSchedules);
@@ -199,11 +207,11 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         Assert.Null(chat.Settings.Template);
         var templates = chat.Settings.Templates!;
-        Assert.Equal("LEG {message}", templates["emergency"]);
-        Assert.Equal("LEG {message}", templates["ended"]);
-        Assert.Equal("LEG {message}", templates["local"]);
-        Assert.Equal("own {message}", templates["regional"]);
-        Assert.Equal("OFF {time}", templates["off"]);
+        Assert.Equal("LEG {текст}", templates["emergency"]);
+        Assert.Equal("LEG {текст}", templates["ended"]);
+        Assert.Equal("LEG {текст}", templates["local"]);
+        Assert.Equal("own {текст}", templates["regional"]);
+        Assert.Equal("OFF {час}", templates["off"]);
         Assert.False(templates.ContainsKey("schedule"));
         Assert.False(templates.ContainsKey("on"));
         Assert.False(templates.ContainsKey("bogus"));
@@ -234,7 +242,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             c.SchedulePostImage = ScheduleImage.Card;
             c.ScheduleImage = ScheduleImage.Grid;
             c.OutageTrigger = true;
-            c.PartIdList = ["right-bank", "left-bank"];
+            c.PartIdList = ["obolonskyi", "darnytskyi"];
         });
 
         var settings = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings;
@@ -247,7 +255,81 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(ScheduleImage.Card, settings.SchedulePostImage);
         Assert.Equal(ScheduleImage.Grid, settings.ScheduleImage);
         Assert.True(settings.OutageTrigger);
-        Assert.Equal(["right-bank", "left-bank"], settings.PartIds);
+        Assert.Equal(["obolonskyi", "darnytskyi"], settings.PartIds);
+    }
+
+    [Fact]
+    public async Task Chats_ReplacesRetiredKyivBankIds_WithTheirDistricts_AndSavesThem()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c =>
+        {
+            c.PartIds = "left-bank,Right-Bank,pecherskyi";
+        });
+
+        var settings = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings;
+
+        string[] expected =
+        [
+            "darnytskyi", "desnianskyi", "dniprovskyi",
+            "holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi",
+        ];
+        Assert.Equal(expected, settings.PartIds);
+        Assert.Equal(expected, LoadChannel(userId)!.PartIdList);
+    }
+
+    // ================= PUT /api/chats/{id}: per-alert settings =================
+
+    [Fact]
+    public async Task Chats_WithoutSlotSettings_ReturnsTheLegacyDefaultsForAllFourAlertSlots()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => { c.NotifyOnEnd = false; c.EditInPlace = false; });
+
+        var map = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings.SlotSettings!;
+
+        Assert.Equal(["emergency", "ended", "local", "regional"], map.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(new SlotSettingDto(true, false), map["emergency"]);
+        Assert.Equal(new SlotSettingDto(true, false), map["local"]);
+        Assert.Equal(new SlotSettingDto(false, false), map["ended"]);
+    }
+
+    [Fact]
+    public async Task Put_SlotSettings_RoundTrip_AndMirrorIntoLegacyColumns()
+    {
+        var (userId, client) = NewUser();
+        var slots = new Dictionary<string, SlotSettingDto>
+        {
+            ["emergency"] = new(true, false),
+            ["regional"] = new(false, true),
+            ["local"] = new(true, true),
+            ["ended"] = new(false, false),
+        };
+
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", Settings(slotSettings: slots));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var returned = (await response.ReadAsync<ChatSummaryDto>())!.Settings.SlotSettings!;
+        Assert.Equal(slots, returned.ToDictionary(p => p.Key, p => p.Value));
+        var channel = LoadChannel(userId)!;
+        Assert.False(channel.NotifyOnEnd);
+        Assert.False(channel.EditInPlace);
+        Assert.False(channel.SlotEnabled("regional"));
+        var fetched = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings.SlotSettings!;
+        Assert.Equal(slots, fetched.ToDictionary(p => p.Key, p => p.Value));
+    }
+
+    [Fact]
+    public async Task Put_SlotSettings_WithANonAlertSlot_IsRejected()
+    {
+        var (userId, client) = NewUser();
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(slotSettings: new Dictionary<string, SlotSettingDto> { ["schedule"] = new(true, true) }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(LoadChannel(userId));
     }
 
     // ================= PUT /api/chats/{id}: templates =================
@@ -262,7 +344,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var summary = (await response.ReadAsync<ChatSummaryDto>())!;
-        Assert.Equal(templates, summary.Settings.Templates!.ToDictionary(p => p.Key, p => p.Value));
+        Assert.Equal(templates.ToDictionary(p => p.Key, p => PlaceholderNames.ToDisplay(p.Value)), summary.Settings.Templates!.ToDictionary(p => p.Key, p => p.Value));
         var channel = LoadChannel(userId)!;
         Assert.Equal(templates, channel.TemplateMap.ToDictionary(p => p.Key, p => p.Value));
         Assert.Null(channel.Template);
@@ -321,7 +403,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var error = (await response.ReadAsync<ApiError>())!;
         Assert.Equal("Шаблон містить помилки.", error.Error);
-        Assert.Contains("Світло вимкнено за графіком: Невідомий параметр {emoji}.", error.Details!);
+        Assert.Contains("Світло вимкнено за графіком: Невідомий параметр {значок}.", error.Details!);
         Assert.Null(LoadChannel(userId));
     }
 
@@ -336,8 +418,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         var error = (await response.ReadAsync<ApiError>())!;
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains(error.Details!, d => d.StartsWith("Екстрені відключення: Додайте {message} або {popup}"));
-        Assert.Contains(error.Details!, d => d.StartsWith("Графік відключень: Додайте {outages}"));
+        Assert.Contains(error.Details!, d => d.StartsWith("Екстрені відключення: Додайте {текст} або {текст_сайту}"));
+        Assert.Contains(error.Details!, d => d.StartsWith("Графік відключень: Додайте {відключення}"));
         Assert.Contains(error.Details!, d => d.StartsWith("Світло з'явилося за графіком: Тег <script>"));
     }
 
@@ -532,12 +614,14 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     {
         var (userId, client) = NewUser();
 
-        var ok = await client.PutJsonAsync($"/api/chats/{userId}", Settings(partIds: ["right-bank", "LEFT-BANK", "right-bank"]));
-        Assert.Equal(["right-bank", "left-bank"], LoadChannel(userId)!.PartIdList);
+        var ok = await client.PutJsonAsync($"/api/chats/{userId}", Settings(partIds: ["obolonskyi", "DARNYTSKYI", "obolonskyi"]));
+        Assert.Equal(["obolonskyi", "darnytskyi"], LoadChannel(userId)!.PartIdList);
 
         var bad = await client.PutJsonAsync($"/api/chats/{userId}", Settings(partIds: ["atlantis"]));
+        var retired = await client.PutJsonAsync($"/api/chats/{userId}", Settings(partIds: ["right-bank"]));
         Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, retired.StatusCode);
         Assert.Equal("Невідомий район.", (await bad.ReadAsync<ApiError>())!.Error);
     }
 
@@ -577,6 +661,87 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var response = await client.PutAsync($"/api/chats/{userId}", new StringContent("null", Encoding.UTF8, "application/json"));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    // ================= DELETE /api/chats + POST /api/chats/link =================
+
+    private void SeedLinkedChannel(long userId, long channelId, Action<Channel>? configure = null)
+    {
+        SeedChannel(channelId, configure);
+        _factory.WithDb(db => db.ChannelAdmins.Add(new ChannelAdmin { ChatId = channelId, UserId = userId, LinkedAt = DateTimeOffset.UtcNow }));
+    }
+
+    private async Task<IReadOnlyList<ChatSummaryDto>> ListAsync(HttpClient client) =>
+        (await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!;
+
+    [Fact]
+    public async Task Delete_LastAdmin_RemovesTheChannelFromTheList_AlsoForAFreshClient_AndResetsIt()
+    {
+        var (userId, client) = NewUser();
+        var channelId = -_factory.NextId();
+        SeedLinkedChannel(userId, channelId, c => { ChannelAssert.Customize(c); c.Title = "Мій канал"; });
+        Assert.Contains(await ListAsync(client), s => s.ChatId == channelId);
+
+        var response = await client.DeleteAsync($"/api/chats/{channelId}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain(await ListAsync(client), s => s.ChatId == channelId);
+        using var fresh = _factory.ClientFor(userId);
+        Assert.DoesNotContain(await ListAsync(fresh), s => s.ChatId == channelId);
+        ChannelAssert.IsCleanUnsubscribed(LoadChannel(channelId)!);
+    }
+
+    [Fact]
+    public async Task Delete_ThenTheBotReAddedAsAdmin_ShowsACleanUnsubscribedChannel_ViaLink()
+    {
+        var (userId, client) = NewUser();
+        var channelId = -_factory.NextId();
+        SeedLinkedChannel(userId, channelId, c => { ChannelAssert.Customize(c); c.Title = "Мій канал"; });
+        _factory.Bot.Chats[channelId] = new ChatFullInfo { Id = channelId, Type = ChatType.Channel, Title = "Мій канал" };
+        _factory.Bot.SetStatus(userId, ChatMemberStatus.Administrator);
+        await client.DeleteAsync($"/api/chats/{channelId}");
+
+        var response = await client.PostJsonAsync("/api/chats/link", new LinkChatRequest(channelId.ToString()));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var summary = (await response.ReadAsync<ChatSummaryDto>())!;
+        Assert.False(summary.Settings.IsActive);
+        var listed = Assert.Single(await ListAsync(client), s => s.ChatId == channelId);
+        Assert.False(listed.Settings.IsActive);
+        ChannelAssert.IsCleanUnsubscribed(LoadChannel(channelId)!);
+    }
+
+    [Fact]
+    public async Task Link_ToAChannelAnotherAdminManages_KeepsItsSettings()
+    {
+        var (userId, client) = NewUser();
+        var owner = _factory.NextId();
+        var channelId = -_factory.NextId();
+        SeedLinkedChannel(owner, channelId, ChannelAssert.Customize);
+        _factory.Bot.Chats[channelId] = new ChatFullInfo { Id = channelId, Type = ChatType.Channel, Title = "Мій канал" };
+        _factory.Bot.SetStatus(userId, ChatMemberStatus.Administrator);
+
+        var response = await client.PostJsonAsync("/api/chats/link", new LinkChatRequest(channelId.ToString()));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var channel = LoadChannel(channelId)!;
+        Assert.True(channel.IsActive);
+        Assert.Equal("45.1", channel.GroupId);
+    }
+
+    [Fact]
+    public async Task Delete_WhenAnotherAdminRemains_OnlyUnlinksTheCaller()
+    {
+        var (userId, client) = NewUser();
+        var other = _factory.NextId();
+        var channelId = -_factory.NextId();
+        SeedLinkedChannel(userId, channelId, ChannelAssert.Customize);
+        _factory.WithDb(db => db.ChannelAdmins.Add(new ChannelAdmin { ChatId = channelId, UserId = other, LinkedAt = DateTimeOffset.UtcNow }));
+
+        await client.DeleteAsync($"/api/chats/{channelId}");
+
+        Assert.DoesNotContain(await ListAsync(client), s => s.ChatId == channelId);
+        Assert.True(LoadChannel(channelId)!.IsActive);
     }
 
     // ================= POST /api/preview =================
@@ -689,9 +854,10 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Theory]
-    [InlineData("emergency", "{outages}", "Невідомий параметр {outages}.")]
-    [InlineData("off", "{emoji}", "Невідомий параметр {emoji}.")]
-    [InlineData("schedule", "no content", "Додайте {outages}")]
+    [InlineData("emergency", "{outages}", "Невідомий параметр {відключення}.")]
+    [InlineData("emergency", "{відключення}", "Невідомий параметр {відключення}.")]
+    [InlineData("off", "{emoji}", "Невідомий параметр {значок}.")]
+    [InlineData("schedule", "no content", "Додайте {відключення}")]
     [InlineData("local", "{#address}x", "не закрито")]
     public async Task Preview_InvalidTemplate_ReturnsErrors_AndNoHtml(string slot, string template, string expected)
     {
@@ -728,7 +894,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     [Theory]
     [InlineData("emergency", "🚨")]
     [InlineData("regional", "⚠")]
-    [InlineData("ended", "✅")]
+    [InlineData("ended", "ℹ️")]
     [InlineData("local", "🚨 Локальне відключення")]
     public async Task Preview_AlertSlots_UseTheirOwnSampleKind(string slot, string expected)
     {
@@ -750,9 +916,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Preview_EmergencySlot_NamesTheChosenDistricts()
     {
-        var result = await PreviewAsync(Preview("emergency", "{where}|{part}|{message}", partIds: ["right-bank"]));
+        var result = await PreviewAsync(Preview("emergency", "{where}|{part}|{message}", partIds: ["obolonskyi"]));
 
-        Assert.StartsWith("м. Київ (Правий берег)|Правий берег|м. Київ (Правий берег): введені екстрені відключення", result.Html);
+        Assert.StartsWith("м. Київ (Оболонський район)|Оболонський район|м. Київ (Оболонський район): введені екстрені відключення", result.Html);
     }
 
     [Fact]
@@ -762,7 +928,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var ended = await PreviewAsync(Preview(null, kind: AlertKind.Ended));
 
         Assert.StartsWith("⚠", accident.Html);
-        Assert.StartsWith("✅", ended.Html);
+        Assert.StartsWith("ℹ️", ended.Html);
     }
 
     [Fact]
@@ -931,7 +1097,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var error = (await response.ReadAsync<ApiError>())!;
         Assert.Equal("Шаблон містить помилки.", error.Error);
-        Assert.Contains(error.Details!, d => d.Contains("{emoji}"));
+        Assert.Contains(error.Details!, d => d.Contains("{значок}"));
         Assert.Empty(_factory.Bot.SentTo(chatId));
     }
 

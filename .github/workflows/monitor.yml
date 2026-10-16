@@ -102,6 +102,16 @@ jobs:
         timeout-minutes: 5
         run: node ./src/check-addresses.js
 
+      # Ukrenergo status feed: a region-wide emergency is posted at once, before the DTEK popup shows it.
+      - name: Check the Ukrenergo status for the shared bot
+        if: always() && env.INGEST_URL != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          curl -fsS -X POST --max-time 60 --retry 2 \
+            -H "x-ingest-secret: $INGEST_SECRET" \
+            "${INGEST_URL%/}/grid/tick"
+
       # Posts and edits the schedule messages. Safe to run often: it only compares stored state with the cached schedule.
       - name: Update schedule messages for the shared bot
         if: always() && env.INGEST_URL != ''
