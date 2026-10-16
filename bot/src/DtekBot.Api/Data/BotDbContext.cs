@@ -1,3 +1,4 @@
+using DtekBot.Api.Bot;
 using DtekBot.Api.Parsing;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
@@ -34,6 +35,12 @@ public sealed class Channel
 
     // Check the saved address when this chat gets a «Світло зникло» post (from a power-monitor app).
     public bool OutageTrigger { get; set; }
+
+    // Custom phrase (regular expression) that counts as such a post; null means the default «світло зникло».
+    public string? OutageTriggerPattern { get; set; }
+
+    // The last few channel posts the bot saw (JSON), only kept while the trigger is on; used to warn about a wrong phrase.
+    public string? RecentPosts { get; set; }
 
     // Post and edit schedule messages for the chat's group (needs GroupId).
     public bool ScheduleNotify { get; set; }
@@ -83,12 +90,50 @@ public sealed class Channel
         return MessageSlots.IsAlert(slot) && !string.IsNullOrWhiteSpace(Template) ? Template : null;
     }
 
+    // Per alert slot: { "emergency": { "enabled": true, "editInPlace": false }, ... } as JSON.
+    // A slot without an entry falls back to the older NotifyOnEnd / EditInPlace columns.
+    public string? SlotSettings { get; set; }
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public IReadOnlyDictionary<string, SlotSettingDto> SlotSettingMap
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(SlotSettings))
+            {
+                return new Dictionary<string, SlotSettingDto>();
+            }
+
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, SlotSettingDto>>(
+                    SlotSettings, System.Text.Json.JsonSerializerOptions.Web) ?? [];
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return new Dictionary<string, SlotSettingDto>();
+            }
+        }
+        set => SlotSettings = value.Count == 0
+            ? null
+            : System.Text.Json.JsonSerializer.Serialize(value, System.Text.Json.JsonSerializerOptions.Web);
+    }
+
+    public bool SlotEnabled(string slot) =>
+        SlotSettingMap.TryGetValue(slot, out var own) ? own.Enabled : slot != MessageSlots.Ended || NotifyOnEnd;
+
+    public bool SlotEditInPlace(string slot) =>
+        SlotSettingMap.TryGetValue(slot, out var own) ? own.EditInPlace : EditInPlace;
+
     public string? GroupId { get; set; }
     public string? AddressLabel { get; set; }
 
     // Street and house exactly as the address picker produced them; these are what the DTEK site is queried with.
     public string? AddressStreet { get; set; }
     public string? AddressHouse { get; set; }
+
+    // The channel key of the chat's Svitlobot schedule, encrypted (see SvitlobotKeyProtector). Never leaves the server.
+    public string? SvitlobotKey { get; set; }
 }
 
 public enum SchedulePhase
@@ -215,6 +260,16 @@ public sealed class RegionState
     public PopupKind Kind { get; set; }
     public string NormalizedText { get; set; } = "";
     public string? PopupText { get; set; }
+
+    // Districts the popup named, comma-separated; null on rows written before they were stored.
+    public string? PartIds { get; set; }
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public IReadOnlyList<string>? PartIdList
+    {
+        get => PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        set => PartIds = value is null ? null : string.Join(",", value);
+    }
     public string Hash { get; set; } = "";
     public DateTimeOffset ObservedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
@@ -243,6 +298,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<KeyValue> KeyValues => Set<KeyValue>();
     public DbSet<ScheduleThread> ScheduleThreads => Set<ScheduleThread>();
     public DbSet<SchedulePostThread> SchedulePostThreads => Set<SchedulePostThread>();
+    public DbSet<GridState> GridStates => Set<GridState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -323,6 +379,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.Filter).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.Template).HasMaxLength(MessageTemplate.MaxLength);
             e.Property(x => x.GroupId).HasMaxLength(16);
+            e.Property(x => x.OutageTriggerPattern).HasMaxLength(OutageTriggerMatcher.MaxLength);
             e.Property(x => x.AddressLabel).HasMaxLength(256);
             e.Property(x => x.ScheduleImage).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.ScheduleEventMode).HasConversion<string>().HasMaxLength(16);
@@ -330,6 +387,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.SchedulePostImage).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.AddressStreet).HasMaxLength(256);
             e.Property(x => x.AddressHouse).HasMaxLength(64);
+            e.Property(x => x.SvitlobotKey).HasMaxLength(512);
             e.HasIndex(x => new { x.RegionId, x.IsActive });
             e.HasIndex(x => x.GroupId);
         });
@@ -347,6 +405,15 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.Hash).HasMaxLength(64);
             e.Property(x => x.PopupText).HasMaxLength(4000);
+            e.Property(x => x.PartIds).HasMaxLength(512);
+        });
+
+        modelBuilder.Entity<GridState>(e =>
+        {
+            e.HasKey(x => x.RegionId);
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.Status).HasMaxLength(32);
+            e.Property(x => x.Title).HasMaxLength(256);
         });
 
         modelBuilder.Entity<Delivery>(e =>

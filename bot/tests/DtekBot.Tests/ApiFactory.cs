@@ -21,6 +21,7 @@ namespace DtekBot.Tests;
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public const string BotToken = "123456:API-TEST-TOKEN";
+    public const string IngestSecret = "test-ingest-secret";
 
     private readonly SqliteConnection _connection = new("DataSource=:memory:");
     private long _nextId = 10_000;
@@ -29,7 +30,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     public FakeScheduleProvider Schedules { get; } = new();
 
+    public FakeGridProvider Grid { get; } = new();
+
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.FromHours(3)));
+
+    public FakeSvitlobotHandler Svitlobot { get; } = new();
+
+    // base64 of 32 bytes; set to null to play a server without the Svitlobot setting.
+    public string? SvitlobotEncryptionKey { get; set; } = Convert.ToBase64String(new byte[32].Select((_, i) => (byte)(i + 1)).ToArray());
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -38,6 +46,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.UseContentRoot(AppContext.BaseDirectory);
         builder.UseSetting("Bot:Token", BotToken);
         builder.UseSetting("App:PublicUrl", "https://example.test");
+        builder.UseSetting("Ingest:Secret", IngestSecret);
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<BotDbContext>>();
@@ -51,8 +60,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<ITelegramBotClient>(Bot);
             services.RemoveAll<IScheduleProvider>();
             services.AddSingleton<IScheduleProvider>(Schedules);
+            services.RemoveAll<DtekBot.Api.Grid.IGridStatusProvider>();
+            services.AddSingleton<DtekBot.Api.Grid.IGridStatusProvider>(Grid);
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Clock);
+
+            services.AddHttpClient<DtekBot.Api.Svitlobot.ISvitlobotClient, DtekBot.Api.Svitlobot.SvitlobotClient>()
+                .ConfigurePrimaryHttpMessageHandler(() => Svitlobot);
+            services.RemoveAll<DtekBot.Api.Svitlobot.SvitlobotKeyProtector>();
+            services.AddSingleton(new DtekBot.Api.Svitlobot.SvitlobotKeyProtector(() => SvitlobotEncryptionKey));
         });
     }
 

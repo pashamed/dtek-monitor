@@ -18,9 +18,9 @@ public class PopupClassifierDistrictTests
         string.Join(",", csv.Split(',', StringSplitOptions.RemoveEmptyEntries).OrderBy(i => i, StringComparer.Ordinal));
 
     private const string RightBankAll =
-        "right-bank,holosiivskyi,obolonskyi,pecherskyi,podilskyi,sviatoshynskyi,solomianskyi,shevchenkivskyi";
+        "holosiivskyi,obolonskyi,pecherskyi,podilskyi,sviatoshynskyi,solomianskyi,shevchenkivskyi";
 
-    private const string LeftBankAll = "left-bank,darnytskyi,desnianskyi,dniprovskyi";
+    private const string LeftBankAll = "darnytskyi,desnianskyi,dniprovskyi";
 
     // ---- the real kyiv-oblast popup ----
 
@@ -128,21 +128,21 @@ public class PopupClassifierDistrictTests
     }
 
     [Fact]
-    public void Keywords_KyivRightBank_ExpandsToItsChildren_InSettingsOrder()
+    public void Keywords_KyivRightBank_MeansItsCityDistricts_InSettingsOrder()
     {
         var result = Classifier.Classify("kyiv", "Через аварію знеструмлено частину правого берега.");
 
         Assert.Equal(
-            ["right-bank", "holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi"],
+            ["holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi"],
             result.PartIds);
     }
 
     [Fact]
-    public void Keywords_KyivLeftBank_ExpandsToItsChildren()
+    public void Keywords_KyivLeftBank_MeansItsCityDistricts()
     {
         var result = Classifier.Classify("kyiv", "Через аварію знеструмлено лівого берега.");
 
-        Assert.Equal(["left-bank", "darnytskyi", "desnianskyi", "dniprovskyi"], result.PartIds);
+        Assert.Equal(["darnytskyi", "desnianskyi", "dniprovskyi"], result.PartIds);
     }
 
     [Fact]
@@ -154,12 +154,12 @@ public class PopupClassifierDistrictTests
     }
 
     [Fact]
-    public void Keywords_NoDuplicatesWhenParentAndChildAreBothNamed()
+    public void Keywords_NoDuplicatesWhenABankAndItsDistrictAreBothNamed()
     {
         var ids = Classifier.Classify("kyiv", "Правий берег: Оболонський та Печерський райони, Голосіївський район.").PartIds;
 
         Assert.Equal(ids.Count, ids.Distinct().Count());
-        Assert.Equal(8, ids.Count);
+        Assert.Equal(7, ids.Count);
     }
 
     [Fact]
@@ -296,21 +296,21 @@ public class PopupClassifierDistrictTests
     [Fact]
     public void Structured_Districts_AreExpandedWithChildren()
     {
-        var kyiv = Classifier.Classify("kyiv", "Через аварію.", new StructuredPopup("districts", ["right-bank"]));
         var donetsk = Classifier.Classify("donetsk", "Через аварію.", new StructuredPopup("districts", ["kramatorsk"]));
 
-        Assert.Equal(Sorted(RightBankAll), string.Join(",", kyiv.PartIds.OrderBy(i => i, StringComparer.Ordinal)));
         Assert.Equal(["kramatorsk", "sloviansk", "druzhkivka", "kostiantynivka"], donetsk.PartIds);
     }
 
     [Fact]
-    public void Structured_BothBanks_AreExpandedWithoutDuplicates()
+    public void Structured_RetiredKyivBankIds_AreIgnored_SoTheTextDecides()
     {
-        var result = Classifier.Classify(
-            "kyiv", "Через аварію.", new StructuredPopup("districts", ["right-bank", "left-bank", "obolonskyi", "left-bank"]));
+        var onlyBanks = Classifier.Classify(
+            "kyiv", "Через аварію знеструмлено правий берег.", new StructuredPopup("districts", ["right-bank", "left-bank"]));
+        var mixed = Classifier.Classify(
+            "kyiv", "Через аварію.", new StructuredPopup("districts", ["right-bank", "obolonskyi", "left-bank"]));
 
-        Assert.Equal(12, result.PartIds.Count);
-        Assert.Equal(12, result.PartIds.Distinct().Count());
+        Assert.Equal(Sorted(RightBankAll), string.Join(",", onlyBanks.PartIds.OrderBy(i => i, StringComparer.Ordinal)));
+        Assert.Equal(["obolonskyi"], mixed.PartIds);
     }
 
     [Fact]
@@ -374,7 +374,7 @@ public class PopupClassifierDistrictTests
     public void Structured_AllOrDistricts_KeepTheKindDecidedByTheText(string text, PopupKind kind)
     {
         Assert.Equal(kind, Classifier.Classify("kyiv", text, new StructuredPopup("all", null)).Kind);
-        Assert.Equal(kind, Classifier.Classify("kyiv", text, new StructuredPopup("districts", ["right-bank"])).Kind);
+        Assert.Equal(kind, Classifier.Classify("kyiv", text, new StructuredPopup("districts", ["obolonskyi"])).Kind);
     }
 
     [Theory]
@@ -383,7 +383,7 @@ public class PopupClassifierDistrictTests
     [InlineData("   <p>&nbsp;</p>  ")]
     public void Structured_WithEmptyText_StillMeansNothingIsShown(string? text)
     {
-        var result = Classifier.Classify("kyiv", text, new StructuredPopup("districts", ["right-bank"]));
+        var result = Classifier.Classify("kyiv", text, new StructuredPopup("districts", ["obolonskyi"]));
 
         Assert.Equal(PopupKind.None, result.Kind);
         Assert.Empty(result.PartIds);

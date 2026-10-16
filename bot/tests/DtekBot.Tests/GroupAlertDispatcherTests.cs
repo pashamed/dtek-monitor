@@ -131,7 +131,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         var reply = _f.Bot.Sent.Last();
         Assert.Equal(2, _f.Bot.Sent.Count());
         Assert.Equal(original.TelegramMessageId, reply.ReplyParameters?.MessageId);
-        Assert.Contains("✅", reply.Text);
+        Assert.Contains("ℹ️", reply.Text);
         Assert.Contains("черга 45.1", reply.Text);
         Assert.Equal(ParseMode.Html, reply.ParseMode);
         Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);

@@ -1,8 +1,10 @@
+using DtekBot.Api.Bot;
 using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
 using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
+using DtekBot.Api.Svitlobot;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -37,21 +39,43 @@ public static class MiniAppApi
             return await next(context);
         });
 
+        api.MapSvitlobotApi();
+
         api.MapGet("/bootstrap", (HttpContext http, IOptionsMonitor<DtekSettings> settings) =>
         {
             var regions = settings.CurrentValue.Regions
                 .Select(r => new RegionDto(r.Id, r.Name, r.SiteUrl, r.Parts.Select(p => new PartDto(p.Id, p.Name)).ToList(), r.HasGroups, r.HasSchedules))
                 .ToList();
-            return Json(new BootstrapDto(UserId(http), regions, MessageTemplate.Placeholders, MessageTemplate.Default, MessageTemplate.MaxLength, MessageSlots.All));
+            return Json(new BootstrapDto(
+                UserId(http),
+                regions,
+                PlaceholderNames.ToDisplayList(MessageTemplate.Placeholders),
+                PlaceholderNames.ToDisplay(MessageTemplate.Default),
+                MessageTemplate.MaxLength,
+                MessageSlots.All.Select(PlaceholderNames.ToDisplaySlot).ToList()));
         });
 
-        api.MapGet("/chats", async (HttpContext http, BotDbContext db, CancellationToken ct) =>
+        api.MapGet("/chats", async (HttpContext http, BotDbContext db, IOptionsMonitor<DtekSettings> settings, CancellationToken ct) =>
         {
             var userId = UserId(http);
             var linked = await db.ChannelAdmins.Where(a => a.UserId == userId).Select(a => a.ChatId).ToListAsync(ct);
             linked.Add(userId);
 
             var rows = await db.Channels.Where(c => linked.Contains(c.ChatId)).ToListAsync(ct);
+
+            // Saved districts that were retired (the Kyiv banks) become the districts that replaced them.
+            var upgraded = false;
+            foreach (var row in rows)
+            {
+                var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.Id == row.RegionId);
+                upgraded |= region?.UpgradeRetiredParts(row) == true;
+            }
+
+            if (upgraded)
+            {
+                await db.SaveChangesAsync(ct);
+            }
+
             var summaries = rows.Select(c => ToSummary(c, userId)).ToList();
             if (rows.All(c => c.ChatId != userId))
             {
@@ -110,6 +134,7 @@ public static class MiniAppApi
             }
 
             var now = time.GetUtcNow();
+            var managed = await db.ChannelAdmins.AnyAsync(a => a.ChatId == chat.Id, ct);
             if (!await db.ChannelAdmins.AnyAsync(a => a.ChatId == chat.Id && a.UserId == userId, ct))
             {
                 db.ChannelAdmins.Add(new ChannelAdmin { ChatId = chat.Id, UserId = userId, LinkedAt = now });
@@ -120,6 +145,11 @@ public static class MiniAppApi
             {
                 channel = new Channel { ChatId = chat.Id, IsActive = false, CreatedAt = now };
                 db.Channels.Add(channel);
+            }
+            else if (!managed)
+            {
+                // Nobody manages it, so it is connected as a new channel, not with what was left from before.
+                await ChannelReset.ResetAsync(db, channel, ct);
             }
 
             channel.Title = chat.Title ?? chat.Username;
@@ -163,23 +193,39 @@ public static class MiniAppApi
                         continue;
                     }
 
-                    if (string.IsNullOrWhiteSpace(text) || text == definition.DefaultTemplate)
+                    var canonical = PlaceholderNames.ToCanonical(text);
+                    if (string.IsNullOrWhiteSpace(canonical) || canonical == definition.DefaultTemplate)
                     {
                         continue;
                     }
 
-                    templateErrors.AddRange(MessageTemplate.Validate(text, slot).Select(e => $"{definition.Title}: {e}"));
-                    templates[slot] = text;
+                    templateErrors.AddRange(MessageTemplate.Validate(canonical, slot).Select(e => $"{definition.Title}: {PlaceholderNames.ToDisplay(e)}"));
+                    templates[slot] = canonical;
                 }
             }
-            else if (!string.IsNullOrWhiteSpace(dto.Template) && dto.Template != MessageTemplate.Default)
+            else if (!string.IsNullOrWhiteSpace(dto.Template) && PlaceholderNames.ToCanonical(dto.Template) != MessageTemplate.Default)
             {
-                templateErrors.AddRange(MessageTemplate.Validate(dto.Template).Select(e => $"Екстрені відключення: {e}"));
+                templateErrors.AddRange(MessageTemplate.Validate(PlaceholderNames.ToCanonical(dto.Template)).Select(e => $"Екстрені відключення: {PlaceholderNames.ToDisplay(e)}"));
             }
 
             if (templateErrors.Count > 0)
             {
                 return Results.Json(new ApiError("Шаблон містить помилки.", templateErrors), ApiJson.Options, statusCode: 400);
+            }
+
+            Dictionary<string, SlotSettingDto>? slotSettings = null;
+            if (dto.SlotSettings is not null)
+            {
+                slotSettings = [];
+                foreach (var (slot, value) in dto.SlotSettings)
+                {
+                    if (!MessageSlots.IsAlert(slot) || value is null)
+                    {
+                        return Error($"Невідомий тип сповіщення «{slot}».");
+                    }
+
+                    slotSettings[slot] = value;
+                }
             }
 
             var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
@@ -247,8 +293,19 @@ public static class MiniAppApi
             channel.IsActive = dto.IsActive;
             channel.IsPaused = dto.IsPaused;
             channel.Filter = dto.Filter;
-            channel.NotifyOnEnd = dto.NotifyOnEnd;
-            channel.EditInPlace = dto.EditInPlace;
+            if (slotSettings is not null)
+            {
+                // Mirrored into the older columns so clients that do not know the per-slot map still read sensible values.
+                channel.SlotSettingMap = slotSettings;
+                channel.NotifyOnEnd = slotSettings.TryGetValue(MessageSlots.Ended, out var ended) ? ended.Enabled : channel.NotifyOnEnd;
+                channel.EditInPlace = slotSettings.TryGetValue(MessageSlots.Emergency, out var emergency) ? emergency.EditInPlace : channel.EditInPlace;
+            }
+            else
+            {
+                channel.SlotSettingMap = new Dictionary<string, SlotSettingDto>();
+                channel.NotifyOnEnd = dto.NotifyOnEnd;
+                channel.EditInPlace = dto.EditInPlace;
+            }
             if (templates is not null)
             {
                 channel.TemplateMap = templates;
@@ -256,10 +313,17 @@ public static class MiniAppApi
             }
             else
             {
-                channel.Template = string.IsNullOrWhiteSpace(dto.Template) || dto.Template == MessageTemplate.Default ? null : dto.Template;
+                channel.Template = string.IsNullOrWhiteSpace(dto.Template) || PlaceholderNames.ToCanonical(dto.Template) == MessageTemplate.Default ? null : PlaceholderNames.ToCanonical(dto.Template);
             }
 
             channel.OutageTrigger = dto.IsActive && dto.OutageTrigger;
+            var pattern = OutageTriggerMatcher.Normalize(dto.OutageTriggerPattern);
+            if (pattern is not null && pattern.Length > OutageTriggerMatcher.MaxLength)
+            {
+                return Error($"Фраза задовга: максимум {OutageTriggerMatcher.MaxLength} символів.");
+            }
+
+            channel.OutageTriggerPattern = pattern;
 
             // Schedule messages need a group and a region that has schedules.
             var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
@@ -298,7 +362,10 @@ public static class MiniAppApi
                 ?? settings.CurrentValue.Regions.First();
             var wantedParts = request.PartIds ?? (string.IsNullOrEmpty(request.PartId) ? [] : [request.PartId]);
 
-            var errors = string.IsNullOrWhiteSpace(request.Template) ? [] : MessageTemplate.Validate(request.Template, slot);
+            var previewTemplate = PlaceholderNames.ToCanonical(request.Template);
+            var errors = string.IsNullOrWhiteSpace(previewTemplate)
+                ? new List<string>()
+                : MessageTemplate.Validate(previewTemplate, slot).Select(e => PlaceholderNames.ToDisplay(e)).ToList();
             if (errors.Count > 0)
             {
                 return Json(new PreviewResponse("", errors));
@@ -308,7 +375,7 @@ public static class MiniAppApi
             var kind = string.IsNullOrWhiteSpace(request.Slot) ? request.Kind : (AlertKind?)null;
             var rendered = await previews.RenderAsync(
                 slot,
-                request.Template,
+                previewTemplate,
                 region,
                 wantedParts,
                 request.GroupId,
@@ -349,10 +416,10 @@ public static class MiniAppApi
                 return Error("Спершу оберіть регіон і збережіть налаштування.");
             }
 
-            var template = string.IsNullOrWhiteSpace(request?.Template) ? channel.TemplateFor(slot) : request!.Template;
+            var template = string.IsNullOrWhiteSpace(request?.Template) ? channel.TemplateFor(slot) : PlaceholderNames.ToCanonical(request!.Template);
             if (!string.IsNullOrWhiteSpace(template))
             {
-                var errors = MessageTemplate.Validate(template, slot);
+                var errors = MessageTemplate.Validate(template, slot).Select(e => PlaceholderNames.ToDisplay(e)).ToList();
                 if (errors.Count > 0)
                 {
                     return Results.Json(new ApiError("Шаблон містить помилки.", errors), ApiJson.Options, statusCode: 400);
@@ -397,6 +464,26 @@ public static class MiniAppApi
 
             return Json(new { ok = true });
         });
+        // Advice about the «Світло зникло» phrase: does it occur in the posts the bot has seen in this channel?
+        api.MapGet("/chats/{chatId:long}/trigger-check", async (
+            long chatId,
+            string? pattern,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            CancellationToken ct) =>
+        {
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            var recent = OutageTriggerMatcher.ParseRecent(channel?.RecentPosts);
+            var check = OutageTriggerMatcher.Check(pattern, recent);
+            return Json(new TriggerCheckDto(check.Valid, check.Seen, check.Matched, check.Warning));
+        });
+
         // The editor's "current state" card (replaces the bot's old status button).
         api.MapGet("/chats/{chatId:long}/status", async (
             long chatId,
@@ -730,7 +817,11 @@ public static class MiniAppApi
             c.SchedulePostMode,
             c.SchedulePostImage,
             c.ScheduleEventMode,
-            MergedTemplates(c));
+            MergedTemplates(c),
+            c.OutageTriggerPattern,
+            MessageSlots.All.Where(s => MessageSlots.IsAlert(s.Id))
+                .ToDictionary(s => s.Id, s => new SlotSettingDto(c.SlotEnabled(s.Id), c.SlotEditInPlace(s.Id))),
+            !string.IsNullOrEmpty(c.SvitlobotKey));
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 
@@ -746,6 +837,6 @@ public static class MiniAppApi
             }
         }
 
-        return map;
+        return map.ToDictionary(p => p.Key, p => PlaceholderNames.ToDisplay(p.Value));
     }
 }

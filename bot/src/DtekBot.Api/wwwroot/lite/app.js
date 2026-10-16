@@ -5,6 +5,12 @@ const initData = tg ? tg.initData : '';
 
 const SLOT_GROUPS = [['emergency', 'Екстрені відключення'], ['regional', 'Аварія в регіоні'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
 const KIND_OF = { emergency: 'Emergency', regional: 'Accident', local: 'Emergency', ended: 'Ended' };
+const ALERT_SLOTS = ['emergency', 'regional', 'local', 'ended'];
+// Per-alert settings with fallbacks for a server that only knows the older notifyOnEnd / editInPlace fields.
+const slotSettingsOf = st => Object.fromEntries(ALERT_SLOTS.map(id => {
+  const o = (st.slotSettings || {})[id];
+  return [id, { enabled: o ? !!o.enabled : id === 'ended' ? st.notifyOnEnd !== false : true, editInPlace: o ? !!o.editInPlace : st.editInPlace !== false }];
+}));
 const MODES = [['New', 'Нове повідомлення'], ['ReplaceDelete', 'Видалити старе й опублікувати нове'], ['Edit', 'Редагувати те саме']];
 const MODE_TEXT = {
   post: { New: 'Кожне оновлення графіка — новий пост. Старі пости лишаються в каналі.', ReplaceDelete: 'Бот публікує новий пост і видаляє попередній. Потрібне право «Видаляти повідомлення», інакше старий пост лишиться.', Edit: 'Бот змінює один і той самий пост — нових публікацій не буде.' },
@@ -23,12 +29,13 @@ const HELP = {
   check: ['Світла немає?', 'Бот перевірить причину: спершу графік вашої черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише потім адресу на сайті ДТЕК. Результат також надійде вам у чат із ботом.'],
   active: ['Підписка активна', 'Поки підписка активна, бот надсилає сюди сповіщення. Якщо її вимкнути, сповіщення припиняються, а збережена адреса видаляється.'],
   pause: ['Пауза', 'Тимчасово зупиняє сповіщення, не скасовуючи підписку й не видаляючи адресу. Зніміть паузу, щоб відновити їх.'],
-  filter: ['Які сповіщення', 'Усі — також нерозпізнані повідомлення з сайту ДТЕК. Лише екстрені та аварії — тільки екстрені відключення й аварії.'],
-  notifyOnEnd: ['Писати про завершення', 'Коли екстрені відключення скасовано, бот відповідає на початкове повідомлення про відключення.'],
-  editInPlace: ['Оновлення', 'Редагувати те саме — одне повідомлення оновлюється на місці. Щоразу нове — кожна зміна приходить окремим повідомленням зі сповіщенням.'],
+  slotOn: ['Надсилати це сповіщення', 'Якщо вимкнути, бот не надсилатиме цей вид сповіщень у цей чат. Шаблон можна й надалі редагувати.'],
+  slotEnded: ['Сповіщати про зняття аварійного запису', 'Коли екстрений запис зникає з сайту ДТЕК, бот відповідає на початкове сповіщення. Можна вимкнути лише цю відповідь, а саме сповіщення й його оновлення залишаться. Зникнення запису не означає, що світло вже повернулося.'],
+  slotEdit: ['Оновлення', 'Редагувати те саме повідомлення — одне повідомлення оновлюється на місці. Щоразу нове — кожна зміна приходить окремим повідомленням зі сповіщенням.'],
   address: ['Адреса', 'Потрібна, щоб визначити вашу чергу й перевіряти саме вашу адресу на сайті ДТЕК. Зберігається, поки діє підписка, і видаляється при відписці.'],
   group: ['Черга', 'Номер черги в графіку відключень, наприклад 45.1. Визначається за адресою, але її можна змінити вручну. Від черги залежать повідомлення за графіком і сповіщення про екстрені відключення черги.'],
   outage: ['Реагувати на «Світло зникло»', 'Якщо застосунок моніторингу світла пише в канал «Світло зникло», бот знайде причину: спершу перевіряє графік черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише тоді адресу на сайті ДТЕК.'],
+  triggerText: ['Текст повідомлення «світла немає»', 'Це текст, який ваш застосунок моніторингу світла пише в канал, коли світло зникає, наприклад «зараз світло зникло». Регістр не враховується. Можна вказати регулярний вираз, наприклад світло\\s+(зникло|вимкнули). Бот порівнює його з новими публікаціями каналу й перевіряє адресу.'],
   schedule: ['Сповіщення за графіком', 'Бот пише в канал, коли за графіком світло вимикається й коли воно має зʼявитися, з тривалістю та очікуваним часом. Використовує дані outage-data-ua.'],
   image: ['Картинка', 'Таблиця на 2 дні — графік на сьогодні й завтра. Коротка картинка — картка з годинами відключень. Без картинки — лише текст.'],
   schedulePost: ['Публікація графіка', 'Бот публікує в канал окремий пост із графіком відключень вашої черги (картинка з підписом) і оновлює його, коли графік змінюється. Те, як саме зʼявляються нові пости, задає режим нижче. Видалення попереднього повідомлення потребує в бота права адміністратора «Видаляти повідомлення»; без нього старе повідомлення просто лишається.'],
@@ -37,9 +44,16 @@ const HELP = {
   eventMode: ['Як показувати події', 'Нове повідомлення — кожна подія окремим постом, старі лишаються. Видалити старе й опублікувати нове — попереднє повідомлення про подію видаляється (потрібне право «Видаляти повідомлення», інакше воно лишиться). Редагувати те саме — один пост оновлюється на місці.'],
   slots: ['Шаблони повідомлень', 'Кожен вид повідомлень, які бот публікує, має свій шаблон. Оберіть вид, змініть текст і стиль та перегляньте, як це виглядатиме в Telegram. Змінені шаблони позначені фіолетовою цяткою.'],
   template: ['Шаблон повідомлення', 'Ваш текст для цього виду повідомлень. Параметри у {фігурних дужках} замінюються даними, теги Telegram дозволені: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Щоб вивести фігурні дужки, пишіть {{ і }}.'],
-  cond: ['Умовні блоки', 'Фрагмент {#назва}…{/назва} лишається в тексті, лише якщо значення параметра «назва» не порожнє. Наприклад: {#onDuration}🕓 Воно було {onDuration}{/onDuration}. Блоки не можна вкладати.'],
+  cond: ['Умовні блоки', 'Фрагмент {#назва}…{/назва} лишається в тексті, лише якщо значення параметра «назва» не порожнє. Наприклад: {#світло_було}🕓 Воно було {світло_було}{/світло_було}. Блоки не можна вкладати.'],
   test: ['Тестове повідомлення', 'Бот надішле це повідомлення в канал (або в чат із ботом) зі зразковими чи вашими даними й позначкою 🧪 Тест, щоб ви побачили його справжній вигляд. Кількість тестів обмежена: якщо зʼявиться повідомлення про ліміт, зачекайте трохи й повторіть.'],
   connect: ['Підключити канал', 'Додайте бота адміністратором у канал із правом публікувати повідомлення — канал зʼявиться тут автоматично (за потреби натисніть «Оновити список»). @імʼя потрібне лише як запасний варіант для публічного каналу.'],
+  svb: ['Світлобот', 'Світлобот — сервіс, який публікує графік відключень у вашому Telegram-каналі. Канал привʼязаний до секретного ключа channel_key: його можна взяти в налаштуваннях каналу в чат-боті Світлобот. Ключ секретний: він зберігається на сервері в зашифрованому вигляді й більше ніде не показується. Той, хто має ключ, може змінювати графік вашого каналу, тому нікому його не передавайте.'],
+  svbKey: ['Ключ каналу', 'Цей ключ (channel_key) потрібен, щоб бот міг керувати справжнім розкладом вашого каналу у Світлоботі: надсилати графік, підключати шаблон чи видаляти розклад. Без нього Світлобот не дозволить нічого змінити. Ключ видно в налаштуваннях каналу в чат-боті Світлобот. Бот перевірить його, збереже зашифрованим і більше не покаже.'],
+  svbForget: ['Забути ключ', 'Видаляє збережений ключ лише тут, у боті. Графік і пост у каналі лишаються як є. Щоб знову керувати Світлоботом, введіть ключ ще раз.'],
+  svbPush: ['Надіслати мій графік', 'Бот надішле у Світлобот тижневий графік вашої черги, збереженої в цьому каналі, і Світлобот оновить графік у каналі. Потрібні регіон із графіками та обрана черга.'],
+  svbMaybe: ['Можливі відключення', 'Якщо увімкнено, «можливі» відключення (коли світло може бути, а може не бути) вважаються відключеннями. Якщо вимкнено, враховуються лише точні відключення.'],
+  svbTpl: ['Готові шаблони', 'Готовий вигляд публікації з графіком у Світлоботі. Оберіть шаблон і натисніть «Підключити шаблон» — Світлобот використовуватиме його для вашого каналу.'],
+  svbDel: ['Видалити розклад', 'Видаляє розклад у Світлоботі, а також його допис із графіком у вашому каналі. Дію не можна скасувати, але графік можна надіслати знову.'],
   remove: ['Видалити зі списку', 'Знімає канал зі списку. Якщо ви єдиний адміністратор у боті, сповіщення вимикаються, а адреса видаляється. Сам бот лишається в каналі.'],
 };
 
@@ -271,6 +285,7 @@ function renderEditor(chat) {
     ...chat.settings, partIds: [...(chat.settings.partIds || [])],
     scheduleImage: chat.settings.scheduleImage || 'None', schedulePostImage: chat.settings.schedulePostImage || 'Grid',
     schedulePostMode: chat.settings.schedulePostMode || 'New', scheduleEventMode: chat.settings.scheduleEventMode || 'Edit',
+    slotSettings: slotSettingsOf(chat.settings),
   };
   state.editing = chat;
   try { tg.BackButton.show(); } catch { /* optional */ }
@@ -287,10 +302,11 @@ function renderEditor(chat) {
   // Form fields only; schedule flags count only when a group is saved for the chosen region.
   const form = (src, templates, saved) => {
     const r = regionOf(src.regionId), ok = !!(r && r.hasSchedules && saved.regionId === src.regionId && saved.groupId);
+    const slotSettings = slotSettingsOf(src);
     return {
       regionId: src.regionId || null, partIds: partIdsOf(src), isActive: !!src.isActive, isPaused: !!src.isPaused,
-      filter: src.filter || 'All', notifyOnEnd: !!src.notifyOnEnd, editInPlace: !!src.editInPlace,
-      outageTrigger: !!src.outageTrigger, templates,
+      slotSettings, notifyOnEnd: slotSettings.ended.enabled, editInPlace: slotSettings.emergency.editInPlace, // the two mirror the old fields for older servers
+      outageTrigger: !!src.outageTrigger, outageTriggerPattern: (src.outageTriggerPattern || '').trim() || null, templates,
       scheduleNotify: !!(src.scheduleNotify && ok), scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
       schedulePost: !!(src.schedulePost && ok), schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
     };
@@ -334,7 +350,7 @@ function renderEditor(chat) {
     });
     window.scrollTo(0, 0);
     try { tabBtns[TABS.findIndex(x => x[0] === id)].scrollIntoView({ inline: 'center', block: 'nearest' }); } catch { /* optional */ }
-    if (id === 'sched') loadPv();
+    if (id === 'sched') { loadPv(); svbEnsure(); }
     if (id === 'msg') runPreview();
   }
 
@@ -438,12 +454,7 @@ function renderEditor(chat) {
     stCard,
     card(h('div', { class: 'fld' }, fieldLabel('Регіон', 'region', 'regionSel'), regionSel), distBox),
     hintBox,
-    card(activeRow, toggle('Пауза', 'isPaused', 'pause')),
-    card(h('div', { class: 'fld' }, fieldLabel('Які сповіщення', 'filter'),
-        seg([['All', 'Усі'], ['EmergencyOnly', 'Лише екстрені та аварії']], () => s.filter, v => { s.filter = v; touch(); }, 'Які сповіщення')),
-      toggle('Писати про завершення', 'notifyOnEnd', 'notifyOnEnd'),
-      h('div', { class: 'fld' }, fieldLabel('Оновлення', 'editInPlace'),
-        seg([[true, 'Редагувати те саме повідомлення'], [false, 'Щоразу нове повідомлення']], () => !!s.editInPlace, v => { s.editInPlace = v; touch(); }, 'Оновлення'))));
+    card(activeRow, toggle('Пауза', 'isPaused', 'pause')));
 
   // ----- save logic -----
   function applyChat(c) {
@@ -508,6 +519,26 @@ function renderEditor(chat) {
   const empty = (text, to) => card(h('p', { class: 'empty', text }),
     to ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Перейти до «Основне»', onclick: () => setTab(to) }) : null);
 
+  // Custom «power is off» phrase for the channel trigger (a regex; the live check is advice only and never blocks saving).
+  const trigIn = h('input', { type: 'text', id: 'trigIn', maxlength: 200, placeholder: 'світло зникло', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Текст повідомлення «світла немає»' });
+  trigIn.value = s.outageTriggerPattern || '';
+  const trigStatus = h('div', { 'aria-live': 'polite' });
+  const trigBox = h('div', { class: 'fld' }, fieldLabel('Текст повідомлення «світла немає»', 'triggerText', 'trigIn'), trigIn, trigStatus);
+  let trigSeq = 0, trigTimer = 0;
+  async function checkTrigger() {
+    const my = ++trigSeq;
+    try {
+      const r = await api('GET', `/api/chats/${encodeURIComponent(chat.chatId)}/trigger-check?pattern=${encodeURIComponent(trigIn.value.trim())}`);
+      if (my !== trigSeq) return;
+      trigStatus.replaceChildren(r.warning ? h('div', { class: 'note warn', text: r.warning })
+        : r.matched > 0 ? h('div', { class: 'trigok', text: `Знайдено в ${r.matched} із ${r.seen} останніх публікацій ✓` }) : null);
+    } catch { if (my === trigSeq) trigStatus.replaceChildren(); }
+  }
+  trigIn.addEventListener('input', () => { s.outageTriggerPattern = trigIn.value; touch(); clearTimeout(trigTimer); trigTimer = setTimeout(checkTrigger, 500); });
+  const syncTrigger = () => { trigBox.hidden = !s.outageTrigger; if (s.outageTrigger) checkTrigger(); else { trigSeq++; trigStatus.replaceChildren(); } };
+  trigBox.hidden = !s.outageTrigger;
+  if (!isPriv && s.outageTrigger) checkTrigger();
+
   // "Світла немає?" check (private chat only): runs the outage assessment for the saved address.
   const chkOut = h('div', { 'aria-live': 'polite' });
   const chkBtn = h('button', { type: 'button', class: 'btn amber', text: 'Перевірити зараз' });
@@ -549,6 +580,7 @@ function renderEditor(chat) {
         } catch (e) { fail(e); return false; }
       }
 
+      if (r.hasGroups && !addr) nodes.push(h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })));
       if (r.hasGroups) {
         if (addr) {
           nodes.push(card(fieldLabel('Адреса', 'address'),
@@ -605,8 +637,12 @@ function renderEditor(chat) {
       nodes.push(msg);
       if (isPriv && addrOf()) nodes.push(chkCard, chkOut);
     }
-    if (!isPriv) nodes.push(card(toggle('Реагувати на «Світло зникло»', 'outageTrigger', 'outage'),
-      h('p', { class: 'hint', text: 'Для каналу перевірка запускається повідомленням «Світло зникло» (див. «Реагувати на «Світло зникло»»).' })));
+    if (!isPriv) {
+      const trig = toggle('Реагувати на «Світло зникло»', 'outageTrigger', 'outage');
+      trig.cb.addEventListener('change', syncTrigger);
+      nodes.push(card(trig, trigBox,
+        h('p', { class: 'hint', text: 'Для каналу перевірка запускається повідомленням «Світло зникло» (див. «Реагувати на «Світло зникло»»).' })));
+    }
     panels.addr.replaceChildren(...nodes);
   }
 
@@ -672,6 +708,96 @@ function renderEditor(chat) {
   }
   const imgSeg = (get, set) => seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], get, v => { set(v); touch(); loadPv(); }, 'Картинка');
 
+  // ----- Світлобот (channels only) -----
+  const svb = { hasKey: !!chat.settings.hasSvitlobotKey, loaded: false, loading: false, off: false, busy: '', templates: [], hasSchedule: null, tplId: null, msg: null, has: false, lock: null };
+  s.svbMaybe = true;
+  const svbNode = isPriv ? null : h('section', { class: 'card glass', id: 'svb' });
+  const keyIn = h('input', { type: 'password', id: 'svbKey', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: 'channel_key', 'aria-label': 'Ключ каналу (channel_key)' });
+  keyIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); svbConnect(); } });
+  const svbBase = () => `/api/chats/${encodeURIComponent(chat.chatId)}/svitlobot`;
+  const svbText = e => {
+    if (e.status === 503) svb.off = true;
+    return e.status === 429 ? 'Забагато дій, спробуйте за хвилину' : e.message;
+  };
+  function svbApply(d) {
+    if (!d) return;
+    if ('hasKey' in d) {
+      svb.hasKey = !!d.hasKey; chat.settings.hasSvitlobotKey = svb.hasKey;
+      if (!svb.hasKey) { svb.templates = []; svb.hasSchedule = null; svb.loaded = false; }
+    }
+    if (Array.isArray(d.templates)) svb.templates = d.templates;
+    if ('hasSchedule' in d) svb.hasSchedule = !!d.hasSchedule;
+    if (!svb.templates.some(t => String(t.id) === String(svb.tplId))) svb.tplId = svb.templates.length ? svb.templates[0].id : null;
+  }
+  async function svbLoad() {
+    if (svb.loading) return;
+    svb.loading = true; svbPaint();
+    try { svbApply(await api('GET', svbBase())); svb.loaded = true; } catch (e) { svb.msg = { kind: 'err', text: svbText(e) }; } finally { svb.loading = false; svbPaint(); }
+  }
+  function svbEnsure() { if (svbNode && svb.lock && svb.hasKey && !svb.loaded && !svb.loading && !svb.off) svbLoad(); }
+  async function svbRun(name, call, refetch) {
+    if (svb.busy) return;
+    svb.busy = name; svb.msg = null; svbPaint();
+    try {
+      const d = await call();
+      svbApply(d);
+      svb.msg = { kind: 'ok', text: (d && d.message) || 'Готово ✓' };
+      haptic('success');
+      if (refetch) { try { svbApply(await api('GET', svbBase())); svb.loaded = true; } catch { /* the action itself succeeded */ } }
+    } catch (e) { svb.msg = { kind: 'err', text: svbText(e) }; haptic('error'); } finally { svb.busy = ''; svbPaint(); }
+  }
+  const svbAsk = ask => new Promise(resolve => tg.showConfirm ? tg.showConfirm(ask, resolve) : resolve(confirm(ask)));
+  function svbConnect() {
+    const key = keyIn.value.trim();
+    if (!key) { svb.msg = { kind: 'err', text: 'Введіть ключ каналу.' }; svbPaint(); return; }
+    svbRun('key', async () => { const d = await api('PUT', svbBase() + '/key', { key }); keyIn.value = ''; return d; });
+  }
+  async function svbForget() {
+    if (!(await svbAsk('Забути ключ каналу тут? Графік у каналі лишиться, але керувати ним буде неможливо, доки ви знову не введете ключ.'))) return;
+    svbRun('forget', () => api('DELETE', svbBase() + '/key'));
+  }
+  async function svbDelete() {
+    if (!(await svbAsk('Видалити розклад у Світлоботі? Допис із графіком у каналі також буде видалено.'))) return;
+    svbRun('del', () => api('DELETE', svbBase() + '/schedule'), true);
+  }
+
+  function svbPaint(has, lock) {
+    if (!svbNode) return;
+    if (lock) { svb.has = has; svb.lock = lock; }
+    const busy = !!svb.busy;
+    const btn = (name, cls, text, fn, off) => h('button', { type: 'button', class: 'btn ' + cls + (svb.busy === name ? ' busy' : ''), text, disabled: busy || !!off, onclick: fn });
+    const head = h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Світлобот' }), help('svb'));
+    const msg = svb.msg ? h('div', { class: 'toast ' + (svb.msg.kind === 'ok' ? 'ok' : 'err'), role: svb.msg.kind === 'ok' ? 'status' : 'alert', text: svb.msg.text }) : null;
+    keyIn.disabled = busy;
+    let body;
+    if (svb.off) {
+      body = [];
+    } else if (!svb.hasKey) {
+      body = [h('div', { class: 'fld' }, fieldLabel('Ключ каналу (channel_key)', 'svbKey', 'svbKey'), keyIn), btn('key', 'primary', 'Підключити', svbConnect)];
+    } else {
+      const sel = h('select', { id: 'svbTpl', 'aria-label': 'Готові шаблони', disabled: busy },
+        svb.templates.map(t => h('option', { value: String(t.id), text: t.name })));
+      sel.value = String(svb.tplId);
+      sel.addEventListener('change', () => { svb.tplId = sel.value; });
+      const mb = toggle('Враховувати можливі відключення', 'svbMaybe', 'svbMaybe', { disabled: !svb.has });
+      mb.cb.disabled = busy || !svb.has;
+      mb.cb.addEventListener('change', () => { svb.msg = null; });
+      body = [
+        h('div', { class: 'svbhead' }, h('span', { class: 'chip green', text: 'Ключ збережено' }),
+          h('div', { class: 'fl' }, btn('forget', 'ghost sm', 'Забути ключ', svbForget), help('svbForget'))),
+        h('div', { class: 'svbblk' }, h('div', { class: 'fl big' }, h('span', { text: 'Графік вашої черги' }), help('svbPush')),
+          mb, svb.has ? null : svb.lock(),
+          btn('push', 'primary', 'Надіслати мій графік у Світлобот', () => svbRun('push', () => api('POST', svbBase() + '/push', { includeMaybe: !!s.svbMaybe }), true), !svb.has)),
+        svb.templates.length ? h('div', { class: 'svbblk' }, fieldLabel('Готові шаблони', 'svbTpl', 'svbTpl'), sel,
+          btn('tpl', 'ghost', 'Підключити шаблон', () => svbRun('tpl', () => api('POST', svbBase() + '/template', { templateId: Number(svb.tplId) }), true), svb.tplId == null)) : null,
+        h('div', { class: 'svbblk' }, h('div', { class: 'fl big' }, h('span', { text: 'Розклад у Світлоботі' }), help('svbDel')),
+          svb.hasSchedule == null ? null : h('p', { class: 'hint', text: svb.hasSchedule ? 'Розклад зараз опубліковано.' : 'Розкладу ще немає.' }),
+          btn('del', 'danger', 'Видалити розклад у Світлоботі', svbDelete)),
+      ];
+    }
+    svbNode.replaceChildren(...[head, ...body, msg].filter(Boolean));
+  }
+
   function renderSched() {
     const r = regionOf(s.regionId);
     if (!r || !r.hasSchedules) {
@@ -698,8 +824,10 @@ function renderEditor(chat) {
         h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'),
           seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], () => s.scheduleImage, v => { s.scheduleImage = v; touch(); }, 'Картинка подій')),
         off || on ? h('div', { class: 'btnrow' }, edit('off', 'Редагувати шаблон: ' + (off ? off.title : '')), edit('on', 'Редагувати шаблон: ' + (on ? on.title : ''))) : null),
+      ...(svbNode ? [svbNode] : []),
       h('p', { class: 'hint credit', text: CREDIT }));
-    if (tab === 'sched') loadPv();
+    svbPaint(has, lock);
+    if (tab === 'sched') { loadPv(); svbEnsure(); }
   }
 
   // ----- tab: Повідомлення (template studio) -----
@@ -785,11 +913,28 @@ function renderEditor(chat) {
     testBtn = h('button', { type: 'button', class: 'btn', onclick: sendTest });
     setTestLabel();
 
+    const ss = s.slotSettings[x.id];
+    let slotOpts = null;
+    if (ss) {
+      const swId = 'sw' + (++uid), isEnd = x.id === 'ended';
+      const cb = h('input', { type: 'checkbox', role: 'switch', id: swId });
+      cb.checked = ss.enabled;
+      const wrap = h('div', { class: 'tawrap' + (ss.enabled ? '' : ' dim') }, tpl, counter);
+      cb.addEventListener('change', () => { ss.enabled = cb.checked; wrap.classList.toggle('dim', !ss.enabled); touch(); });
+      slotOpts = h('div', { class: 'slotopts glass' },
+        h('div', { class: 'row' }, fieldLabel(isEnd ? 'Сповіщати про зняття аварійного запису' : 'Надсилати це сповіщення', isEnd ? 'slotEnded' : 'slotOn', swId),
+          h('label', { class: 'sw' }, cb, h('i', { class: 'trk' }))),
+        isEnd ? null : h('div', { class: 'fld' }, fieldLabel('Оновлення', 'slotEdit'),
+          seg([[true, 'Редагувати те саме повідомлення'], [false, 'Щоразу нове повідомлення']], () => ss.editInPlace, v => { ss.editInPlace = v; touch(); }, 'Оновлення')));
+      slotOpts.wrap = wrap;
+    }
+
     studio.replaceChildren(
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: x.title }), help('template')),
         h('p', { class: 'hint', text: x.description }),
-        h('div', { class: 'tawrap' }, tpl, counter), errBox, prevx.node,
+        slotOpts,
+        slotOpts ? slotOpts.wrap : h('div', { class: 'tawrap' }, tpl, counter), errBox, prevx.node,
         h('div', { class: 'testrow' }, testBtn, help('test')), testOut),
       card(
         h('div', { class: 'fl sm' }, h('span', { text: 'Параметри' }), help('cond')), chips, paramNote,
@@ -861,7 +1006,7 @@ function renderEditor(chat) {
     card(h('div', { class: 'fl big sm' }, h('span', { text: 'Шаблони повідомлень' }), help('slots')),
       h('div', { class: 'slotwrap' }, slotBar)),
     studio,
-    removeBtn ? card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Керування' }), help('remove')), removeBtn) : null);
+    ...(removeBtn ? [card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Керування' }), help('remove')), removeBtn)] : []));
   renderPills(); renderStudio();
 
   // ----- wiring -----

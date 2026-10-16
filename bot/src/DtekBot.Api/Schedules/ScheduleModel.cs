@@ -18,8 +18,17 @@ public sealed record ScheduleSnapshot(
     string? SourceUpdatedText,
     DateTimeOffset CoverageStart,
     DateTimeOffset CoverageEnd,
-    IReadOnlyDictionary<string, GroupSchedule> Groups)
+    IReadOnlyDictionary<string, GroupSchedule> Groups,
+    IReadOnlyDictionary<string, string>? WeeklyPresets = null,
+    IReadOnlyDictionary<string, string>? WeeklyPresetsWithMaybe = null)
 {
+    // The group's typical week as Svitlobot rows (see WeeklyPreset); null when the feed has no preset for it.
+    public string? WeeklyTimetable(string groupId, bool includeMaybe = false)
+    {
+        var source = includeMaybe ? WeeklyPresetsWithMaybe : WeeklyPresets;
+        return source is not null && source.TryGetValue(groupId, out var rows) ? rows : null;
+    }
+
     // Same numbering as Yasno and DTEK ("45.1"); the data file prefixes it with "GPV".
     public GroupSchedule? Find(string groupId) =>
         Groups.TryGetValue(groupId, out var group) ? group : null;
@@ -151,7 +160,7 @@ public static class ScheduleParser
             : "";
         var updated = fact.TryGetProperty("update", out var update) ? update.GetString() : null;
 
-        return new ScheduleSnapshot(dataFile, version, fetchedAt, updated, first.Value, last.Value, groups);
+        return new ScheduleSnapshot(dataFile, version, fetchedAt, updated, first.Value, last.Value, groups, WeeklyPresets: WeeklyPreset.BuildAll(root), WeeklyPresetsWithMaybe: WeeklyPreset.BuildAll(root, includeMaybe: true));
     }
 
     // Adjacent pieces (hour by hour, across midnight) become one outage.

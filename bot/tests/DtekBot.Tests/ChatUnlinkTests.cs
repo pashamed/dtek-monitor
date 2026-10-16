@@ -191,22 +191,65 @@ public sealed class ChatUnlinkTests : IDisposable
     }
 
     [Fact]
-    public async Task LastAdmin_KeepsOtherSettings()
+    public async Task LastAdmin_ResetsEverySettingToDefaults_KeepingOnlyTheTitle()
     {
-        AddFullChannel();
+        var created = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        _f.AddChannel(Chat, c =>
+        {
+            ChannelAssert.Customize(c);
+            c.Title = "Мій будинок";
+            c.CreatedAt = created;
+        });
         Link(Chat, UserA);
 
         await UnlinkAsync();
 
         var channel = _f.LoadChannel(Chat);
-        Assert.Equal("kyiv", channel.RegionId);
-        Assert.Equal("right-bank", channel.PartId);
+        ChannelAssert.IsCleanUnsubscribed(channel);
         Assert.Equal("Мій будинок", channel.Title);
-        Assert.Equal("<b>{message}</b>", channel.Template);
-        Assert.Equal(DtekBot.Shared.AlertFilter.EmergencyOnly, channel.Filter);
-        Assert.True(channel.IsPaused);
-        Assert.False(channel.NotifyOnEnd);
-        Assert.False(channel.EditInPlace);
+        Assert.Equal(created, channel.CreatedAt);
+    }
+
+    [Fact]
+    public async Task LastAdmin_DeletesScheduleThreadsAndOpenDeliveries_OfThatChatOnly()
+    {
+        AddFullChannel();
+        AddFullChannel(OtherChat);
+        Link(Chat, UserA);
+        _f.AddOpenDelivery(Chat, 1);
+        _f.AddOpenDelivery(OtherChat, 2);
+        _f.Db.Deliveries.Add(new Delivery { ChatId = Chat, RegionId = "kyiv", TelegramMessageId = 3, ContentHash = "h", IsClosed = true, UpdatedAt = Now });
+        foreach (var chat in new[] { Chat, OtherChat })
+        {
+            _f.Db.ScheduleThreads.Add(new ScheduleThread { ChatId = chat, RegionId = "kyiv", GroupId = "45.1", MessageId = 5, UpdatedAt = Now });
+            _f.Db.SchedulePostThreads.Add(new SchedulePostThread { ChatId = chat, RegionId = "kyiv", GroupId = "45.1", MessageId = 6, DateKey = "2026-07-15", UpdatedAt = Now });
+        }
+
+        _f.Db.SaveChanges();
+
+        await UnlinkAsync();
+
+        Assert.Equal([OtherChat], _f.Db.ScheduleThreads.AsNoTracking().Select(t => t.ChatId).ToList());
+        Assert.Equal([OtherChat], _f.Db.SchedulePostThreads.AsNoTracking().Select(t => t.ChatId).ToList());
+        Assert.Empty(_f.Db.Deliveries.AsNoTracking().Where(d => d.ChatId == Chat && !d.IsClosed));
+        Assert.Single(_f.Db.Deliveries.AsNoTracking().Where(d => d.ChatId == Chat && d.IsClosed));
+        Assert.Single(_f.Db.Deliveries.AsNoTracking().Where(d => d.ChatId == OtherChat && !d.IsClosed));
+    }
+
+    [Fact]
+    public async Task OtherAdminRemains_ThreadsAndDeliveriesStay()
+    {
+        AddFullChannel();
+        Link(Chat, UserA);
+        Link(Chat, UserB);
+        _f.AddOpenDelivery(Chat, 1);
+        _f.Db.ScheduleThreads.Add(new ScheduleThread { ChatId = Chat, RegionId = "kyiv", GroupId = "45.1", MessageId = 5, UpdatedAt = Now });
+        _f.Db.SaveChanges();
+
+        await UnlinkAsync(userId: UserA);
+
+        Assert.Single(_f.Db.ScheduleThreads.AsNoTracking());
+        Assert.Single(_f.Db.Deliveries.AsNoTracking());
     }
 
     [Fact]
@@ -401,7 +444,7 @@ public sealed class ChatUnlinkTests : IDisposable
     }
 
     [Fact]
-    public async Task UnlinkedAndUnsubscribedChannel_OpenRegionThreadIsClosedSilently()
+    public async Task UnlinkedAndUnsubscribedChannel_OpenRegionThreadIsDroppedSilently()
     {
         _f.AddChannel(Chat);
         Link(Chat, UserA);
@@ -413,7 +456,7 @@ public sealed class ChatUnlinkTests : IDisposable
 
         Assert.Equal(new(0, 0, 0, 0), summary);
         Assert.Empty(_f.Bot.Requests);
-        Assert.True(Assert.Single(_f.Deliveries(Chat)).IsClosed);
+        Assert.DoesNotContain(_f.Deliveries(Chat), d => !d.IsClosed);
     }
 
     [Fact]

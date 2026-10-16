@@ -134,7 +134,7 @@ public sealed class AlertDispatcherTests : IDisposable
         var reply = _f.Bot.Sent.Last();
         Assert.Equal(2, _f.Bot.Sent.Count());
         Assert.Equal(original.TelegramMessageId, reply.ReplyParameters?.MessageId);
-        Assert.Contains("✅", reply.Text);
+        Assert.Contains("ℹ️", reply.Text);
         Assert.Equal(ParseMode.Html, reply.ParseMode);
 
         Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
@@ -158,9 +158,9 @@ public sealed class AlertDispatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task AlertEnding_WithNotifyOnEndOff_ClosesDeliveryWithoutMessage()
+    public async Task AlertEnding_WithEndedSlotOff_ClosesDeliveryWithoutMessage()
     {
-        _f.AddChannel(ChatA, c => c.NotifyOnEnd = false);
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = Slots(("ended", false, true)));
         await _f.DispatchAsync(DispatcherFixture.EmergencyText);
 
         var summary = await _f.DispatchAsync("");
@@ -168,6 +168,73 @@ public sealed class AlertDispatcherTests : IDisposable
         Assert.Equal(new(0, 0, 1, 0), summary);
         Assert.Single(_f.Bot.Requests);
         Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    private static Dictionary<string, SlotSettingDto> Slots(params (string Slot, bool Enabled, bool EditInPlace)[] items) =>
+        items.ToDictionary(i => i.Slot, i => new SlotSettingDto(i.Enabled, i.EditInPlace));
+
+    [Fact]
+    public async Task LegacyNotifyOnEndOff_StillDisablesTheEndedSlot_WhenNoSlotSettings()
+    {
+        _f.AddChannel(ChatA, c => c.NotifyOnEnd = false);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        await _f.DispatchAsync("");
+
+        Assert.Single(_f.Bot.Requests);
+    }
+
+    [Fact]
+    public async Task DisabledEmergencySlot_GetsNothing_ButRegionalStillArrives()
+    {
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = Slots(("emergency", false, true)));
+
+        Assert.Equal(new(0, 0, 0, 0), await _f.DispatchAsync(DispatcherFixture.EmergencyText));
+        Assert.Equal(new(0, 0, 0, 0), await _f.DispatchAsync(DispatcherFixture.UnknownText));
+        Assert.Empty(_f.Bot.Requests);
+
+        Assert.Equal(new(1, 0, 0, 0), await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText));
+    }
+
+    [Fact]
+    public async Task SlotSwitchedOff_WithOpenThread_ClosesItSilently()
+    {
+        var channel = _f.AddChannel(ChatA);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        channel.SlotSettingMap = Slots(("emergency", false, true));
+        _f.Db.SaveChanges();
+
+        var summary = await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Single(_f.Bot.Requests);
+        Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task EditInPlace_IsPerSlot()
+    {
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = Slots(("emergency", true, false), ("regional", true, true)));
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        Assert.Equal(new(1, 0, 0, 0), await _f.DispatchAsync(DispatcherFixture.EmergencyText + " Оновлення: діє до 23:00."));
+        Assert.Empty(_f.Bot.Edits);
+    }
+
+    [Fact]
+    public void LegacyColumns_ProvideTheDefaults()
+    {
+        var channel = new Channel { NotifyOnEnd = false, EditInPlace = false };
+
+        Assert.True(channel.SlotEnabled("emergency"));
+        Assert.True(channel.SlotEnabled("local"));
+        Assert.False(channel.SlotEnabled("ended"));
+        Assert.False(channel.SlotEditInPlace("regional"));
+
+        channel.SlotSettingMap = Slots(("ended", true, false), ("regional", true, true));
+        Assert.True(channel.SlotEnabled("ended"));
+        Assert.True(channel.SlotEditInPlace("regional"));
+        Assert.False(channel.SlotEditInPlace("emergency"));
     }
 
     [Fact]
@@ -209,17 +276,17 @@ public sealed class AlertDispatcherTests : IDisposable
     }
 
     [Theory]
-    [InlineData(DispatcherFixture.EmergencyText, true)]
-    [InlineData(DispatcherFixture.AccidentRightBankText, true)]
-    [InlineData(DispatcherFixture.UnknownText, false)]
-    public async Task EmergencyOnlyFilter_DeliversOnlyEmergencyAndAccident(string text, bool delivered)
+    [InlineData(DispatcherFixture.EmergencyText)]
+    [InlineData(DispatcherFixture.AccidentRightBankText)]
+    [InlineData(DispatcherFixture.UnknownText)]
+    public async Task LegacyFilter_IsRetired_EveryAlertKindIsDelivered(string text)
     {
         _f.AddChannel(ChatA, c => c.Filter = AlertFilter.EmergencyOnly);
 
         var summary = await _f.DispatchAsync(text);
 
-        Assert.Equal(delivered ? new DispatchSummary(1, 0, 0, 0) : new DispatchSummary(0, 0, 0, 0), summary);
-        Assert.Equal(delivered ? 1 : 0, _f.Bot.Sent.Count());
+        Assert.Equal(new(1, 0, 0, 0), summary);
+        Assert.Single(_f.Bot.Sent);
     }
 
     [Fact]
@@ -336,14 +403,16 @@ public sealed class AlertDispatcherTests : IDisposable
     {
         _f.AddChannel(ChatA, c =>
         {
-            c.PartId = "right-bank";
+            c.PartId = "obolonskyi";
             c.Template = "<b>{where}</b>";
         });
 
         await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
 
         var request = Assert.Single(_f.Bot.Sent);
-        Assert.Equal("<b>м. Київ (Правий берег)</b>", request.Text);
+        Assert.Equal(
+            "<b>м. Київ (Правий берег)</b>",
+            request.Text);
         Assert.Equal(ParseMode.Html, request.ParseMode);
     }
 

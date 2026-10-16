@@ -60,6 +60,9 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
             EditMessageCaptionRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
             GetMeRequest => new User { Id = BotId, IsBot = true, FirstName = "DtekBot", Username = "dtek_test_bot" },
             GetChatMemberRequest member => MemberFor(member.UserId),
+            GetChatRequest chat => Chats.TryGetValue(chat.ChatId.Identifier ?? 0, out var info)
+                ? info
+                : throw new ApiRequestException("Bad Request: chat not found", 400),
             _ => throw new NotSupportedException($"Fake bot does not handle {request.GetType().Name}."),
         };
 
@@ -70,6 +73,9 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
     public Dictionary<long, ChatMemberStatus> MemberStatuses { get; } = [];
 
     public void SetStatus(long userId, ChatMemberStatus status) => MemberStatuses[userId] = status;
+
+    // Chats that GetChat can find, by id.
+    public Dictionary<long, ChatFullInfo> Chats { get; } = [];
 
     public IEnumerable<AnswerCallbackQueryRequest> Answers => Requests.OfType<AnswerCallbackQueryRequest>();
 

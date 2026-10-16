@@ -45,7 +45,17 @@ public sealed record ChatSettingsDto(
     PostMode SchedulePostMode = PostMode.New,
     ScheduleImage SchedulePostImage = ScheduleImage.Grid,
     PostMode ScheduleEventMode = PostMode.Edit,
-    IReadOnlyDictionary<string, string>? Templates = null);
+    IReadOnlyDictionary<string, string>? Templates = null,
+    string? OutageTriggerPattern = null,
+    IReadOnlyDictionary<string, SlotSettingDto>? SlotSettings = null,
+    bool HasSvitlobotKey = false);
+
+// Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
+// EditInPlace does not apply to the «ended» slot.
+public sealed record SlotSettingDto(bool Enabled, bool EditInPlace);
+
+// Warning is advice only: saving the phrase is never blocked.
+public sealed record TriggerCheckDto(bool Valid, int Seen, int Matched, string? Warning);
 
 // Plain-text lines describing where things stand for a chat right now (popup, schedule, group emergency).
 public sealed record ChatStatusDto(IReadOnlyList<string> Lines);
@@ -92,7 +102,8 @@ public sealed record GroupItemDto(string Id, string Name);
 
 public sealed record SetGroupRequest(string RegionId, string GroupId);
 
-public sealed record PlaceholderDto(string Name, string Description, string Example);
+// Name is what users see and type (Ukrainian); Key is the canonical Latin name used by storage and rendering.
+public sealed record PlaceholderDto(string Name, string Description, string Example, string? Key = null);
 
 // How a message about a changing situation is kept in the channel.
 public enum PostMode

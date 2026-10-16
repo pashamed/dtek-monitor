@@ -36,7 +36,9 @@ public sealed class AlertDispatcher(
         RegionSettings region,
         PopupClassification result,
         string? popupText,
-        CancellationToken ct)
+        CancellationToken ct,
+        AlertSource source = AlertSource.None,
+        bool regionWideActive = false)
     {
         int sent = 0, edited = 0, closed = 0, failed = 0;
         var now = time.GetUtcNow();
@@ -44,6 +46,11 @@ public sealed class AlertDispatcher(
         var channels = await db.Channels
             .Where(c => c.RegionId == region.Id && c.IsActive)
             .ToListAsync(ct);
+        foreach (var saved in channels)
+        {
+            region.UpgradeRetiredParts(saved);
+        }
+
         var openDeliveries = await db.Deliveries
             .Where(d => d.RegionId == region.Id && !d.IsClosed)
             .ToListAsync(ct);
@@ -63,27 +70,37 @@ public sealed class AlertDispatcher(
         foreach (var channel in channels)
         {
             var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
+            var slot = SlotFor(kind, false);
+            var slotOn = channel.SlotEnabled(slot);
             var eligible = result.IsAlert
                 && !channel.IsPaused
                 && Matches(channel, result)
-                && PassesFilter(channel, result.Kind);
+                && slotOn;
 
             Outcome outcome;
             if (eligible)
             {
-                var text = Render(channel, region, kind, PartNames(region, result), popupText, now);
+                var text = Render(channel, region, kind, PartNames(region, result), popupText, now, source: source);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, region.Id, delivery, text, result.Hash, now, ct),
+                    () => SendOrEditAsync(channel, slot, region.Id, delivery, text, result.Hash, now, ct),
                     ct);
+            }
+            else if (delivery is not null && result.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
+            {
+                // Narrowed out by the districts of the newer popup while the region-wide alert is still on:
+                // the chat keeps its open thread, so the alert is neither repeated later nor announced as ended.
+                continue;
             }
             else if (delivery is not null)
             {
-                var announce = !channel.IsPaused && channel.NotifyOnEnd;
+                // A switched-off alert type closes its open thread silently.
+                var announce = !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
+                    && !(result.IsAlert && !slotOn);
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
-                        () => SendEndAsync(channel, region, delivery, PartNames(region, result), popupText, now, ct),
+                        () => SendEndAsync(channel, region, delivery, OwnPartNames(region, channel, result), popupText, now, ct),
                         ct)
                     : Outcome.Closed;
 
@@ -148,17 +165,19 @@ public sealed class AlertDispatcher(
         {
             var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
             Outcome outcome;
-            if (isEmergency && !channel.IsPaused)
+            if (isEmergency && !channel.IsPaused && channel.SlotEnabled(MessageSlots.Local))
             {
                 var text = Render(channel, region, AlertKind.Emergency, partNames, null, now, isGroup: true);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, key, delivery, text, hash, now, ct),
+                    () => SendOrEditAsync(channel, MessageSlots.Local, key, delivery, text, hash, now, ct),
                     ct);
             }
             else if (delivery is not null)
             {
-                outcome = !channel.IsPaused && channel.NotifyOnEnd
+                var announce = !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
+                    && !(isEmergency && !channel.SlotEnabled(MessageSlots.Local));
+                outcome = announce
                     ? await TrySendAsync(
                         channel,
                         () => SendEndAsync(channel, region, delivery, partNames, null, now, ct, isGroup: true),
@@ -192,6 +211,7 @@ public sealed class AlertDispatcher(
 
     private async Task<Outcome> SendOrEditAsync(
         Channel channel,
+        string slot,
         string deliveryKey,
         Delivery? delivery,
         string text,
@@ -204,7 +224,7 @@ public sealed class AlertDispatcher(
             return Outcome.Unchanged;
         }
 
-        if (delivery is not null && channel.EditInPlace)
+        if (delivery is not null && channel.SlotEditInPlace(slot))
         {
             await WithMarkupFallback(
                 text,
@@ -293,10 +313,12 @@ public sealed class AlertDispatcher(
         IReadOnlyList<string> partNames,
         string? popupText,
         DateTimeOffset now,
-        bool isGroup = false)
+        bool isGroup = false,
+        AlertSource source = AlertSource.None)
     {
         var slot = SlotFor(kind, isGroup);
         var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText).ToDictionary(p => p.Key, p => p.Value);
+        values["message"] = AlertSourceText.Tag(values["message"], source, kind);
         if (isGroup)
         {
             values["group"] = channel.GroupId ?? "";
@@ -308,15 +330,21 @@ public sealed class AlertDispatcher(
 
     // Names only the districts the alert itself mentions: parts that are merely implied by another one
     // (a bank's city districts) would make the text needlessly long.
+    // The end notice is about the chat's own districts, not about whatever the replacing popup names.
+    private static List<string> OwnPartNames(RegionSettings region, Channel channel, PopupClassification result)
+    {
+        var own = channel.PartIdList;
+        return own.Count == 0
+            ? PartNames(region, result)
+            : region.DisplayNames(own);
+    }
+
     private static List<string> PartNames(RegionSettings region, PopupClassification result)
     {
         var implied = result.PartIds
             .SelectMany(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Children ?? [])
             .ToHashSet(StringComparer.Ordinal);
-        return result.PartIds
-            .Where(id => !implied.Contains(id))
-            .Select(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Name ?? id)
-            .ToList();
+        return region.DisplayNames(result.PartIds.Where(id => !implied.Contains(id)));
     }
 
     // A saved template is validated, but if Telegram still rejects its markup the alert must go out.
@@ -349,9 +377,6 @@ public sealed class AlertDispatcher(
             || result.PartIds.Count == 0
             || result.PartIds.Any(id => wanted.Contains(id, StringComparer.OrdinalIgnoreCase));
     }
-
-    private static bool PassesFilter(Channel channel, PopupKind kind) =>
-        channel.Filter == AlertFilter.All || kind is PopupKind.Emergency or PopupKind.Accident;
 
     // Deactivates chats that blocked the bot or no longer exist.
     private async Task<Outcome> TrySendAsync(Channel channel, Func<Task<Outcome>> action, CancellationToken ct)

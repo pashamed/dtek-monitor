@@ -110,7 +110,7 @@ public sealed class AlertSlotTests : IDisposable
         await _f.DispatchAsync("");
 
         var reply = _f.Bot.Sent.Last();
-        Assert.Equal("END ✅ м. Київ", reply.Text);
+        Assert.Equal("END ℹ️ м. Київ", reply.Text);
         Assert.Equal(original, reply.ReplyParameters!.MessageId);
     }
 
@@ -123,7 +123,9 @@ public sealed class AlertSlotTests : IDisposable
         await _f.DispatchAsync("");
 
         var reply = _f.Bot.Sent.Last();
-        Assert.StartsWith("✅ ", reply.Text);
+        Assert.StartsWith("ℹ️ ", reply.Text);
+        Assert.Contains("відключення знято", reply.Text);
+        Assert.DoesNotContain("✅", reply.Text);
         Assert.Contains("Деталі:", reply.Text);
     }
 
@@ -187,24 +189,28 @@ public sealed class AlertSlotTests : IDisposable
 
     // ---- districts in the text ----
 
+    // A full set of a retired bank's districts is named by the bank.
+    private const string RightBankNames = "Правий берег";
+
+    private const string BothBanksNames = "Лівий берег, Правий берег";
+
     [Fact]
-    public async Task BankAlert_NamesOnlyTheBank_NotEveryImpliedDistrict()
+    public async Task BankAlert_NamesTheBank()
     {
         var text = await SentTextAsync(DispatcherFixture.AccidentRightBankText, _ => { });
 
-        Assert.Contains("м. Київ (Правий берег)", text);
-        Assert.DoesNotContain("Голосіївський", text);
-        Assert.DoesNotContain("Шевченківський", text);
+        Assert.Contains($"м. Київ ({RightBankNames})", text);
+        Assert.DoesNotContain("Дарницький", text);
     }
 
     [Fact]
-    public async Task BankAlert_PartAndWherePlaceholders_AreTheBank()
+    public async Task BankAlert_PartAndWherePlaceholders_AreTheDistricts()
     {
         var text = await SentTextAsync(
             DispatcherFixture.AccidentRightBankText,
-            c => c.TemplateMap = Map(("regional", "[{part}] [{where}] {message}")));
+            c => c.TemplateMap = Map(("regional", "[{part}] [{where}]")));
 
-        Assert.StartsWith("[Правий берег] [м. Київ (Правий берег)] ", text);
+        Assert.Equal($"[{RightBankNames}] [м. Київ ({RightBankNames})]", text);
     }
 
     [Fact]
@@ -214,7 +220,7 @@ public sealed class AlertSlotTests : IDisposable
             DispatcherFixture.AccidentBothBanksText,
             c => c.TemplateMap = Map(("regional", "[{part}]")));
 
-        Assert.Equal("[Правий берег, Лівий берег]", text);
+        Assert.Equal($"[{BothBanksNames}]", text);
     }
 
     [Fact]
@@ -236,10 +242,25 @@ public sealed class AlertSlotTests : IDisposable
         await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
 
         Assert.Equal("м. Київ", _f.Bot.Sent.First().Text);
-        Assert.Equal("м. Київ / Правий берег", _f.Bot.Edits.Last().Text);
+        Assert.Equal($"м. Київ / {RightBankNames}", _f.Bot.Edits.Last().Text);
     }
 
     // ---- local (group) alerts ----
+
+    [Fact]
+    public async Task GroupAlert_WithLocalSlotOff_SendsNothing()
+    {
+        _f.AddChannel(Chat, c =>
+        {
+            c.GroupId = Group;
+            c.SlotSettingMap = new Dictionary<string, SlotSettingDto> { ["local"] = new(false, true) };
+        });
+
+        var summary = await GroupAsync(emergency: true);
+
+        Assert.Equal(new(0, 0, 0, 0), summary);
+        Assert.Empty(_f.Bot.Requests);
+    }
 
     [Fact]
     public async Task GroupAlert_DefaultLocalLayout_ShowsGroupAndSavedAddress()

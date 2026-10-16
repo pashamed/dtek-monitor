@@ -9,6 +9,7 @@ public sealed class DtekSettings
     public PollingSettings Polling { get; set; } = new();
     public AddressCheckSettings AddressChecks { get; set; } = new();
     public ScheduleSettings Schedules { get; set; } = new();
+    public GridSettings Grid { get; set; } = new();
 }
 
 public sealed class RegionSettings
@@ -28,6 +29,54 @@ public sealed class RegionSettings
     public bool HasSchedules => !string.IsNullOrEmpty(OutageDataFile);
     public List<string> Aliases { get; set; } = [];
     public List<PartSettings> Parts { get; set; } = [];
+
+    // Part ids that used to exist and may still be saved in chats, mapped to the parts that replaced them.
+    public Dictionary<string, List<string>> RetiredParts { get; set; } = [];
+
+    // Short names for a retired group when a message covers all of its parts ("Правий берег" instead of seven districts).
+    public Dictionary<string, string> RetiredPartLabels { get; set; } = [];
+
+    // Names for a message: the full set of a retired group's parts collapses to its label.
+    public List<string> DisplayNames(IEnumerable<string> ids)
+    {
+        var wanted = ids.ToList();
+        var names = new List<string>();
+        var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (retired, parts) in RetiredParts)
+        {
+            if (parts.Count > 1 && RetiredPartLabels.TryGetValue(retired, out var label)
+                && parts.All(p => wanted.Contains(p, StringComparer.OrdinalIgnoreCase)))
+            {
+                names.Add(label);
+                covered.UnionWith(parts);
+            }
+        }
+
+        names.AddRange(wanted.Where(id => !covered.Contains(id))
+            .Select(id => Parts.FirstOrDefault(p => p.Id == id)?.Name ?? id));
+        return names;
+    }
+
+    // Replaces retired part ids with their replacements; true when the channel was changed.
+    public bool UpgradeRetiredParts(DtekBot.Api.Data.Channel channel)
+    {
+        var saved = channel.PartIdList;
+        if (RetiredParts.Count == 0 || !saved.Any(id => RetiredParts.Keys.Contains(id, StringComparer.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var upgraded = new List<string>();
+        foreach (var id in saved)
+        {
+            var replacement = RetiredParts.FirstOrDefault(r => string.Equals(r.Key, id, StringComparison.OrdinalIgnoreCase));
+            upgraded.AddRange(replacement.Value ?? [id]);
+        }
+
+        channel.PartId = null;
+        channel.PartIdList = upgraded;
+        return true;
+    }
 }
 
 public sealed class PartSettings
@@ -61,6 +110,16 @@ public sealed class ScheduleSettings
 
     // A failed refresh keeps serving the last good copy for this long.
     public int MaxStaleMinutes { get; set; } = 120;
+}
+
+// The public feed of the Ukrenergo (НЕК) status per region, republished on GitHub.
+public sealed class GridSettings
+{
+    public string FeedUrl { get; set; } = "https://raw.githubusercontent.com/lasercat12/ua-power-status/main/data/regions.json";
+    public int CacheMinutes { get; set; } = 1;
+
+    // A feed generated longer ago than this is ignored: unknown never opens or closes an alert.
+    public int MaxAgeMinutes { get; set; } = 45;
 }
 
 // Limits that keep on-demand address checks from hammering GitHub Actions and the DTEK site.
