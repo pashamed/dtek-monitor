@@ -18,7 +18,7 @@ public static class SvitlobotApi
     public const int MaxKeyLength = 200;
     private const int MaxKeyBytes = 300;
 
-    private static readonly ApiError NotConfigured = new("Світлобот не налаштований на сервері.");
+    private static readonly ApiError NotConfigured = new("Світлобот не налаштований на сервері. Адміністратор має задати Svitlobot:KeyEncryptionKey (32 випадкові байти в base64) і перезапустити застосунок.");
     private static readonly ApiError Forbidden = new("Немає доступу до цього чату.");
 
     public static RouteGroupBuilder MapSvitlobotApi(this RouteGroupBuilder api)
