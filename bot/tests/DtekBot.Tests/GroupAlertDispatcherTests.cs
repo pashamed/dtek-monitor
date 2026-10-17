@@ -138,6 +138,53 @@ public sealed class GroupAlertDispatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task NoLongerEmergency_NewStyle_SendsAPlainMessage()
+    {
+        _f.AddChannel(ChatA, c => { c.GroupId = Group; c.SlotSettingMap = new Dictionary<string, SlotSettingDto> { ["ended"] = new(true, true, EndStyle.New) }; });
+        await GroupAsync(emergency: true);
+
+        var summary = await GroupAsync(emergency: false);
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        var notice = _f.Bot.Sent.Last();
+        Assert.Null(notice.ReplyParameters);
+        Assert.Contains("черга 45.1", notice.Text);
+        Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task NoLongerEmergency_EditStyle_EditsTheOriginalGroupMessage()
+    {
+        _f.AddChannel(ChatA, c => { c.GroupId = Group; c.SlotSettingMap = new Dictionary<string, SlotSettingDto> { ["ended"] = new(true, true, EndStyle.Edit) }; });
+        await GroupAsync(emergency: true);
+        var original = Assert.Single(AllDeliveries(ChatA));
+
+        var summary = await GroupAsync(emergency: false);
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Single(_f.Bot.Sent);
+        var edit = Assert.Single(_f.Bot.Edits);
+        Assert.Equal(original.TelegramMessageId, edit.MessageId);
+        Assert.Contains("черга 45.1", edit.Text);
+        Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task NoLongerEmergency_EditStyle_FallsBackToAReply_WhenTheOriginalIsGone()
+    {
+        _f.AddChannel(ChatA, c => { c.GroupId = Group; c.SlotSettingMap = new Dictionary<string, SlotSettingDto> { ["ended"] = new(true, true, EndStyle.Edit) }; });
+        await GroupAsync(emergency: true);
+        var original = Assert.Single(AllDeliveries(ChatA));
+        _f.Bot.Failure = r => r is EditMessageTextRequest ? FakeTelegramBotClient.MessageToEditNotFound() : null;
+
+        var summary = await GroupAsync(emergency: false);
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Equal(original.TelegramMessageId, _f.Bot.Sent.Last().ReplyParameters?.MessageId);
+        Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
     public async Task NoLongerEmergency_WithNotifyOnEndOff_ClosesDeliverySilently()
     {
         _f.AddChannel(ChatA, c => { c.GroupId = Group; c.NotifyOnEnd = false; });

@@ -35,6 +35,9 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
     public static ApiRequestException NotModified() =>
         new("Bad Request: message is not modified: specified new message content and reply markup are exactly the same", 400);
 
+    public static ApiRequestException MessageToEditNotFound() =>
+        new("Bad Request: message to edit not found", 400);
+
     public Task<TResponse> SendRequest<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
         Requests.Add(request);

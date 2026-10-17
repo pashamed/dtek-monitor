@@ -125,6 +125,11 @@ public sealed class Channel
     public bool SlotEditInPlace(string slot) =>
         SlotSettingMap.TryGetValue(slot, out var own) ? own.EditInPlace : EditInPlace;
 
+    public EndStyle SlotEndStyle(string slot) =>
+        slot == MessageSlots.Ended && SlotSettingMap.TryGetValue(slot, out var own) && Enum.IsDefined(own.EndStyle)
+            ? own.EndStyle
+            : EndStyle.Reply;
+
     public string? GroupId { get; set; }
     public string? AddressLabel { get; set; }
 

@@ -282,6 +282,37 @@ public sealed class AlertDispatcher(
         bool isGroup = false)
     {
         var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup);
+        var style = channel.SlotEndStyle(MessageSlots.Ended);
+
+        if (style == EndStyle.Edit)
+        {
+            try
+            {
+                await WithMarkupFallback(
+                    text,
+                    t => bot.EditMessageText(
+                        delivery.ChatId,
+                        delivery.TelegramMessageId,
+                        t,
+                        parseMode: ParseMode.Html,
+                        linkPreviewOptions: NoPreview,
+                        cancellationToken: ct),
+                    channel);
+                return Outcome.Closed;
+            }
+            catch (ApiRequestException ex) when (ex.Message.Contains("message is not modified", StringComparison.OrdinalIgnoreCase))
+            {
+                return Outcome.Closed;
+            }
+            catch (ApiRequestException ex) when (
+                ex.ErrorCode == 400
+                && (ex.Message.Contains("message to edit not found", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("can't be edited", StringComparison.OrdinalIgnoreCase)))
+            {
+                logger.LogInformation("Chat {ChatId}: the original alert cannot be edited, posting the end notice as a reply", channel.ChatId);
+            }
+        }
+
         await WithMarkupFallback(
             text,
             t => bot.SendMessage(
@@ -289,11 +320,13 @@ public sealed class AlertDispatcher(
                 t,
                 parseMode: ParseMode.Html,
                 linkPreviewOptions: NoPreview,
-                replyParameters: new ReplyParameters
-                {
-                    MessageId = delivery.TelegramMessageId,
-                    AllowSendingWithoutReply = true,
-                },
+                replyParameters: style == EndStyle.New
+                    ? null
+                    : new ReplyParameters
+                    {
+                        MessageId = delivery.TelegramMessageId,
+                        AllowSendingWithoutReply = true,
+                    },
                 cancellationToken: ct),
             channel);
         return Outcome.Closed;
