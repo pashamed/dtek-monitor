@@ -301,7 +301,7 @@ function renderEditor(chat) {
   };
   state.editing = chat;
   try { tg.BackButton.show(); } catch { /* optional */ }
-  let seq = 0, timer = 0, busy = false, tab = 'main', hintFor = null, uid = 0, cs = slots.length ? slots[0].id : null;
+  let seq = 0, timer = 0, busy = false, tab = 'main', hintFor = null, inlineFor = null, inlineNode = null, uid = 0, cs = slots.length ? slots[0].id : null;
   // Per-slot editor state: current text (the default text when not customised), errors from preview / from the server.
   const tpls = Object.fromEntries(slots.map(x => [x.id, (chat.settings.templates || {})[x.id] || x.defaultTemplate]));
   const perr = {}, serr = {};
@@ -447,9 +447,24 @@ function renderEditor(chat) {
 
   function renderHint() {
     const r = regionOf(s.regionId);
-    if (!r || hintFor !== s.regionId || groupOf() || !(r.hasGroups || r.hasSchedules)) { hintBox.replaceChildren(); return; }
+    if (!r || groupOf()) { inlineFor = null; hintBox.replaceChildren(); return; }
+
+    // A region with the address search: the address is typed right here, no need to find another tab.
+    if (r.hasGroups) {
+      if (inlineFor !== s.regionId) {
+        const ctx = makeAddrCtx();
+        inlineNode = card(
+          h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })),
+          addressPicker(s.regionId, ctx), ctx.msg);
+        inlineFor = s.regionId;
+      }
+      hintBox.replaceChildren(inlineNode);
+      return;
+    }
+
+    if (hintFor !== s.regionId || !r.hasSchedules) { hintBox.replaceChildren(); return; }
     hintBox.replaceChildren(h('div', { class: 'nudge glass' },
-      h('div', {}, h('b', { text: r.hasGroups ? 'Тепер оберіть адресу' : 'Тепер оберіть чергу' }),
+      h('div', {}, h('b', { text: 'Тепер оберіть чергу' }),
         h('p', { class: 'hint', text: 'Це потрібно, щоб отримувати сповіщення саме для вашої черги.' })),
       h('button', { type: 'button', class: 'btn sm', text: 'Адреса і черга', onclick: () => setTab('addr') })));
   }
@@ -569,6 +584,58 @@ function renderEditor(chat) {
     chkBtn.disabled = false; chkBtn.classList.remove('busy'); chkBtn.textContent = 'Перевірити зараз';
   });
 
+  // The address search is used in two places: right under the region on «Основне», and on «Адреса і черга».
+  function makeAddrCtx() {
+    const msg = h('div', { class: 'msg', role: 'status' });
+    const fail = e => { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); };
+
+    async function commit(method, path, body, needSave) {
+      msg.className = 'msg'; msg.textContent = 'Зберігаю…';
+      if (needSave) {
+        const err = await ensureSaved();
+        if (err) { fail(err); return false; }
+      }
+      try {
+        applyChat(await api(method, '/api/chats/' + encodeURIComponent(chat.chatId) + path, body));
+        haptic('success'); inlineFor = null; refreshAll();
+        return true;
+      } catch (e) { fail(e); return false; }
+    }
+    return { msg, fail, commit };
+  }
+
+  function addressPicker(regionId, { msg, fail, commit }) {
+    let street = null, sseq = 0, stimer = 0;
+    const list = h('div', { class: 'picks' });
+    const inId = 'addrIn' + (++uid);
+    const input = h('input', { type: 'text', id: inId, placeholder: 'Почніть вводити вулицю', autocomplete: 'off', 'aria-label': 'Вулиця' });
+    async function search() {
+      const my = ++sseq, q = input.value.trim();
+      msg.textContent = '';
+      if (q.length < (street ? 1 : 2)) { list.replaceChildren(); return; }
+      try {
+        const url = street
+          ? `/api/address/houses?regionId=${encodeURIComponent(regionId)}&streetId=${street.id}&query=${encodeURIComponent(q)}`
+          : `/api/address/streets?regionId=${encodeURIComponent(regionId)}&query=${encodeURIComponent(q)}`;
+        const items = await api('GET', url);
+        if (my !== sseq) return;
+        if (!items.length) { list.replaceChildren(h('p', { class: 'hint', text: 'Нічого не знайдено.' })); return; }
+        list.replaceChildren(...items.map(i => h('button', { type: 'button', class: 'pick', text: i.name, onclick: () => (street ? pickHouse : pickStreet)(i) })));
+      } catch (e) { if (my === sseq) fail(e); }
+    }
+    const pickStreet = i => {
+      street = i; input.value = ''; input.placeholder = `Номер будинку (${i.name})`; input.setAttribute('aria-label', 'Будинок');
+      list.replaceChildren(); input.focus();
+    };
+    const pickHouse = i => {
+      list.replaceChildren();
+      commit('PUT', '/address', { regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}`, street: street.name, house: i.name }, true);
+    };
+    input.addEventListener('input', () => { clearTimeout(stimer); stimer = setTimeout(search, 300); });
+    return h('div', { class: 'fld' }, fieldLabel('Адреса', 'address', inId), input, list,
+      h('p', { class: 'hint', text: 'Знайдіть вулицю, потім номер будинку: черга визначиться автоматично, а налаштування збережуться.' }));
+  }
+
   function renderAddr() {
     const r = regionOf(s.regionId);
     const nodes = [];
@@ -576,21 +643,8 @@ function renderEditor(chat) {
     else if (!r.hasGroups && !r.hasSchedules) nodes.push(empty('Для цього регіону вибір адреси й черги недоступний.'));
     else {
       const regionId = s.regionId, grp = groupOf(), addr = addrOf();
-      const msg = h('div', { class: 'msg', role: 'status' });
-      const fail = e => { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); };
-
-      async function commit(method, path, body, needSave) {
-        msg.className = 'msg'; msg.textContent = 'Зберігаю…';
-        if (needSave) {
-          const err = await ensureSaved();
-          if (err) { fail(err); return false; }
-        }
-        try {
-          applyChat(await api(method, '/api/chats/' + encodeURIComponent(chat.chatId) + path, body));
-          haptic('success'); refreshAll();
-          return true;
-        } catch (e) { fail(e); return false; }
-      }
+      const ctx = makeAddrCtx();
+      const { msg, fail, commit } = ctx;
 
       if (r.hasGroups && !addr) nodes.push(h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })));
       if (r.hasGroups) {
@@ -599,34 +653,7 @@ function renderEditor(chat) {
             h('div', { class: 'result' }, h('div', { class: 'rl', text: addr }), h('span', { class: 'chip purple', text: 'Черга ' + grp })),
             h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => commit('DELETE', '/address') })));
         } else {
-          let street = null, sseq = 0, stimer = 0;
-          const list = h('div', { class: 'picks' });
-          const input = h('input', { type: 'text', id: 'addrIn', placeholder: 'Почніть вводити вулицю', autocomplete: 'off', 'aria-label': 'Вулиця' });
-          async function search() {
-            const my = ++sseq, q = input.value.trim();
-            msg.textContent = '';
-            if (q.length < (street ? 1 : 2)) { list.replaceChildren(); return; }
-            try {
-              const url = street
-                ? `/api/address/houses?regionId=${encodeURIComponent(regionId)}&streetId=${street.id}&query=${encodeURIComponent(q)}`
-                : `/api/address/streets?regionId=${encodeURIComponent(regionId)}&query=${encodeURIComponent(q)}`;
-              const items = await api('GET', url);
-              if (my !== sseq) return;
-              if (!items.length) { list.replaceChildren(h('p', { class: 'hint', text: 'Нічого не знайдено.' })); return; }
-              list.replaceChildren(...items.map(i => h('button', { type: 'button', class: 'pick', text: i.name, onclick: () => (street ? pickHouse : pickStreet)(i) })));
-            } catch (e) { if (my === sseq) fail(e); }
-          }
-          const pickStreet = i => {
-            street = i; input.value = ''; input.placeholder = `Номер будинку (${i.name})`; input.setAttribute('aria-label', 'Будинок');
-            list.replaceChildren(); input.focus();
-          };
-          const pickHouse = i => {
-            list.replaceChildren();
-            commit('PUT', '/address', { regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}`, street: street.name, house: i.name }, true);
-          };
-          input.addEventListener('input', () => { clearTimeout(stimer); stimer = setTimeout(search, 300); });
-          nodes.push(card(h('div', { class: 'fld' }, fieldLabel('Адреса', 'address', 'addrIn'), input, list,
-            h('p', { class: 'hint', text: 'Знайдіть вулицю, потім номер будинку — черга визначиться автоматично.' }))));
+          nodes.push(card(addressPicker(regionId, ctx)));
         }
       }
 
