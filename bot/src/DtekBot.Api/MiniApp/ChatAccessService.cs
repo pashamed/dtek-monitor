@@ -57,17 +57,34 @@ public sealed class ChatAccessService(ITelegramBotClient bot, BotDbContext db, I
     }
 
     // Asks Telegram, so it also covers admins demoted after they linked a chat.
-    public async Task<bool> IsAdminAsync(long chatId, long userId, CancellationToken ct)
+    public async Task<bool> IsAdminAsync(long chatId, long userId, CancellationToken ct) =>
+        (await CheckAdminAsync(chatId, userId, ct)).IsAdmin;
+
+    // Distinguishes "the user is not an admin" from "Telegram would not tell us", so a failing check can be explained.
+    // getChatMember is tried first; the administrators list is a second opinion (it does not depend on the member type).
+    public async Task<(bool IsAdmin, string? Problem)> CheckAdminAsync(long chatId, long userId, CancellationToken ct)
     {
+        string? problem = null;
         try
         {
             var member = await bot.GetChatMember(chatId, userId, ct);
-            return member.Status is ChatMemberStatus.Creator or ChatMemberStatus.Administrator;
+            return (member.Status is ChatMemberStatus.Creator or ChatMemberStatus.Administrator, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogInformation("Admin check failed for user {UserId} in chat {ChatId}: {Message}", userId, chatId, ex.Message);
-            return false;
+            problem = ex is Telegram.Bot.Exceptions.ApiRequestException ? ex.Message : ex.GetType().Name;
+            logger.LogWarning("getChatMember failed for user {UserId} in chat {ChatId}: {Type}: {Message}", userId, chatId, ex.GetType().Name, ex.Message);
+        }
+
+        try
+        {
+            var admins = await bot.GetChatAdministrators(chatId, cancellationToken: ct);
+            return (admins.Any(a => a.User.Id == userId), null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("getChatAdministrators failed for chat {ChatId}: {Type}: {Message}", chatId, ex.GetType().Name, ex.Message);
+            return (false, problem ?? ex.Message);
         }
     }
 

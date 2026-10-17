@@ -59,6 +59,7 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 });
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddHostedService<BotMenuInitializer>();
+builder.Services.AddHostedService<TickLoop>();
 builder.Services.AddScoped<AlertDispatcher>();
 builder.Services.AddScoped<RegionAlertCoordinator>();
 builder.Services.AddScoped<DtekBot.Api.Grid.GridTickService>();
@@ -74,6 +75,7 @@ builder.Services.AddScoped<OutageAssessmentService>();
 builder.Services.AddScoped<ChatStatusService>();
 builder.Services.AddScoped<ScheduleNotifier>();
 builder.Services.AddScoped<DtekBot.Api.MiniApp.TemplatePreviewService>();
+builder.Services.AddScoped<AlertCatchUp>();
 builder.Services.AddSingleton<IScheduleProvider, ScheduleProvider>();
 builder.Services.AddHttpClient(ScheduleProvider.ClientName, client =>
 {

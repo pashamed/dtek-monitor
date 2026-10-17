@@ -19,11 +19,19 @@ public static class ScheduleApi
                 return Results.Unauthorized();
             }
 
-            var summary = await notifier.TickAsync(ct);
-            logger.LogInformation(
-                "Schedule tick: chats={Chats} sent={Sent} edited={Edited} skipped={Skipped} failed={Failed}",
-                summary.Chats, summary.Sent, summary.Edited, summary.Skipped, summary.Failed);
-            return Results.Ok(summary);
+            await DtekBot.Api.Bot.TickGate.Schedules.WaitAsync(ct);
+            try
+            {
+                var summary = await notifier.TickAsync(ct);
+                logger.LogInformation(
+                    "Schedule tick: chats={Chats} sent={Sent} edited={Edited} skipped={Skipped} failed={Failed}",
+                    summary.Chats, summary.Sent, summary.Edited, summary.Skipped, summary.Failed);
+                return Results.Ok(summary);
+            }
+            finally
+            {
+                DtekBot.Api.Bot.TickGate.Schedules.Release();
+            }
         });
     }
 }
