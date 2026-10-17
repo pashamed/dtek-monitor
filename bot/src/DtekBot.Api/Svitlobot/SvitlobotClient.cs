@@ -190,8 +190,9 @@ public sealed class SvitlobotClient(HttpClient http, ILogger<SvitlobotClient> lo
             hasSchedule = false;
         }
 
+        // The real service lists the templates one per line ("19;&;Група 1.1;&;0"), then ";&&&;" and the matrix.
         var templates = new List<SvitlobotTemplate>();
-        foreach (var part in templateParts)
+        foreach (var part in templateParts.SelectMany(p => p.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
         {
             var template = ParseTemplate(part);
             if (template is not null && templates.All(t => t.Id != template.Id))

@@ -132,6 +132,10 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 /* segmented */
 .seg{display:flex;gap:4px;padding:4px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid var(--line)}
 .seg button{flex:1 1 0;min-height:44px;border:0;border-radius:12px;background:none;color:var(--muted);padding:6px 8px;font-size:14px;line-height:1.2;cursor:pointer;transition:background .18s,color .18s}
+.seg.stack{flex-direction:column}
+.seg.stack button{flex:none;text-align:left;padding:8px 12px}
+.endstyle{transition:opacity .18s}
+.endstyle.dim{opacity:.55}
 .seg button.on{background:rgba(79,140,255,.26);color:#fff;font-weight:600;box-shadow:inset 0 0 0 1px rgba(79,140,255,.6)}
 
 /* help '?' */

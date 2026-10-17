@@ -170,6 +170,92 @@ public sealed class AlertDispatcherTests : IDisposable
         Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
     }
 
+    [Fact]
+    public async Task AlertEnding_NewStyle_SendsAPlainMessageWithoutReply()
+    {
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = EndStyleSlots(EndStyle.New));
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        var summary = await _f.DispatchAsync("");
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        var notice = _f.Bot.Sent.Last();
+        Assert.Equal(2, _f.Bot.Sent.Count());
+        Assert.Null(notice.ReplyParameters);
+        Assert.Contains("ℹ️", notice.Text);
+        Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task AlertEnding_EditStyle_EditsTheOriginalMessage_AndClosesDelivery()
+    {
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = EndStyleSlots(EndStyle.Edit));
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var original = Assert.Single(_f.Deliveries(ChatA));
+
+        var summary = await _f.DispatchAsync("");
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Single(_f.Bot.Sent);
+        var edit = Assert.Single(_f.Bot.Edits);
+        Assert.Equal(original.TelegramMessageId, edit.MessageId);
+        Assert.Contains("ℹ️", edit.Text);
+        Assert.Equal(ParseMode.Html, edit.ParseMode);
+        Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task AlertEnding_EditStyle_FallsBackToAReply_WhenTheOriginalIsGone()
+    {
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = EndStyleSlots(EndStyle.Edit));
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var original = Assert.Single(_f.Deliveries(ChatA));
+        _f.Bot.Failure = r => r is EditMessageTextRequest ? FakeTelegramBotClient.MessageToEditNotFound() : null;
+
+        var summary = await _f.DispatchAsync("");
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Equal(2, _f.Bot.Sent.Count());
+        Assert.Equal(original.TelegramMessageId, _f.Bot.Sent.Last().ReplyParameters?.MessageId);
+        Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task AlertEnding_EditStyle_NotModified_CountsAsDone()
+    {
+        _f.AddChannel(ChatA, c => c.SlotSettingMap = EndStyleSlots(EndStyle.Edit));
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        _f.Bot.Failure = r => r is EditMessageTextRequest ? FakeTelegramBotClient.NotModified() : null;
+
+        var summary = await _f.DispatchAsync("");
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Single(_f.Bot.Sent);
+        Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task AlertEnding_EditStyle_RetriesWithoutTags_WhenTheTemplateMarkupIsRejected()
+    {
+        _f.AddChannel(ChatA, c =>
+        {
+            c.SlotSettingMap = EndStyleSlots(EndStyle.Edit);
+            c.Template = "<b>{message}</b>";
+        });
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var calls = 0;
+        _f.Bot.Failure = r => r is EditMessageTextRequest && calls++ == 0 ? FakeTelegramBotClient.CantParseEntities() : null;
+
+        var summary = await _f.DispatchAsync("");
+
+        Assert.Equal(new(0, 0, 1, 0), summary);
+        Assert.Equal(2, _f.Bot.Edits.Count());
+        Assert.Single(_f.Bot.Sent);
+    }
+
+    private static Dictionary<string, SlotSettingDto> EndStyleSlots(EndStyle style) =>
+        new() { ["ended"] = new SlotSettingDto(true, true, style) };
+
     private static Dictionary<string, SlotSettingDto> Slots(params (string Slot, bool Enabled, bool EditInPlace)[] items) =>
         items.ToDictionary(i => i.Slot, i => new SlotSettingDto(i.Enabled, i.EditInPlace));
 

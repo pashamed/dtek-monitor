@@ -320,6 +320,44 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Put_EndStyle_RoundTrips_OnTheEndedSlot_AndIsIgnoredOnTheOthers()
+    {
+        var (userId, client) = NewUser();
+        var slots = new Dictionary<string, SlotSettingDto>
+        {
+            ["emergency"] = new(true, false, EndStyle.Edit),
+            ["regional"] = new(true, true, EndStyle.New),
+            ["local"] = new(true, true),
+            ["ended"] = new(true, false, EndStyle.Edit),
+        };
+
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", Settings(slotSettings: slots));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var returned = (await response.ReadAsync<ChatSummaryDto>())!.Settings.SlotSettings!;
+        Assert.Equal(EndStyle.Edit, returned["ended"].EndStyle);
+        Assert.Equal(EndStyle.Reply, returned["emergency"].EndStyle);
+        Assert.Equal(EndStyle.Reply, returned["regional"].EndStyle);
+        var channel = LoadChannel(userId)!;
+        Assert.Equal(EndStyle.Edit, channel.SlotEndStyle("ended"));
+        Assert.Equal(EndStyle.Reply, channel.SlotEndStyle("emergency"));
+        var fetched = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings.SlotSettings!;
+        Assert.Equal(EndStyle.Edit, fetched["ended"].EndStyle);
+    }
+
+    [Fact]
+    public async Task Chats_LegacySlotJsonWithoutEndStyle_ReadsAsReply()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => c.SlotSettings = "{\"ended\":{\"enabled\":true,\"editInPlace\":false}}");
+
+        var map = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings.SlotSettings!;
+
+        Assert.Equal(EndStyle.Reply, map["ended"].EndStyle);
+        Assert.Equal(EndStyle.Reply, LoadChannel(userId)!.SlotEndStyle("ended"));
+    }
+
+    [Fact]
     public async Task Put_SlotSettings_WithANonAlertSlot_IsRejected()
     {
         var (userId, client) = NewUser();

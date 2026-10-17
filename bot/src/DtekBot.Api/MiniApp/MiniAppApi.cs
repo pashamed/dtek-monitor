@@ -95,11 +95,13 @@ public static class MiniAppApi
         {
             var userId = UserId(http);
             var request = await http.Request.ReadFromJsonAsync<LinkChatRequest>(ApiJson.Options, ct);
-            var target = request?.Chat?.Trim();
-            if (string.IsNullOrEmpty(target))
+            var parsed = ChatLinkParser.Parse(request?.Chat);
+            if (parsed.Chat is null)
             {
-                return Error("Вкажіть @імʼя каналу.");
+                return Error(parsed.Error ?? "Вкажіть посилання на канал (t.me/…) або @імʼя.");
             }
+
+            var target = parsed.Chat;
 
             Telegram.Bot.Types.ChatFullInfo chat;
             try
@@ -224,7 +226,10 @@ public static class MiniAppApi
                         return Error($"Невідомий тип сповіщення «{slot}».");
                     }
 
-                    slotSettings[slot] = value;
+                    slotSettings[slot] = value with
+                    {
+                        EndStyle = slot == MessageSlots.Ended && Enum.IsDefined(value.EndStyle) ? value.EndStyle : EndStyle.Reply,
+                    };
                 }
             }
 
@@ -820,7 +825,7 @@ public static class MiniAppApi
             MergedTemplates(c),
             c.OutageTriggerPattern,
             MessageSlots.All.Where(s => MessageSlots.IsAlert(s.Id))
-                .ToDictionary(s => s.Id, s => new SlotSettingDto(c.SlotEnabled(s.Id), c.SlotEditInPlace(s.Id))),
+                .ToDictionary(s => s.Id, s => new SlotSettingDto(c.SlotEnabled(s.Id), c.SlotEditInPlace(s.Id), c.SlotEndStyle(s.Id))),
             !string.IsNullOrEmpty(c.SvitlobotKey));
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }

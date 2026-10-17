@@ -51,8 +51,18 @@ public sealed record ChatSettingsDto(
     bool HasSvitlobotKey = false);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
-// EditInPlace does not apply to the «ended» slot.
-public sealed record SlotSettingDto(bool Enabled, bool EditInPlace);
+// EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.
+public sealed record SlotSettingDto(bool Enabled, bool EditInPlace, EndStyle EndStyle = EndStyle.Reply);
+
+// How the «ended» notice is posted: a reply to the original alert, a separate message, or the original edited in place.
+// The attribute keeps the stored JSON readable with the plain Web options as well.
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum EndStyle
+{
+    Reply,
+    New,
+    Edit,
+}
 
 // Warning is advice only: saving the phrase is never blocked.
 public sealed record TriggerCheckDto(bool Valid, int Seen, int Matched, string? Warning);

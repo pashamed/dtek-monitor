@@ -27,6 +27,20 @@ public sealed class SvitlobotClientTests
     }
 
     [Fact]
+    public async Task GetChannel_RealFormat_TemplatesAreOnePerLine()
+    {
+        // Captured from the live service (names and ids as returned, no schedule set yet).
+        _handler.Responder = _ => FakeSvitlobotHandler.Text(
+            "19;&;Група 1.1;&;0\n20;&;Група 1.2;&;0\n21;&;Група 2.1;&;0\n;&&&;no data");
+
+        var result = await Client().GetChannelAsync(Secret, default);
+
+        Assert.True(result.Ok);
+        Assert.Equal([(19, "Група 1.1"), (20, "Група 1.2"), (21, "Група 2.1")], result.Value!.Templates.Select(t => (t.Id, t.Name)));
+        Assert.False(result.Value.HasSchedule);
+    }
+
+    [Fact]
     public async Task GetChannel_NoData_MeansNoSchedule()
     {
         _handler.Responder = _ => FakeSvitlobotHandler.Text("5;&;Один;&&&;no data");
