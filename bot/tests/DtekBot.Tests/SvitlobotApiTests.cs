@@ -500,7 +500,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         };
 
         Assert.All(responses, r => Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode));
-        Assert.Equal("Світлобот не налаштований на сервері.", await ErrorAsync(responses[0]));
+        Assert.Equal("Світлобот не налаштований на сервері. Адміністратор має задати Svitlobot:KeyEncryptionKey (32 випадкові байти в base64) і перезапустити застосунок.", await ErrorAsync(responses[0]));
         Assert.Empty(_factory.Svitlobot.Requests);
     }
 }
