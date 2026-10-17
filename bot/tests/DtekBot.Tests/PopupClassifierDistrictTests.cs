@@ -128,6 +128,20 @@ public class PopupClassifierDistrictTests
     }
 
     [Fact]
+    public void EmergencyPopup_NamingDistricts_AndSayingOthersFollowSchedules_IsAnEmergencyForThoseDistrictsOnly()
+    {
+        const string popup =
+            "Шановні клієнти! Через атаку на енергообʼєкти за командою НЕК Укренерго запроваджені <b>екстрені відключення</b> "
+            + "в <b>Обухівському</b>, <b>Фастівському</b> і <b>Бучанському районах</b>. Це непередбачені графіками обмеження, "
+            + "тож прогнозувати тривалість відключень наразі неможливо.<br>В інших районах діють графіки.";
+
+        var result = Classifier.Classify("kyiv-oblast", popup);
+
+        Assert.Equal(PopupKind.Emergency, result.Kind);
+        Assert.Equal(["bucha", "fastiv", "obukhiv"], result.PartIds.OrderBy(i => i, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void Keywords_KyivRightBank_MeansItsCityDistricts_InSettingsOrder()
     {
         var result = Classifier.Classify("kyiv", "Через аварію знеструмлено частину правого берега.");

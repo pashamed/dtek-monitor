@@ -40,6 +40,22 @@ public sealed class SvitlobotKeyProtector
         }
     }
 
+    // For the "which key is saved?" check: dots plus the last two characters. Short keys are hidden completely.
+    public static string Mask(string key) =>
+        key.Length >= 8 ? new string('•', 8) + key[^2..] : new string('•', 8);
+
+    // A short fingerprint (keyed hash), enough to compare two keys by eye but useless for guessing one.
+    public string? Fingerprint(string key)
+    {
+        var secret = LoadKey();
+        if (secret is null)
+        {
+            return null;
+        }
+
+        return Convert.ToHexString(HMACSHA256.HashData(secret, Encoding.UTF8.GetBytes(key)))[..6].ToLowerInvariant();
+    }
+
     // Null when the feature is not configured.
     public string? Protect(string plain)
     {

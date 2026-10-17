@@ -12,9 +12,17 @@ const POPUP_SELECTOR = ".m-attention__container.modal__container--firstPopup"
 const INGEST_URL = process.env.INGEST_URL?.trim()
 const INGEST_SECRET = process.env.INGEST_SECRET?.trim()
 
+function loadSettings() {
+  return JSON.parse(readFileSync(SETTINGS_PATH, "utf8"))
+}
+
 function loadRegions() {
-  const settings = JSON.parse(readFileSync(SETTINGS_PATH, "utf8"))
-  return settings.Dtek.Regions.filter((region) => region.SiteUrl)
+  return loadSettings().Dtek.Regions.filter((region) => region.SiteUrl)
+}
+
+// The same keyword rules the backend uses; they decide whether a popup is familiar enough to skip the model.
+function loadClassification() {
+  return loadSettings().Dtek.Classification
 }
 
 // Returns { ok: false } when the page is not the real DTEK page, so the caller
@@ -78,7 +86,7 @@ async function readRegion(browser, region) {
 
 async function ingest(region, popupText) {
   const regionId = region.Id
-  const structured = await structurePopup(region, popupText)
+  const structured = await structurePopup(region, popupText, loadClassification())
   const response = await fetch(INGEST_URL, {
     method: "POST",
     headers: {

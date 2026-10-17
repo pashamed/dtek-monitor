@@ -154,6 +154,43 @@ public static class SvitlobotApi
             return info.Ok ? Json(State(info.Value!), 200) : Failed(info);
         });
 
+        // A masked check value, so the user can tell which key is saved; the key itself is never returned.
+        api.MapGet("/chats/{chatId:long}/svitlobot/key-check", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            SvitlobotKeyProtector protector,
+            CancellationToken ct) =>
+        {
+            if (!protector.IsConfigured)
+            {
+                return Json(NotConfigured, 503);
+            }
+
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+            {
+                return Json(Forbidden, 403);
+            }
+
+            var stored = await db.Channels.AsNoTracking()
+                .Where(c => c.ChatId == chatId)
+                .Select(c => c.SvitlobotKey)
+                .FirstOrDefaultAsync(ct);
+            if (string.IsNullOrEmpty(stored))
+            {
+                return Json(new ApiError("Ключ ще не збережено."), 400);
+            }
+
+            var key = protector.Unprotect(stored);
+            if (key is null)
+            {
+                return Json(UnreadableKey, 400);
+            }
+
+            return Json(new SvitlobotKeyCheckDto(SvitlobotKeyProtector.Mask(key), protector.Fingerprint(key)!), 200);
+        });
+
         api.MapPost("/chats/{chatId:long}/svitlobot/template", async (
             long chatId,
             HttpContext http,

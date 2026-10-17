@@ -253,6 +253,49 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync($"/api/chats/{chatId}/svitlobot")).StatusCode);
     }
 
+    // ================= key check =================
+
+    [Fact]
+    public async Task KeyCheck_ShowsAMaskedValueAndAFingerprint_NeverTheKey_AndCallsNothing()
+    {
+        var (chatId, client) = UserWithKey();
+
+        var response = await client.GetAsync($"/api/chats/{chatId}/svitlobot/key-check");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var check = (await response.ReadAsync<SvitlobotKeyCheckDto>())!;
+        Assert.Equal("••••••••+f", check.Masked);
+        Assert.Matches("^[0-9a-f]{6}$", check.Fingerprint);
+        var protector = new SvitlobotKeyProtector(() => _factory.SvitlobotEncryptionKey);
+        Assert.Equal(protector.Fingerprint(Key), check.Fingerprint);
+        await AssertNoKeyAsync(response, stored: StoredKey(chatId));
+        Assert.Empty(_factory.Svitlobot.Requests);
+    }
+
+    [Fact]
+    public async Task KeyCheck_WithoutAKey_Is400()
+    {
+        var (chatId, client) = NewUser();
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync($"/api/chats/{chatId}/svitlobot/key-check")).StatusCode);
+    }
+
+    [Fact]
+    public async Task KeyCheck_ForSomeoneElsesChat_Is403()
+    {
+        var (chatId, _) = UserWithKey();
+
+        var response = await _factory.ClientFor(_factory.NextId()).GetAsync($"/api/chats/{chatId}/svitlobot/key-check");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("UQARKZAUDU", "••••••••DU")]
+    [InlineData("short", "••••••••")]
+    public void Mask_HidesShortKeysCompletely_AndOtherwiseKeepsTwoCharacters(string key, string expected) =>
+        Assert.Equal(expected, SvitlobotKeyProtector.Mask(key));
+
     // ================= template =================
 
     [Fact]
