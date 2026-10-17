@@ -10,6 +10,9 @@ public sealed record SvitlobotStateDto(bool HasKey, IReadOnlyList<SvitlobotTempl
 
 public sealed record SetSvitlobotTemplateRequest(int TemplateId);
 
+// Masked check value of the saved key (dots + last two characters) and a short keyed fingerprint; never the key itself.
+public sealed record SvitlobotKeyCheckDto(string Masked, string Fingerprint);
+
 // Optional body of the push call; a missing body or field means true: "possible" (maybe) outages count as outages.
 public sealed record SvitlobotPushRequest(bool? IncludeMaybe = null);
 

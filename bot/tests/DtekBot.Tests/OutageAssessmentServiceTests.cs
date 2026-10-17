@@ -75,6 +75,86 @@ public sealed class OutageAssessmentServiceTests : IDisposable
 
     private int CheckRows() => _f.Db.AddressChecks.AsNoTracking().Count();
 
+    private void StoreDistrictAlert(params string[] districts)
+    {
+        _f.Db.RegionStates.Add(new RegionState
+        {
+            RegionId = "kyiv",
+            Kind = PopupKind.Emergency,
+            Hash = "h",
+            PartIdList = districts,
+            ObservedAt = _clock.Now,
+            UpdatedAt = _clock.Now,
+        });
+        _f.Db.SaveChanges();
+    }
+
+    // ---- popup naming districts ("в інших районах діють графіки") ----
+
+    [Fact]
+    public async Task DistrictAlert_ChatInsideTheNamedDistricts_GetsTheEmergencyAnswer_NotTheScheduleNotice()
+    {
+        StoreDistrictAlert("holosiivskyi", "obolonskyi");
+        var channel = AddChannel(c => c.PartIdList = ["obolonskyi"]);
+
+        var text = await AssessAsync(channel);
+
+        Assert.Contains("У вашому районі (Оболонський район)", text);
+        Assert.Contains("Графіки там не діють", text);
+        Assert.Contains("Перевірку за адресою не запускаю", text);
+        Assert.DoesNotContain("стабілізаційне", text);
+        Assert.Equal(0, CheckRows());
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task DistrictAlert_ChatOutsideTheNamedDistricts_FollowsItsSchedule_WithoutAnyEmergencyText()
+    {
+        StoreDistrictAlert("holosiivskyi", "obolonskyi");
+        var channel = AddChannel(c => c.PartIdList = ["darnytskyi"]);
+
+        var text = await AssessAsync(channel);
+
+        Assert.Equal(StabilizationAt12, text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Fact]
+    public async Task DistrictAlert_ChatOutside_WithScheduleOn_StillRunsTheAddressCheck()
+    {
+        StoreDistrictAlert("holosiivskyi");
+        _clock.Now = Kyiv(15, 15);
+        var channel = AddChannel(c => c.PartIdList = ["darnytskyi"]);
+
+        await AssessAsync(channel);
+
+        Assert.Equal(1, CheckRows());
+    }
+
+    [Fact]
+    public async Task DistrictAlert_ChatWithoutDistricts_GetsTheDistrictsAsContext_AndTheNormalAnswer()
+    {
+        StoreDistrictAlert("holosiivskyi", "obolonskyi");
+        var channel = AddChannel();
+
+        var text = await AssessAsync(channel);
+
+        Assert.StartsWith("ℹ️ На сайті ДТЕК діють екстрені відключення в районах: Голосіївський район, Оболонський район.", text);
+        Assert.EndsWith(StabilizationAt12, text);
+    }
+
+    [Fact]
+    public async Task DistrictAlert_WholeBankSubscription_MatchesViaItsDistricts()
+    {
+        StoreDistrictAlert("holosiivskyi", "obolonskyi", "pecherskyi", "podilskyi", "sviatoshynskyi", "solomianskyi", "shevchenkivskyi");
+        var channel = AddChannel(c => c.PartIdList = ["right-bank"]);
+
+        var text = await AssessAsync(channel);
+
+        Assert.Contains("У вашому районі (Правий берег)", text);
+        Assert.Equal(0, CheckRows());
+    }
+
     private const string StabilizationAt12 =
         "🗓 За графіком (черга 45.1) зараз планове стабілізаційне відключення з 11:00.\n"
         + "Світло очікується о 14:00.\n"

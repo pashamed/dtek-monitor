@@ -3,6 +3,7 @@ import path from "node:path"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 
 import { isStabilizationNotice } from "./helpers.js"
+import { keywordsUnderstand } from "./popup-keywords.js"
 
 // Provider-neutral: any OpenAI-compatible chat completions endpoint works. The defaults point at the Google
 // Gemini free tier (Flash-Lite); set LLM_BASE_URL / LLM_MODEL / LLM_API_KEY to use another provider.
@@ -144,12 +145,18 @@ async function askModel(region, popupText) {
 
 // Turns the popup text into a predefined state the backend understands. Never throws: on any problem it returns
 // null and the backend falls back to its keyword matching.
-export async function structurePopup(region, popupText) {
+export async function structurePopup(region, popupText, rules) {
   if (!isLlmConfigured() || !popupText?.trim() || !region.Parts?.length)
     return null
 
   // Stabilization notices carry no district alerts, so they never need the model.
   if (isStabilizationNotice(popupText)) return null
+
+  // Only an unfamiliar popup is sent to the model: when the keywords already understood it there is nothing to add.
+  if (rules && keywordsUnderstand(popupText, region, rules)) {
+    console.log(`ℹ️ ${region.Id}: keywords understood the popup, the model is not asked`)
+    return null
+  }
 
   const cache = loadCache()
   const key = textKey(region.Id, popupText)

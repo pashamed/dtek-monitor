@@ -18,13 +18,47 @@ public sealed class OutageAssessmentService(
 {
     public async Task<string> AssessAsync(Channel channel, CancellationToken ct)
     {
+        var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
+        region?.UpgradeRetiredParts(channel);
+
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == channel.RegionId, ct);
-        var regionalEmergency = state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
+        var dtekAlert = state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
+
+        // A popup that names districts only concerns them; "in other districts the schedules apply".
+        IReadOnlyList<string> named = dtekAlert ? state!.PartIdList ?? [] : [];
+        var districtScoped = named.Count > 0;
+        var mine = channel.PartIdList.Where(p => named.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var regionalEmergency = dtekAlert && !districtScoped;
 
         // Ukrenergo reports emergencies earlier than the DTEK site, and explains an outage just as well.
         var grid = await db.GridStates.AsNoTracking().FirstOrDefaultAsync(g => g.RegionId == channel.RegionId, ct);
         var gridEmergency = grid is { IsAlert: true };
 
+        // 0. The chat's own district is under emergency outages: the schedule does not apply there, the DTEK site
+        // is not asked, and the user is told so.
+        if (districtScoped && mine.Count > 0)
+        {
+            var lines = new List<string>();
+            AddGroupEmergencyLine(lines, channel, await GroupInEmergencyAsync(channel, ct));
+            var places = region is null ? string.Join(", ", mine) : string.Join(", ", region.DisplayNames(mine));
+            lines.Add($"🚨 У вашому районі ({places}) зараз діють екстрені відключення за даними ДТЕК. Графіки там не діють, тому причина, найімовірніше, в цьому. Перевірку за адресою не запускаю.");
+            return string.Join("\n\n", lines);
+        }
+
+        var answer = await AssessOutsideEmergencyDistrictsAsync(channel, regionalEmergency, gridEmergency, ct);
+
+        // Without chosen districts there is no telling whether the address is one of the named ones.
+        if (districtScoped && channel.PartIdList.Count == 0)
+        {
+            var places = region is null ? string.Join(", ", named) : string.Join(", ", region.DisplayNames(named));
+            return $"ℹ️ На сайті ДТЕК діють екстрені відключення в районах: {places}. Якщо ваша адреса в одному з них, графік там не діє.\n\n{answer}";
+        }
+
+        return answer;
+    }
+
+    private async Task<string> AssessOutsideEmergencyDistrictsAsync(Channel channel, bool regionalEmergency, bool gridEmergency, CancellationToken ct)
+    {
         // 1. A planned outage in the group's schedule explains it: stop here, the DTEK site is not asked.
         var notice = await ScheduledOutageNoticeAsync(channel, ct);
         if (notice is not null)
