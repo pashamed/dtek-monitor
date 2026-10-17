@@ -291,7 +291,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
     }
 
     [Theory]
-    [InlineData("UQARKZAUDU", "••••••••DU")]
+    [InlineData("ABCDEFGHIJ", "••••••••IJ")]
     [InlineData("short", "••••••••")]
     public void Mask_HidesShortKeysCompletely_AndOtherwiseKeepsTwoCharacters(string key, string expected) =>
         Assert.Equal(expected, SvitlobotKeyProtector.Mask(key));

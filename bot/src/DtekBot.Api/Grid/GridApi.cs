@@ -19,12 +19,20 @@ public static class GridApi
                 return Results.Unauthorized();
             }
 
-            var summary = await grid.TickAsync(ct);
-            logger.LogInformation(
-                "Grid tick: feed={Feed} regions={Regions}",
-                summary.Feed,
-                string.Join(",", summary.Regions.Select(r => $"{r.RegionId}={r.Status}")));
-            return Results.Ok(summary);
+            await DtekBot.Api.Bot.TickGate.Grid.WaitAsync(ct);
+            try
+            {
+                var summary = await grid.TickAsync(ct);
+                logger.LogInformation(
+                    "Grid tick: feed={Feed} regions={Regions}",
+                    summary.Feed,
+                    string.Join(",", summary.Regions.Select(r => $"{r.RegionId}={r.Status}")));
+                return Results.Ok(summary);
+            }
+            finally
+            {
+                DtekBot.Api.Bot.TickGate.Grid.Release();
+            }
         });
     }
 }

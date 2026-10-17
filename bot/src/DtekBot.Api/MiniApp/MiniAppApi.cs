@@ -130,9 +130,15 @@ public static class MiniAppApi
                 return Error("Бот не доданий до цього каналу.");
             }
 
-            if (!await access.IsAdminAsync(chat.Id, userId, ct))
+            var (isAdmin, problem) = await access.CheckAdminAsync(chat.Id, userId, ct);
+            if (problem is not null)
             {
-                return Error("Керувати каналом можуть лише його адміністратори.");
+                return Error($"Telegram не дав перевірити ваші права в каналі ({problem}). Переконайтеся, що бот доданий адміністратором каналу, і спробуйте ще раз. Простіше: додайте бота адміністратором із Telegram, і канал зʼявиться тут сам.");
+            }
+
+            if (!isAdmin)
+            {
+                return Error("Керувати каналом можуть лише його адміністратори. Ваш акаунт у Telegram, з якого відкрито редактор, не є адміністратором цього каналу.");
             }
 
             var now = time.GetUtcNow();
@@ -166,6 +172,7 @@ public static class MiniAppApi
             ChatAccessService access,
             IOptionsMonitor<DtekSettings> settings,
             TimeProvider time,
+            AlertCatchUp catchUp,
             CancellationToken ct) =>
         {
             var userId = UserId(http);
@@ -261,11 +268,14 @@ public static class MiniAppApi
             }
 
             var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            var isNew = channel is null;
             if (channel is null)
             {
                 channel = new Channel { ChatId = chatId, CreatedAt = time.GetUtcNow() };
                 db.Channels.Add(channel);
             }
+
+            var before = (WasActive: !isNew && channel.IsActive, channel.IsPaused, channel.RegionId, channel.PartIds, channel.SlotSettings, channel.GroupId);
 
             if (region is not null)
             {
@@ -340,6 +350,17 @@ public static class MiniAppApi
             channel.SchedulePostMode = dto.SchedulePostMode;
             channel.SchedulePostImage = dto.SchedulePostImage;
             await db.SaveChangesAsync(ct);
+
+            // Switched on, moved or re-tuned during an ongoing emergency: deliver what is already active.
+            if (channel.IsActive && (!before.WasActive
+                || before.IsPaused != channel.IsPaused
+                || before.RegionId != channel.RegionId
+                || before.PartIds != channel.PartIds
+                || before.SlotSettings != channel.SlotSettings
+                || before.GroupId != channel.GroupId))
+            {
+                await catchUp.RunAsync(channel, ct);
+            }
 
             return Json(ToSummary(channel, userId));
         });
@@ -596,6 +617,7 @@ public static class MiniAppApi
             ChatAccessService access,
             IYasnoClient yasno,
             IOptionsMonitor<DtekSettings> settings,
+            AlertCatchUp catchUp,
             CancellationToken ct) =>
         {
             var userId = UserId(http);
@@ -634,6 +656,7 @@ public static class MiniAppApi
             channel.AddressStreet = CleanPart(request.Street, 256);
             channel.AddressHouse = CleanPart(request.House, 64);
             await db.SaveChangesAsync(ct);
+            await catchUp.RunAsync(channel, ct);
             return Json(ToSummary(channel, userId));
         });
 
@@ -693,6 +716,7 @@ public static class MiniAppApi
             ChatAccessService access,
             IScheduleProvider schedules,
             IOptionsMonitor<DtekSettings> settings,
+            AlertCatchUp catchUp,
             CancellationToken ct) =>
         {
             var userId = UserId(http);
@@ -734,6 +758,7 @@ public static class MiniAppApi
             // A hand-picked group only replaces the detected one: the saved address stays for the DTEK check.
             channel.GroupId = request.GroupId;
             await db.SaveChangesAsync(ct);
+            await catchUp.RunAsync(channel, ct);
             return Json(ToSummary(channel, userId));
         });
 

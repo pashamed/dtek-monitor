@@ -108,7 +108,8 @@ jobs:
         continue-on-error: true
         timeout-minutes: 2
         run: |
-          curl -fsS -X POST --max-time 60 --retry 2 \
+          # IIS answers 411 to a POST that has no length at all, so the empty body announces its length.
+          curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
             -H "x-ingest-secret: $INGEST_SECRET" \
             "${INGEST_URL%/}/grid/tick"
 
@@ -118,7 +119,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 2
         run: |
-          curl -fsS -X POST --max-time 60 --retry 2 \
+          curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
             -H "x-ingest-secret: $INGEST_SECRET" \
             "${INGEST_URL%/}/schedules/tick"
 

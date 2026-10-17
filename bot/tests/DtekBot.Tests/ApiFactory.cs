@@ -47,6 +47,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Bot:Token", BotToken);
         builder.UseSetting("App:PublicUrl", "https://example.test");
         builder.UseSetting("Ingest:Secret", IngestSecret);
+
+        // The built-in tick loop would post on its own in the middle of a test.
+        builder.UseSetting("Ticks:Enabled", "false");
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<BotDbContext>>();

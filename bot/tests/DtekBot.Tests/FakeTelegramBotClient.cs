@@ -63,6 +63,10 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
             EditMessageCaptionRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
             GetMeRequest => new User { Id = BotId, IsBot = true, FirstName = "DtekBot", Username = "dtek_test_bot" },
             GetChatMemberRequest member => MemberFor(member.UserId),
+            GetChatAdministratorsRequest => MemberStatuses
+                .Where(p => p.Value is ChatMemberStatus.Creator or ChatMemberStatus.Administrator)
+                .Select(p => MemberFor(p.Key))
+                .ToArray(),
             GetChatRequest chat => Chats.TryGetValue(chat.ChatId.Identifier ?? 0, out var info)
                 ? info
                 : throw new ApiRequestException("Bad Request: chat not found", 400),

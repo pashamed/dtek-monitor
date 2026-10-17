@@ -28,6 +28,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         _factory.Schedules.Snapshots.Clear();
         _factory.Schedules.Snapshots["kyiv"] = RealSnapshot();
         _factory.Schedules.Calls.Clear();
+
+        // An emergency seeded by one test must not leak into the next.
+        _factory.WithDb(db => db.RegionStates.RemoveRange(db.RegionStates));
     }
 
     // ---- helpers ----
@@ -292,6 +295,71 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(new SlotSettingDto(true, false), map["emergency"]);
         Assert.Equal(new SlotSettingDto(true, false), map["local"]);
         Assert.Equal(new SlotSettingDto(false, false), map["ended"]);
+    }
+
+    // ---- catching up on an ongoing emergency ----
+
+    private void SeedActiveEmergency(string regionId = "kyiv")
+    {
+        _factory.WithDb(db => db.RegionStates.Add(new RegionState
+        {
+            RegionId = regionId,
+            Kind = DtekBot.Api.Parsing.PopupKind.Emergency,
+            NormalizedText = "введені екстрені відключення",
+            PopupText = "Введені екстрені відключення. Графіки не діють.",
+            PartIdList = [],
+            Hash = "h-emergency",
+            ObservedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        }));
+    }
+
+    [Fact]
+    public async Task Put_SwitchingOnDuringAnOngoingEmergency_DeliversItAtOnce_ButOnlyOnce()
+    {
+        var (userId, client) = NewUser();
+        SeedActiveEmergency();
+        _factory.Bot.Requests.Clear();
+
+        Assert.Equal(HttpStatusCode.OK, (await client.PutJsonAsync($"/api/chats/{userId}", Settings())).StatusCode);
+
+        var sent = _factory.Bot.Requests.OfType<SendMessageRequest>().Where(r => r.ChatId.Identifier == userId).ToList();
+        Assert.Single(sent);
+        Assert.Contains("екстрені відключення", sent[0].Text);
+
+        // Saving again changes nothing relevant, so the alert is not repeated.
+        await client.PutJsonAsync($"/api/chats/{userId}", Settings(outageTrigger: true));
+        Assert.Single(_factory.Bot.Requests.OfType<SendMessageRequest>().Where(r => r.ChatId.Identifier == userId));
+    }
+
+    [Fact]
+    public async Task Put_SwitchingOnWhileNoEmergency_SendsNothing()
+    {
+        var (userId, client) = NewUser();
+        _factory.Bot.Requests.Clear();
+
+        await client.PutJsonAsync($"/api/chats/{userId}", Settings());
+
+        Assert.Empty(_factory.Bot.Requests.OfType<SendMessageRequest>().Where(r => r.ChatId.Identifier == userId));
+    }
+
+    [Fact]
+    public async Task Put_ADisabledAlertType_IsNotCaughtUp()
+    {
+        var (userId, client) = NewUser();
+        SeedActiveEmergency();
+        _factory.Bot.Requests.Clear();
+        var slots = new Dictionary<string, SlotSettingDto>
+        {
+            ["emergency"] = new(false, true),
+            ["regional"] = new(true, true),
+            ["local"] = new(true, true),
+            ["ended"] = new(true, true),
+        };
+
+        await client.PutJsonAsync($"/api/chats/{userId}", Settings(slotSettings: slots));
+
+        Assert.Empty(_factory.Bot.Requests.OfType<SendMessageRequest>().Where(r => r.ChatId.Identifier == userId));
     }
 
     [Fact]
@@ -747,6 +815,55 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var listed = Assert.Single(await ListAsync(client), s => s.ChatId == channelId);
         Assert.False(listed.Settings.IsActive);
         ChannelAssert.IsCleanUnsubscribed(LoadChannel(channelId)!);
+    }
+
+    [Fact]
+    public async Task Link_WhenGetChatMemberFails_ButTheAdministratorsListHasTheUser_Succeeds()
+    {
+        var (userId, client) = NewUser();
+        var channelId = -_factory.NextId();
+        _factory.Bot.Chats[channelId] = new ChatFullInfo { Id = channelId, Type = ChatType.Channel, Title = "Мій канал" };
+        _factory.Bot.SetStatus(userId, ChatMemberStatus.Creator);
+        _factory.Bot.Failure = r => r is GetChatMemberRequest m && m.UserId == userId
+            ? new ApiRequestException("Bad Request: user not found", 400)
+            : null;
+
+        var response = await client.PostJsonAsync("/api/chats/link", new LinkChatRequest(channelId.ToString()));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Link_WhenTelegramWillNotSayWhoIsAdmin_ExplainsThatInsteadOfBlamingTheUser()
+    {
+        var (userId, client) = NewUser();
+        var channelId = -_factory.NextId();
+        _factory.Bot.Chats[channelId] = new ChatFullInfo { Id = channelId, Type = ChatType.Channel, Title = "Мій канал" };
+        _factory.Bot.SetStatus(userId, ChatMemberStatus.Creator);
+        _factory.Bot.Failure = r => r is GetChatMemberRequest m && m.UserId == userId || r is GetChatAdministratorsRequest
+            ? new ApiRequestException("Bad Request: member list is inaccessible", 400)
+            : null;
+
+        var response = await client.PostJsonAsync("/api/chats/link", new LinkChatRequest(channelId.ToString()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = (await response.ReadAsync<ApiError>())!.Error;
+        Assert.Contains("Telegram не дав перевірити", error);
+        Assert.Contains("member list is inaccessible", error);
+        Assert.DoesNotContain("лише його адміністратори", error);
+    }
+
+    [Fact]
+    public async Task Link_ByAPlainMember_SaysTheAccountIsNotAnAdmin()
+    {
+        var (_, client) = NewUser();
+        var channelId = -_factory.NextId();
+        _factory.Bot.Chats[channelId] = new ChatFullInfo { Id = channelId, Type = ChatType.Channel, Title = "Мій канал" };
+
+        var response = await client.PostJsonAsync("/api/chats/link", new LinkChatRequest(channelId.ToString()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("не є адміністратором цього каналу", (await response.ReadAsync<ApiError>())!.Error);
     }
 
     [Fact]
