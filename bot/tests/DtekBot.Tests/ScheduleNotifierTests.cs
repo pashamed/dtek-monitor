@@ -159,6 +159,30 @@ public sealed class ScheduleNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task DisabledScheduleEventNotifications_DoNotSendForLegacyChannelSettings()
+    {
+        _f.Settings.Schedules.EnableEventNotifications = false;
+        AddChannel();
+        _f.Db.ScheduleThreads.Add(new ScheduleThread
+        {
+            ChatId = ChatA,
+            RegionId = "kyiv",
+            GroupId = "45.1",
+            MessageId = 1,
+            Phase = SchedulePhase.Off,
+            EpisodeStart = Outage1Start,
+            ContentHash = "legacy",
+        });
+        await _f.Db.SaveChangesAsync();
+
+        var summary = await TickAsync(Kyiv(15, 12));
+
+        Assert.Equal(new ScheduleTickSummary(0, 0, 0, 0, 0), summary);
+        Assert.Empty(_f.Bot.Requests);
+        Assert.Null(ThreadOf(ChatA));
+    }
+
+    [Fact]
     public async Task ModelDefaults_AreTextOnlyEvents_InEditMode_AndAGridPostInNewMode()
     {
         var channel = new Channel();

@@ -352,7 +352,8 @@ public static class MiniAppApi
             // Schedule messages need a group and a region that has schedules.
             var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
             var canSchedule = dto.IsActive && channel.GroupId is not null && regionHasSchedules;
-            channel.ScheduleNotify = canSchedule && dto.ScheduleNotify;
+            channel.ScheduleNotify = settings.CurrentValue.Schedules.EnableEventNotifications
+                && canSchedule && dto.ScheduleNotify;
             channel.ScheduleReminder = canSchedule && dto.ScheduleReminder;
             channel.ScheduleReminderMinutes = dto.ScheduleReminderMinutes;
             channel.ScheduleImage = dto.ScheduleImage;
@@ -1236,7 +1237,7 @@ public static class MiniAppApi
             c.GroupId,
             c.AddressLabel,
             c.OutageTrigger,
-            c.ScheduleNotify,
+            false,
             c.ScheduleImage,
             c.PartIdList,
             c.SchedulePost,

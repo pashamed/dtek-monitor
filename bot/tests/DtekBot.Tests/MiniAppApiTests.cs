@@ -260,7 +260,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var settings = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings;
 
         Assert.Equal("45.1", settings.GroupId);
-        Assert.True(settings.ScheduleNotify);
+        Assert.False(settings.ScheduleNotify);
         Assert.True(settings.SchedulePost);
         Assert.Equal(PostMode.ReplaceDelete, settings.ScheduleEventMode);
         Assert.Equal(PostMode.Edit, settings.SchedulePostMode);
@@ -603,7 +603,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     // ================= PUT /api/chats/{id}: settings =================
 
     [Fact]
-    public async Task Put_SchedulePost_AndEventModes_ArePersisted_WhenAGroupAndAScheduleRegionExist()
+    public async Task Put_SchedulePost_IsPersisted_AndScheduleEventNotificationsStayDisabled()
     {
         var (userId, client) = NewUser();
         SeedChannel(userId, c => c.GroupId = "45.1");
@@ -621,7 +621,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var channel = LoadChannel(userId)!;
-        Assert.True(channel.ScheduleNotify);
+        Assert.False(channel.ScheduleNotify);
         Assert.True(channel.SchedulePost);
         Assert.Equal(PostMode.ReplaceDelete, channel.ScheduleEventMode);
         Assert.Equal(PostMode.Edit, channel.SchedulePostMode);
@@ -631,7 +631,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         var summary = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
         Assert.True(summary.SchedulePost);
-        Assert.Equal(PostMode.ReplaceDelete, summary.ScheduleEventMode);
+        Assert.False(summary.ScheduleNotify);
         Assert.Equal(PostMode.Edit, summary.SchedulePostMode);
         Assert.Equal(ScheduleImage.None, summary.SchedulePostImage);
     }

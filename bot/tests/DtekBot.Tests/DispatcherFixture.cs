@@ -37,6 +37,7 @@ public sealed class DispatcherFixture : IDisposable
         var path = Path.Combine(AppContext.BaseDirectory, "dtek-settings.json");
         var config = new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
         Settings = config.GetSection(DtekSettings.SectionName).Get<DtekSettings>()!;
+        Settings.Schedules.EnableEventNotifications = true;
         Classifier = new PopupClassifier(new TestOptionsMonitor(Settings));
         Kyiv = Settings.Regions.Single(r => r.Id == "kyiv");
 

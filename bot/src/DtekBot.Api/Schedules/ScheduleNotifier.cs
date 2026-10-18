@@ -52,7 +52,8 @@ public sealed partial class ScheduleNotifier(
 
         var channels = await db.Channels
             .Where(c => c.IsActive && !c.IsPaused && c.GroupId != null
-                && (c.ScheduleNotify || c.SchedulePost || c.ScheduleReminder))
+                && ((settings.Schedules.EnableEventNotifications && c.ScheduleNotify)
+                    || c.SchedulePost || c.ScheduleReminder))
             .ToListAsync(ct);
         var threads = await db.ScheduleThreads.ToDictionaryAsync(t => t.ChatId, ct);
         var posts = await db.SchedulePostThreads.ToDictionaryAsync(t => t.ChatId, ct);
@@ -70,7 +71,8 @@ public sealed partial class ScheduleNotifier(
         var byChat = channels.ToDictionary(c => c.ChatId);
         foreach (var thread in threads.Values.ToList())
         {
-            if (!byChat.TryGetValue(thread.ChatId, out var channel) || !channel.ScheduleNotify
+            if (!byChat.TryGetValue(thread.ChatId, out var channel)
+                || !settings.Schedules.EnableEventNotifications || !channel.ScheduleNotify
                 || channel.GroupId != thread.GroupId || channel.RegionId != thread.RegionId)
             {
                 db.ScheduleThreads.Remove(thread);
@@ -123,7 +125,7 @@ public sealed partial class ScheduleNotifier(
                     }
                 }
 
-                if (channel.ScheduleNotify)
+                if (settings.Schedules.EnableEventNotifications && channel.ScheduleNotify)
                 {
                     threads.TryGetValue(channel.ChatId, out var thread);
                     var desired = Decide(settings, region, snapshot, channel, thread, now);
