@@ -47,6 +47,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         ScheduleImage image = ScheduleImage.None,
         ScheduleImage postImage = ScheduleImage.Grid,
         bool outageTrigger = false,
+        bool scheduleReminder = false,
+        int scheduleReminderMinutes = 15,
         IReadOnlyList<string>? partIds = null,
         string? partId = null,
         IReadOnlyDictionary<string, SlotSettingDto>? slotSettings = null) =>
@@ -71,7 +73,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             eventMode,
             templates,
             null,
-            slotSettings);
+            slotSettings,
+            ScheduleReminder: scheduleReminder,
+            ScheduleReminderMinutes: scheduleReminderMinutes);
 
     private static Dictionary<string, string> Map(params (string Slot, string Text)[] items) =>
         items.ToDictionary(i => i.Slot, i => i.Text);
@@ -144,7 +148,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(userId, bootstrap.UserId);
         Assert.Equal(MessageTemplate.MaxLength, bootstrap.MaxTemplateLength);
         Assert.Equal(
-            ["emergency", "ended", "regional", "local", "schedule", "off", "on"],
+            ["emergency", "ended", "regional", "local", "schedule", "before-off", "off", "on"],
             bootstrap.TemplateSlots!.Select(s => s.Id));
         Assert.Equal(MessageSlots.All.Count, bootstrap.TemplateSlots!.Count);
         foreach (var (expected, actual) in MessageSlots.All.Zip(bootstrap.TemplateSlots!))
@@ -641,6 +645,27 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Put_ScheduleReminder_PersistsAllowedLeadTimeAndRequiresGroupToEnable()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => c.GroupId = "45.1");
+
+        var enabled = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(scheduleReminder: true, scheduleReminderMinutes: 30));
+
+        Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+        Assert.True(LoadChannel(userId)!.ScheduleReminder);
+        Assert.Equal(30, LoadChannel(userId)!.ScheduleReminderMinutes);
+
+        var invalid = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(scheduleReminder: true, scheduleReminderMinutes: 20));
+
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+    }
+
+    [Fact]
     public async Task Put_ScheduleSettings_ForARegionWithoutSchedules_AreSwitchedOff()
     {
         var (userId, client) = NewUser();
@@ -731,6 +756,19 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         var invalid = await client.GetAsync($"/api/chats/{userId}/status?regionId=kyiv&partIds=unknown");
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+    }
+
+    [Fact]
+    public async Task Post_SendScheduleNow_PublishesTheSelectedQueueToTelegram()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => c.GroupId = "45.1");
+
+        var response = await client.PostAsync($"/api/chats/{userId}/schedules/send", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("надіслано", (await response.ReadAsync<JsonElement>()).GetProperty("message").GetString());
+        Assert.Single(_factory.Bot.Photos);
     }
 
     [Fact]

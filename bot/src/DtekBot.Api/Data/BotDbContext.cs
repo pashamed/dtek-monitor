@@ -45,6 +45,10 @@ public sealed class Channel
     // Post and edit schedule messages for the chat's group (needs GroupId).
     public bool ScheduleNotify { get; set; }
 
+    // Send one reminder before each planned outage for this group.
+    public bool ScheduleReminder { get; set; }
+    public int ScheduleReminderMinutes { get; set; } = 15;
+
     // Picture of the light off/on messages (none by default: the schedule post carries the picture).
     public ScheduleImage ScheduleImage { get; set; } = ScheduleImage.None;
     public PostMode ScheduleEventMode { get; set; } = PostMode.Edit;
@@ -188,6 +192,15 @@ public sealed class SchedulePostThread
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+public sealed class ScheduleReminderDelivery
+{
+    public long ChatId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string GroupId { get; set; } = "";
+    public DateTimeOffset OutageStart { get; set; }
+    public DateTimeOffset SentAt { get; set; }
+}
+
 public enum AddressCheckStatus
 {
     Pending,
@@ -309,6 +322,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<KeyValue> KeyValues => Set<KeyValue>();
     public DbSet<ScheduleThread> ScheduleThreads => Set<ScheduleThread>();
     public DbSet<SchedulePostThread> SchedulePostThreads => Set<SchedulePostThread>();
+    public DbSet<ScheduleReminderDelivery> ScheduleReminderDeliveries => Set<ScheduleReminderDelivery>();
     public DbSet<GridState> GridStates => Set<GridState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -335,6 +349,14 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.ContentHash).HasMaxLength(64);
             e.Property(x => x.ImageVersion).HasMaxLength(64);
             e.Property(x => x.ImageKind).HasConversion<string>().HasMaxLength(8);
+        });
+
+        modelBuilder.Entity<ScheduleReminderDelivery>(e =>
+        {
+            e.HasKey(x => new { x.ChatId, x.RegionId, x.GroupId, x.OutageStart });
+            e.Property(x => x.ChatId).ValueGeneratedNever();
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.GroupId).HasMaxLength(16);
         });
 
         modelBuilder.Entity<AddressCheck>(e =>
@@ -399,6 +421,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.SchedulePostMode).HasConversion<string>().HasMaxLength(16);
             e.Property(x => x.SchedulePostImage).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.AddressCity).HasMaxLength(128);
+            e.Property(x => x.ScheduleReminderMinutes).HasDefaultValue(15);
             e.Property(x => x.AddressStreet).HasMaxLength(256);
             e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.Property(x => x.SvitlobotKey).HasMaxLength(512);

@@ -221,6 +221,14 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
 
+                    b.Property<bool>("ScheduleReminder")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("ScheduleReminderMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(15);
+
                     b.Property<string>("SlotSettings")
                         .HasColumnType("nvarchar(max)");
 
@@ -462,6 +470,30 @@ namespace DtekBot.Api.Data.Migrations
                     b.HasKey("ChatId");
 
                     b.ToTable("SchedulePostThreads");
+                });
+
+            modelBuilder.Entity("DtekBot.Api.Data.ScheduleReminderDelivery", b =>
+                {
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("GroupId")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<DateTimeOffset>("OutageStart")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("SentAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("ChatId", "RegionId", "GroupId", "OutageStart");
+
+                    b.ToTable("ScheduleReminderDeliveries");
                 });
 
             modelBuilder.Entity("DtekBot.Api.Data.ScheduleThread", b =>

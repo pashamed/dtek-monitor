@@ -140,6 +140,20 @@ public static class ScheduleText
         };
     }
 
+    public static IReadOnlyDictionary<string, string> BeforeOffValues(
+        string regionName,
+        string groupId,
+        DateTimeOffset outageStart,
+        int minutesBefore) =>
+        new Dictionary<string, string>
+        {
+            ["time"] = Clock(outageStart),
+            ["minutes"] = minutesBefore.ToString(CultureInfo.InvariantCulture),
+            ["date"] = KyivTime.FromUtc(outageStart).ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
+            ["region"] = regionName,
+            ["group"] = groupId,
+        };
+
     // What the schedule post shows, ignoring the heading: a change here is a reason to post again.
     public static string PostFingerprint(IReadOnlyDictionary<string, string> values) =>
         values["outages"] + "|" + values["tomorrow"];

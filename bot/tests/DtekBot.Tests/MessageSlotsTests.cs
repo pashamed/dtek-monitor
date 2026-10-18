@@ -25,16 +25,16 @@ public class MessageSlotsTests
     // ---- the registry ----
 
     [Fact]
-    public void All_HasTheSevenSlots_InOrder()
+    public void All_HasTheEightSlots_InOrder()
     {
-        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "off", "on"], MessageSlots.All.Select(s => s.Id));
+        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
     }
 
     [Fact]
     public void All_GroupsTheSlots()
     {
         Assert.Equal(
-            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization"],
+            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization"],
             MessageSlots.All.Select(s => s.Group));
     }
 
@@ -601,4 +601,3 @@ public class ChannelTemplateTests
         Assert.Equal(ScheduleImage.Grid, loaded.SchedulePostImage);
     }
 }
-

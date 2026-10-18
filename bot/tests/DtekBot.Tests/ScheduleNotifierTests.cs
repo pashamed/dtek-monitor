@@ -833,6 +833,53 @@ public sealed class ScheduleNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task ScheduleReminder_SendsAtConfiguredLeadTimeOnlyOnce()
+    {
+        AddChannel(configure: c =>
+        {
+            c.ScheduleNotify = false;
+            c.ScheduleReminder = true;
+            c.ScheduleReminderMinutes = 15;
+            c.Templates = TemplatesJson((MessageSlots.BeforeOff, "Черга {group}: {time} за {minutes} хв"));
+        });
+
+        var first = await TickAsync(Kyiv(15, 10, 50));
+        var duplicate = await TickAsync(Kyiv(15, 10, 55));
+
+        Assert.Equal(1, first.Sent);
+        Assert.Equal(1, duplicate.Skipped);
+        Assert.Equal("Черга 45.1: 11:00 за 15 хв", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Single(_f.Db.ScheduleReminderDeliveries);
+    }
+
+    [Fact]
+    public async Task ScheduleReminder_RetriesAfterSendFailure()
+    {
+        AddChannel(configure: c => { c.ScheduleNotify = false; c.ScheduleReminder = true; });
+        _f.Bot.Failure = _ => new HttpRequestException("network down");
+
+        Assert.Equal(1, (await TickAsync(Kyiv(15, 10, 50))).Failed);
+        Assert.Empty(_f.Db.ScheduleReminderDeliveries);
+
+        _f.Bot.Failure = null;
+        Assert.Equal(1, (await TickAsync(Kyiv(15, 10, 55))).Sent);
+        Assert.Single(_f.Db.ScheduleReminderDeliveries);
+    }
+
+    [Fact]
+    public async Task SendScheduleNow_PublishesTheCurrentScheduleEvenWhenAutomaticPostsAreOff()
+    {
+        var channel = AddPostChannel(configure: c => c.SchedulePost = false);
+
+        var result = await _notifier.SendScheduleNowAsync(channel, CancellationToken.None);
+
+        Assert.True(result.Sent);
+        Assert.Contains("надіслано", result.Message);
+        Assert.NotNull(PostOf(ChatA));
+        Assert.Single(_f.Bot.Photos);
+    }
+
+    [Fact]
     public async Task RateLimit429_IsRetriedOnce()
     {
         AddChannel();

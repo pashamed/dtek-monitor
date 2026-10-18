@@ -327,7 +327,9 @@ public static class SvitlobotApi
 
             var result = await svitlobot.SetTimetableAsync(key, timetable, ct);
             return result.Ok
-                ? Json(new SvitlobotResultDto($"Тижневий графік черги {channel.GroupId} надіслано до Світлобота.", true), 200)
+                ? Json(new SvitlobotResultDto(
+                    $"Тижневі планові відключення черги {channel.GroupId} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
+                    true), 200)
                 : Failed(result);
         });
 

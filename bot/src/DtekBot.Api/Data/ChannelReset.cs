@@ -19,6 +19,8 @@ public static class ChannelReset
 
         db.ScheduleThreads.RemoveRange(await db.ScheduleThreads.Where(t => t.ChatId == channel.ChatId).ToListAsync(ct));
         db.SchedulePostThreads.RemoveRange(await db.SchedulePostThreads.Where(t => t.ChatId == channel.ChatId).ToListAsync(ct));
+        db.ScheduleReminderDeliveries.RemoveRange(
+            await db.ScheduleReminderDeliveries.Where(t => t.ChatId == channel.ChatId).ToListAsync(ct));
         db.Deliveries.RemoveRange(await db.Deliveries.Where(d => d.ChatId == channel.ChatId && !d.IsClosed).ToListAsync(ct));
     }
 }

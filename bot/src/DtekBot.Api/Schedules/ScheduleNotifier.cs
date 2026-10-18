@@ -15,6 +15,7 @@ using Telegram.Bot.Types.Enums;
 namespace DtekBot.Api.Schedules;
 
 public sealed record ScheduleTickSummary(int Chats, int Sent, int Edited, int Skipped, int Failed);
+public sealed record SchedulePostNowResult(bool Sent, bool Failed, string Message);
 
 // Keeps two kinds of stabilization messages in step with the chat's group schedule:
 //  - the "light off / on" event messages (one thread per outage episode), and
@@ -50,10 +51,20 @@ public sealed partial class ScheduleNotifier(
         var now = time.GetUtcNow();
 
         var channels = await db.Channels
-            .Where(c => c.IsActive && !c.IsPaused && c.GroupId != null && (c.ScheduleNotify || c.SchedulePost))
+            .Where(c => c.IsActive && !c.IsPaused && c.GroupId != null
+                && (c.ScheduleNotify || c.SchedulePost || c.ScheduleReminder))
             .ToListAsync(ct);
         var threads = await db.ScheduleThreads.ToDictionaryAsync(t => t.ChatId, ct);
         var posts = await db.SchedulePostThreads.ToDictionaryAsync(t => t.ChatId, ct);
+        var cutoff = now.AddDays(-7);
+        var reminders = await db.ScheduleReminderDeliveries
+            .Where(d => d.OutageStart >= cutoff)
+            .ToListAsync(ct);
+        var deliveredReminders = reminders
+            .Select(r => (r.ChatId, r.RegionId, r.GroupId, r.OutageStart))
+            .ToHashSet();
+        db.ScheduleReminderDeliveries.RemoveRange(
+            await db.ScheduleReminderDeliveries.Where(d => d.OutageStart < cutoff).ToListAsync(ct));
 
         // A thread whose chat turned the feature off or changed group starts fresh next time.
         var byChat = channels.ToDictionary(c => c.ChatId);
@@ -101,6 +112,17 @@ public sealed partial class ScheduleNotifier(
 
             foreach (var channel in regionGroup)
             {
+                if (channel.ScheduleReminder)
+                {
+                    var outcome = await SendDueReminderAsync(
+                        channel, region, snapshot, deliveredReminders, now, ct);
+                    Count(outcome);
+                    if (outcome is Outcome.Sent)
+                    {
+                        await Task.Delay(SendSpacing, ct);
+                    }
+                }
+
                 if (channel.ScheduleNotify)
                 {
                     threads.TryGetValue(channel.ChatId, out var thread);
@@ -130,6 +152,105 @@ public sealed partial class ScheduleNotifier(
 
         await db.SaveChangesAsync(ct);
         return new ScheduleTickSummary(channels.Count, sent, edited, skipped, failed);
+    }
+
+    public async Task<SchedulePostNowResult> SendScheduleNowAsync(Channel channel, CancellationToken ct)
+    {
+        var settings = options.CurrentValue;
+        var region = settings.Regions.FirstOrDefault(r => r.Id == channel.RegionId && r.HasSchedules);
+        if (region is null || string.IsNullOrWhiteSpace(channel.GroupId))
+        {
+            return new(false, false, "Спершу оберіть регіон із графіками та чергу.");
+        }
+
+        var snapshot = await schedules.GetAsync(region.Id, ct);
+        if (snapshot is null)
+        {
+            return new(false, false, "Графіки тимчасово недоступні. Спробуйте пізніше.");
+        }
+
+        if (snapshot.Find(channel.GroupId) is null)
+        {
+            return new(false, false, "Для обраної черги графік недоступний.");
+        }
+
+        var post = await db.SchedulePostThreads.FirstOrDefaultAsync(t => t.ChatId == channel.ChatId, ct);
+        var posts = post is null
+            ? new Dictionary<long, SchedulePostThread>()
+            : new Dictionary<long, SchedulePostThread> { [channel.ChatId] = post };
+        var outcome = await ApplyPostAsync(
+            settings, channel, region, snapshot, post, posts, time.GetUtcNow(), ct, force: true);
+        await db.SaveChangesAsync(ct);
+        return outcome switch
+        {
+            Outcome.Sent => new(true, false, "Графік надіслано в канал."),
+            Outcome.Edited => new(true, false, "Графік у каналі оновлено."),
+            _ => new(false, true, "Не вдалося надіслати графік. Перевірте, що бот має право публікувати повідомлення в каналі."),
+        };
+    }
+
+    private async Task<Outcome> SendDueReminderAsync(
+        Channel channel,
+        RegionSettings region,
+        ScheduleSnapshot snapshot,
+        HashSet<(long ChatId, string RegionId, string GroupId, DateTimeOffset OutageStart)> delivered,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var group = snapshot.Find(channel.GroupId!);
+        if (group is null)
+        {
+            return Outcome.Skipped;
+        }
+
+        var lead = TimeSpan.FromMinutes(channel.ScheduleReminderMinutes);
+        foreach (var outage in group.Outages)
+        {
+            if (outage.Start <= now || now < outage.Start - lead)
+            {
+                continue;
+            }
+
+            var key = (channel.ChatId, region.Id, channel.GroupId!, outage.Start);
+            if (delivered.Contains(key))
+            {
+                continue;
+            }
+
+            var values = ScheduleText.BeforeOffValues(region.Name, channel.GroupId!, outage.Start, channel.ScheduleReminderMinutes);
+            var text = MessageTemplate.Render(
+                channel.TemplateFor(MessageSlots.BeforeOff),
+                values,
+                MessageSlots.Find(MessageSlots.BeforeOff)!.DefaultTemplate);
+            try
+            {
+                await WithRetry(() => WithMarkupFallback(
+                    text,
+                    (t, mode) => bot.SendMessage(channel.ChatId, t, parseMode: mode, cancellationToken: ct)), ct);
+                db.ScheduleReminderDeliveries.Add(new ScheduleReminderDelivery
+                {
+                    ChatId = channel.ChatId,
+                    RegionId = region.Id,
+                    GroupId = channel.GroupId!,
+                    OutageStart = outage.Start,
+                    SentAt = now,
+                });
+                delivered.Add(key);
+                return Outcome.Sent;
+            }
+            catch (ApiRequestException ex) when (IsChatGone(ex))
+            {
+                Deactivate(channel, ex);
+                return Outcome.Failed;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Schedule reminder for chat {ChatId} failed", channel.ChatId);
+                return Outcome.Failed;
+            }
+        }
+
+        return Outcome.Skipped;
     }
 
     private static Desired? Decide(
@@ -286,7 +407,8 @@ public sealed partial class ScheduleNotifier(
         SchedulePostThread? post,
         Dictionary<long, SchedulePostThread> posts,
         DateTimeOffset now,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool force = false)
     {
         var groupId = channel.GroupId!;
         if (snapshot.Find(groupId) is null || now < snapshot.CoverageStart || now >= snapshot.CoverageEnd)
@@ -299,7 +421,7 @@ public sealed partial class ScheduleNotifier(
         var values = ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: sameDay);
         var fingerprint = Hash(ScheduleText.PostFingerprint(values) + "|" + channel.SchedulePostImage);
 
-        if (sameDay ? post!.ContentHash == fingerprint : values["outages"] == ScheduleText.NoOutages)
+        if (!force && (sameDay ? post!.ContentHash == fingerprint : values["outages"] == ScheduleText.NoOutages))
         {
             return Outcome.Skipped;
         }

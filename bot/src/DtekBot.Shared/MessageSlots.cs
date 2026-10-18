@@ -8,6 +8,7 @@ public static class MessageSlots
     public const string Local = "local";
     public const string Ended = "ended";
     public const string Schedule = "schedule";
+    public const string BeforeOff = "before-off";
     public const string Off = "off";
     public const string On = "on";
 
@@ -36,6 +37,15 @@ public static class MessageSlots
         new("onDuration", "Скільки світло було до цього (порожнє, якщо невідомо)", "17год 23хв"),
         new("until", "Коли світло має повернутися за графіком (порожнє, якщо невідомо)", "18:00"),
         new("planned", "Скільки триватиме відключення за графіком", "~4 год"),
+        new("region", "Назва регіону", "м. Київ"),
+        new("group", "Номер черги", "45.1"),
+    ];
+
+    private static readonly IReadOnlyList<PlaceholderDto> BeforeOffPlaceholders =
+    [
+        new("time", "Коли почнеться планове відключення", "14:00"),
+        new("minutes", "За скільки хвилин почнеться відключення", "15"),
+        new("date", "Дата початку відключення", "15.10.2026"),
         new("region", "Назва регіону", "м. Київ"),
         new("group", "Номер черги", "45.1"),
     ];
@@ -86,6 +96,13 @@ public static class MessageSlots
             "Окрема публікація зі стабілізаційним графіком вашої черги на сьогодні, зазвичай разом із картинкою.",
             "❗️ {header}\n📅 {weekday} {date}\n\n{outages}",
             SchedulePlaceholders),
+        new(
+            BeforeOff,
+            "stabilization",
+            "Попередження про відключення",
+            "Одноразове повідомлення за вибрану кількість хвилин до початку планового відключення.",
+            "⏳ За графіком черги {group} відключення почнеться о {time}{#date} ({date}){/date} — через {minutes} хв.",
+            BeforeOffPlaceholders),
         new(
             Off,
             "stabilization",

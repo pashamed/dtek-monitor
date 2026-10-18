@@ -275,6 +275,11 @@ public static class MiniAppApi
                 db.Channels.Add(channel);
             }
 
+            if (dto.ScheduleReminderMinutes is not (5 or 10 or 15 or 30 or 60))
+            {
+                return Error("Оберіть час попередження: 5, 10, 15, 30 або 60 хвилин.");
+            }
+
             var before = (WasActive: !isNew && channel.IsActive, channel.IsPaused, channel.RegionId, channel.PartIds, channel.SlotSettings, channel.GroupId);
 
             if (region is not null)
@@ -288,6 +293,7 @@ public static class MiniAppApi
                     channel.AddressStreet = null;
                     channel.AddressHouse = null;
                     channel.ScheduleNotify = false;
+                    channel.ScheduleReminder = false;
                 }
 
                 channel.RegionId = region.Id;
@@ -305,6 +311,7 @@ public static class MiniAppApi
                 channel.AddressHouse = null;
                 channel.OutageTrigger = false;
                 channel.ScheduleNotify = false;
+                channel.ScheduleReminder = false;
             }
 
             channel.IsActive = dto.IsActive;
@@ -346,6 +353,8 @@ public static class MiniAppApi
             var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
             var canSchedule = dto.IsActive && channel.GroupId is not null && regionHasSchedules;
             channel.ScheduleNotify = canSchedule && dto.ScheduleNotify;
+            channel.ScheduleReminder = canSchedule && dto.ScheduleReminder;
+            channel.ScheduleReminderMinutes = dto.ScheduleReminderMinutes;
             channel.ScheduleImage = dto.ScheduleImage;
             channel.ScheduleEventMode = dto.ScheduleEventMode;
             channel.SchedulePost = canSchedule && dto.SchedulePost;
@@ -412,6 +421,40 @@ public static class MiniAppApi
                 kind,
                 ct);
             return Json(new PreviewResponse(rendered.Html, errors, rendered.ImageUrl));
+        });
+
+        api.MapPost("/chats/{chatId:long}/schedules/send", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            ScheduleNotifier notifier,
+            CancellationToken ct) =>
+        {
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || string.IsNullOrEmpty(channel.RegionId) || string.IsNullOrEmpty(channel.GroupId))
+            {
+                return Error("Спершу оберіть регіон і чергу.");
+            }
+
+            await DtekBot.Api.Bot.TickGate.Schedules.WaitAsync(ct);
+            try
+            {
+                var result = await notifier.SendScheduleNowAsync(channel, ct);
+                return result.Sent
+                    ? Json(new { message = result.Message })
+                    : Results.Json(new ApiError(result.Message), ApiJson.Options,
+                        statusCode: result.Failed ? 502 : 503);
+            }
+            finally
+            {
+                DtekBot.Api.Bot.TickGate.Schedules.Release();
+            }
         });
 
         // Posts a sample of the slot into the chat so the user sees the real thing in Telegram.
@@ -996,7 +1039,9 @@ public static class MiniAppApi
             MessageSlots.All.Where(s => MessageSlots.IsAlert(s.Id))
                 .ToDictionary(s => s.Id, s => new SlotSettingDto(c.SlotEnabled(s.Id), c.SlotEditInPlace(s.Id), c.SlotEndStyle(s.Id))),
             !string.IsNullOrEmpty(c.SvitlobotKey),
-            c.AddressCity);
+            c.AddressCity,
+            c.ScheduleReminder,
+            c.ScheduleReminderMinutes);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 
