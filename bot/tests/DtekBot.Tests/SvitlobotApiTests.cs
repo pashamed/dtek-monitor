@@ -5,6 +5,7 @@ using DtekBot.Api.Schedules;
 using DtekBot.Api.Svitlobot;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using static DtekBot.Tests.ScheduleFixtures;
 
 namespace DtekBot.Tests;
@@ -399,6 +400,47 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
             $"/website/timetableEditEvent?channel_key={EncodedKey}&timetableData={Uri.EscapeDataString(WeekMaybe)}",
             Assert.Single(_factory.Svitlobot.Requests).PathAndQuery);
         await AssertNoKeyAsync(response);
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_SendsCurrentWeekOnceAndResendsWhenItChanges()
+    {
+        _factory.WithDb(db =>
+        {
+            foreach (var channel in db.Channels)
+            {
+                channel.SvitlobotKey = null;
+            }
+
+            db.KeyValues.RemoveRange(db.KeyValues.Where(value => value.Key.StartsWith("svitlobot-schedule:")));
+        });
+        var (chatId, _) = UserWithKey(c => c.GroupId = "45.1");
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        var first = await service.TickAsync(CancellationToken.None);
+        var second = await service.TickAsync(CancellationToken.None);
+
+        Assert.Equal(1, first);
+        Assert.Equal(0, second);
+        Assert.Equal(
+            $"/website/timetableEditEvent?channel_key={EncodedKey}&timetableData={Uri.EscapeDataString(WeekMaybe)}",
+            Assert.Single(_factory.Svitlobot.Requests).PathAndQuery);
+
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            WeeklyPresets = new Dictionary<string, string> { ["45.1"] = Week },
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Quiet },
+        };
+
+        var changed = await service.TickAsync(CancellationToken.None);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+        Assert.Equal(chatId, _factory.WithDb(db => db.Channels.AsNoTracking()
+            .Where(channel => channel.ChatId == chatId)
+            .Select(channel => channel.ChatId)
+            .Single()));
     }
 
     [Fact]

@@ -1,3 +1,5 @@
+using DtekBot.Api.Svitlobot;
+
 namespace DtekBot.Api.Schedules;
 
 public static class ScheduleApi
@@ -9,6 +11,7 @@ public static class ScheduleApi
         app.MapPost("/ingest/schedules/tick", async (
             HttpRequest request,
             ScheduleNotifier notifier,
+            SvitlobotScheduleSyncService svitlobotSchedules,
             IConfiguration config,
             ILogger<Program> logger,
             CancellationToken ct) =>
@@ -23,9 +26,10 @@ public static class ScheduleApi
             try
             {
                 var summary = await notifier.TickAsync(ct);
+                var synced = await svitlobotSchedules.TickAsync(ct);
                 logger.LogInformation(
-                    "Schedule tick: chats={Chats} sent={Sent} edited={Edited} skipped={Skipped} failed={Failed}",
-                    summary.Chats, summary.Sent, summary.Edited, summary.Skipped, summary.Failed);
+                    "Schedule tick: chats={Chats} sent={Sent} edited={Edited} skipped={Skipped} failed={Failed}; Svitlobot schedules updated={SvitlobotUpdated}",
+                    summary.Chats, summary.Sent, summary.Edited, summary.Skipped, summary.Failed, synced);
                 return Results.Ok(summary);
             }
             finally

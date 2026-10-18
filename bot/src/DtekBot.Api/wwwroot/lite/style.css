@@ -301,6 +301,13 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 .svbhead{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .svbblk{display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
 .svbblk .toast,.svbblk .hint{margin:0}
+.svb-key-entry{display:flex;flex-direction:column;gap:10px}
+.svb-key-entry .fld{gap:7px}
+.svb-key-status{display:flex;align-items:center;min-height:34px}
+.svb-key-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.svb-key-actions .btn{width:100%;padding:8px 10px;font-size:14px}
+.svb-key-actions .btn.ghost{min-width:0;white-space:normal}
+#svb>.hint{margin:0}
 .stlines{display:flex;flex-direction:column;gap:6px}
 .stl{font-size:15px;overflow-wrap:anywhere}
 .warnc{border-color:rgba(251,191,36,.5);background:linear-gradient(135deg,rgba(251,191,36,.14),rgba(255,255,255,.05))}
