@@ -89,6 +89,12 @@ public sealed record SchedulePreviewDto(string GroupId, string Text, string? Ima
 
 public sealed record AddressItemDto(int Id, string Name);
 
+public sealed record AddressNameDto(string Name);
+
+public sealed record DtekAddressHouseDto(string House, string? GroupId);
+
+public sealed record SetDtekAddressRequest(string RegionId, string City, string Street, string House, string? GroupId);
+
 public sealed record SetAddressRequest(
     string RegionId,
     int StreetId,

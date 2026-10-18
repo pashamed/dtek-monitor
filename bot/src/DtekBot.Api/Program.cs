@@ -29,12 +29,18 @@ builder.Services.AddDbContext<BotDbContext>(o =>
     o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IYasnoClient, YasnoClient>(client =>
 {
     client.BaseAddress = new Uri(YasnoClient.BaseUrl);
     client.Timeout = TimeSpan.FromSeconds(10);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
 });
+builder.Services.AddHttpClient<IDtekAddressClient, DtekAddressClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; dtek-monitor-bot/1.0)");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false });
 builder.Services.AddSingleton<PopupClassifier>();
 builder.Services.AddSingleton<SvitlobotKeyProtector>();
 // The channel key is in the query string: no request logging for this client.

@@ -117,7 +117,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal(["🚨 На сайті ДТЕК діють екстрені відключення.", "Перевірено: 15.07 15:00 (Київ)"], lines);
+        Assert.Equal(["🚨 На сайті ДТЕК діють екстрені відключення.", "Перевірено: 15.07 15:00 (час Києва · Одеська область)"], lines);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("Перевірено: 15.01 14:00 (Київ)", lines[1]);
+        Assert.Equal("Перевірено: 15.01 14:00 (час Києва · Одеська область)", lines[1]);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public sealed class ChatStatusServiceTests : IDisposable
         Assert.Equal(
             [
                 "✅ Екстрених відключень на сайті ДТЕК немає.",
-                "Перевірено: 15.07 15:00 (Київ)",
+                "Перевірено: 15.07 15:00 (час Києва · м. Київ)",
                 "🚨 Для черги 45.1 діють екстрені відключення (за даними Yasno).",
                 "🟢 За графіком (черга 45.1) світло є. Наступне відключення о 20:30.",
             ],
@@ -324,7 +324,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal(["✅ Екстрених відключень на сайті ДТЕК немає.", "Перевірено: 15.07 15:00 (Київ)"], lines);
+        Assert.Equal(["✅ Екстрених відключень на сайті ДТЕК немає.", "Перевірено: 15.07 15:00 (час Києва · м. Київ)"], lines);
     }
 
     [Fact]
