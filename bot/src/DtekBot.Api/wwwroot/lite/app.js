@@ -35,7 +35,7 @@ const CREDIT = 'Дані графіків: outage-data-ua (ДТЕК).';
 
 const HELP = {
   region: ['Регіон', 'Регіон, за яким бот стежить за відключеннями. Від нього залежать доступні адреси, черги та графіки.'],
-  parts: ['Райони', 'Бот надсилатиме екстрені сповіщення, лише якщо у повідомленні ДТЕК названо один із обраних районів, або якщо повідомлення стосується всього регіону. Якщо нічого не обрано, сповіщення приходять для всього регіону.'],
+  parts: ['Райони', 'Оберіть принаймні один район, щоб отримувати екстрені сповіщення, у яких ДТЕК називає район. Можна обрати всі райони.'],
   status: ['Поточний стан', 'Показує, що зараз повідомляє сайт ДТЕК для вашого регіону та що кажуть графіки для вашої черги.'],
   check: ['Світла немає?', 'Бот перевірить причину: спершу графік вашої черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише потім адресу на сайті ДТЕК. Результат також надійде вам у чат із ботом.'],
   active: ['Підписка активна', 'Поки підписка активна, бот надсилає сюди сповіщення. Якщо її вимкнути, сповіщення припиняються, а збережена адреса видаляється.'],
@@ -344,6 +344,12 @@ function renderEditor(chat) {
   const isDirty = () => JSON.stringify(cur()) !== base;
   const slotErrs = id => [...(perr[id] || []), ...(serr[id] || [])];
   const blocking = () => Object.values(perr).some(a => a && a.length);
+  const districtSelectionError = () => {
+    const r = regionOf(s.regionId);
+    return s.isActive && r && r.parts.length > 0 && partIdsOf(s).length === 0
+      ? 'Оберіть принаймні один район для активної підписки.'
+      : null;
+  };
   const anyErr = () => blocking() || Object.values(serr).some(a => a && a.length);
 
   // ----- chrome: top bar, tabs, save bar -----
@@ -410,7 +416,7 @@ function renderEditor(chat) {
   const addressPanel = h('div', { id: 'addressPanel' });
   const activeRow = toggle('Підписка активна', 'isActive', 'active');
 
-  // Districts: multi-select chips; empty selection = whole region.
+  // Districts: active subscriptions with district options must select at least one.
   let dq = '';
   const dqIn = h('input', { type: 'text', placeholder: 'Пошук району', autocomplete: 'off', 'aria-label': 'Пошук району', hidden: true });
   const dList = h('div', { class: 'dchips' });
@@ -428,11 +434,15 @@ function renderEditor(chat) {
     const chip = (label, on, fn) => h('button', { type: 'button', class: 'dchip' + (on ? ' on' : ''), 'aria-pressed': String(on), text: label, onclick: fn });
     const flip = id => { sel.has(id) ? sel.delete(id) : sel.add(id); s.partIds = [...sel]; touch(); renderDistricts(); syncStatus(); };
     const top = dList.scrollTop;
-    dList.replaceChildren(chip('Усі райони', !sel.size, () => { s.partIds = []; touch(); renderDistricts(); syncStatus(); }),
+    dList.replaceChildren(chip('Обрати всі райони', sel.size === r.parts.length, () => { s.partIds = r.parts.map(p => p.id); touch(); renderDistricts(); syncStatus(); }),
       ...r.parts.filter(p => !q || p.name.toLowerCase().includes(q)).map(p => chip(p.name, sel.has(p.id), () => flip(p.id))));
     dList.scrollTop = top;
     const names = partNames(s);
-    dSum.textContent = names.length ? 'Сповіщення про екстрені відключення лише для: ' + names.join(', ') : 'Сповіщення для всього регіону';
+    dSum.textContent = names.length === r.parts.length
+      ? 'Сповіщення про екстрені відключення для всіх районів.'
+      : names.length
+        ? 'Сповіщення про екстрені відключення для: ' + names.join(', ')
+        : 'Оберіть принаймні один район, щоб отримувати районні екстрені сповіщення.';
   }
 
   // Current state card (what DTEK and the schedules say right now).
@@ -521,6 +531,12 @@ function renderEditor(chat) {
     if (!silent) setErr([]);
     if (s.isActive && !s.regionId) {
       const e = new Error('Оберіть регіон або вимкніть підписку.');
+      if (!silent) setErr([e.message]);
+      return e;
+    }
+    const districtError = districtSelectionError();
+    if (districtError) {
+      const e = new Error(districtError);
       if (!silent) setErr([e.message]);
       return e;
     }
@@ -1351,11 +1367,11 @@ function renderEditor(chat) {
 
   // ----- wiring -----
   function updateUi() {
-    const d = isDirty(), bad = blocking();
+    const d = isDirty(), districtError = districtSelectionError(), bad = blocking() || !!districtError;
     saveBtn.disabled = busy || bad || !d;
     const mode = bad ? 'err' : d ? 'dirty' : 'ok';
     bar.dataset.mode = mode;
-    stTxt.textContent = mode === 'err' ? 'Виправте помилки шаблону' : mode === 'dirty' ? 'Є незбережені зміни' : 'Збережено ✓';
+    stTxt.textContent = districtError ? districtError : blocking() ? 'Виправте помилки шаблону' : mode === 'dirty' ? 'Є незбережені зміни' : 'Збережено ✓';
     rd.hidden = !anyErr();
     const [c, t] = statusOf(s);
     topPill.className = 'pill ' + c; topPill.textContent = t;
