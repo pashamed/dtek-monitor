@@ -100,6 +100,9 @@ public sealed class DtekAddressClientTests
         });
         Assert.Contains("data%5B0%5D%5Bvalue%5D=%D0%BC.+%D0%9E%D0%B4%D0%B5%D1%81%D0%B0",
             bodies.Last());
+        var houseRequest = WebUtility.UrlDecode(bodies.Last());
+        Assert.Contains("data[1][name]=street&data[1][value]=вул. Дерибасівська", houseRequest);
+        Assert.Matches(@"data\[2\]\[value\]=\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}:\d{2}", houseRequest);
     }
 
     [Fact]

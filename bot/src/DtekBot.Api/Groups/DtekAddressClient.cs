@@ -76,7 +76,8 @@ public sealed partial class DtekAddressClient(
             new("data[1][name]", "street"),
             new("data[1][value]", street.Trim()),
             new("data[2][name]", "updateFact"),
-            new("data[2][value]", KyivTime.FromUtc(DateTimeOffset.UtcNow).ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)),
+            new("data[2][value]", KyivTime.FromUtc(DateTimeOffset.UtcNow)
+                .ToString("dd.MM.yyyy, HH:mm:ss", CultureInfo.GetCultureInfo("uk-UA"))),
         ], ct);
 
         if (!response.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
