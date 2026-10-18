@@ -2,6 +2,7 @@
 const tg = window.Telegram && window.Telegram.WebApp;
 const app = document.getElementById('app');
 const initData = tg ? tg.initData : '';
+const UI_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
 
 const SLOT_GROUPS = [['emergency', 'Екстрені відключення'], ['regional', 'Аварія в регіоні'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
 const KIND_OF = { emergency: 'Emergency', regional: 'Accident', local: 'Emergency', ended: 'Ended' };
@@ -97,6 +98,10 @@ function show(...nodes) {
   app.removeAttribute('aria-busy');
   app.replaceChildren(...nodes.flat(Infinity).filter(n => n != null));
   window.scrollTo(0, 0);
+}
+
+function versionFooter() {
+  return h('footer', { class: 'ui-version', text: 'Версія інтерфейсу: ' + UI_VERSION });
 }
 
 async function api(method, path, body) {
@@ -282,7 +287,8 @@ function renderList(note, errNote) {
         h('li', { text: 'Канал зʼявиться тут автоматично.' }),
         h('li', { text: 'Оберіть регіон і адресу.' })),
       h('div', { class: 'or', text: 'Або вставте посилання t.me чи @імʼя публічного каналу' }),
-      h('div', { class: 'linkrow' }, input, btn), msg));
+      h('div', { class: 'linkrow' }, input, btn), msg),
+    versionFooter());
 }
 
 // ---------- chat editor ----------
@@ -1332,7 +1338,7 @@ function renderEditor(chat) {
   show(h('div', { class: 'ed' },
     h('header', { class: 'topbar glass' }, back, h('h1', { class: 'tt', text: chatTitle(chat) }), topPill),
     h('nav', { class: 'tabs glass', role: 'tablist', 'aria-label': 'Розділи налаштувань' }, tabBtns),
-    TABS.map(([id]) => panels[id]), bar));
+    TABS.map(([id]) => panels[id]), versionFooter(), bar));
   refreshAll();
   setTab('main');
   window.scrollTo(0, 0);
