@@ -34,6 +34,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     public FakeDtekAddressClient DtekAddresses { get; } = new();
 
+    public FakeYasnoClient Yasno { get; } = new();
+
     public FakeGridProvider Grid { get; } = new();
 
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.FromHours(3)));
@@ -69,6 +71,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<IScheduleProvider>(Schedules);
             services.RemoveAll<IDtekAddressClient>();
             services.AddSingleton<IDtekAddressClient>(DtekAddresses);
+            services.RemoveAll<IYasnoClient>();
+            services.AddSingleton<IYasnoClient>(Yasno);
             services.RemoveAll<DtekBot.Api.Grid.IGridStatusProvider>();
             services.AddSingleton<DtekBot.Api.Grid.IGridStatusProvider>(Grid);
             services.RemoveAll<TimeProvider>();
@@ -162,6 +166,22 @@ public sealed class FakeDtekAddressClient : IDtekAddressClient
         LastHouseSearch = (region.Id, city, street, query);
         return Task.FromResult(Houses);
     }
+}
+
+public sealed class FakeYasnoClient : IYasnoClient
+{
+    public IReadOnlyList<YasnoItem> Streets { get; set; } = [new(283, "вул. Драгоманова")];
+    public IReadOnlyList<YasnoItem> Houses { get; set; } = [new(12634, "12")];
+    public Dictionary<int, YasnoGroup?> Groups { get; } = new() { [12634] = new YasnoGroup(6, 2) };
+
+    public Task<IReadOnlyList<YasnoItem>> SearchStreetsAsync(int regionId, int dsoId, string query, CancellationToken ct) =>
+        Task.FromResult(Streets);
+
+    public Task<IReadOnlyList<YasnoItem>> SearchHousesAsync(int regionId, int dsoId, int streetId, string query, CancellationToken ct) =>
+        Task.FromResult(Houses);
+
+    public Task<YasnoGroup?> GetGroupAsync(int regionId, int dsoId, int streetId, int houseId, CancellationToken ct) =>
+        Task.FromResult(Groups.TryGetValue(houseId, out var group) ? group : null);
 }
 
 public static class ApiClientExtensions

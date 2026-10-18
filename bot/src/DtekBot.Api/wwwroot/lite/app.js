@@ -629,7 +629,12 @@ function renderEditor(chat) {
         const items = await api('GET', url);
         if (my !== sseq) return;
         if (!items.length) { list.replaceChildren(h('p', { class: 'hint', text: 'Нічого не знайдено.' })); return; }
-        list.replaceChildren(...items.map(i => h('button', { type: 'button', class: 'pick', text: i.name, onclick: () => (street ? pickHouse : pickStreet)(i) })));
+        list.replaceChildren(...items.map(i => h('button', {
+          type: 'button',
+          class: 'pick',
+          text: street && i.groupId ? `${i.name} · черга ${i.groupId}` : i.name,
+          onclick: () => (street ? pickHouse : pickStreet)(i),
+        })));
       } catch (e) { if (my === sseq) fail(e); }
     }
     const pickStreet = i => {

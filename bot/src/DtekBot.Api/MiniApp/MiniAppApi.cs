@@ -725,8 +725,22 @@ public static class MiniAppApi
                     return Error("Оберіть вулицю.");
                 }
 
-                var items = await yasno.SearchHousesAsync(region.YasnoRegionId, region.YasnoDsoId, streetId.Value, query?.Trim() ?? "", ct);
-                return Json(items.Take(50).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+                var items = (await yasno.SearchHousesAsync(
+                    region.YasnoRegionId, region.YasnoDsoId, streetId.Value, query?.Trim() ?? "", ct))
+                    .Take(50)
+                    .ToArray();
+                var addresses = new AddressItemDto[items.Length];
+                await Parallel.ForEachAsync(
+                    Enumerable.Range(0, items.Length),
+                    new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+                    async (index, token) =>
+                    {
+                        var item = items[index];
+                        var group = await yasno.GetGroupAsync(
+                            region.YasnoRegionId, region.YasnoDsoId, streetId.Value, item.Id, token);
+                        addresses[index] = new AddressItemDto(item.Id, item.Value, group?.Id);
+                    });
+                return Json(addresses);
             }
 
             if (string.IsNullOrWhiteSpace(city) || city.Length > 128
