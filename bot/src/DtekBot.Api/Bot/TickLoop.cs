@@ -41,7 +41,11 @@ public sealed class TickLoop(
     public async Task RunOnceAsync(CancellationToken ct)
     {
         await RunAsync(TickGate.Grid, "grid", (sp, token) => sp.GetRequiredService<GridTickService>().TickAsync(token), ct);
-        await RunAsync(TickGate.Schedules, "schedules", (sp, token) => sp.GetRequiredService<ScheduleNotifier>().TickAsync(token), ct);
+        await RunAsync(TickGate.Schedules, "schedules", async (sp, token) =>
+        {
+            await sp.GetRequiredService<ScheduleNotifier>().TickAsync(token);
+            await sp.GetRequiredService<DtekBot.Api.Svitlobot.SvitlobotScheduleSyncService>().TickAsync(token);
+        }, ct);
     }
 
     private async Task RunAsync(SemaphoreSlim gate, string name, Func<IServiceProvider, CancellationToken, Task> tick, CancellationToken ct)

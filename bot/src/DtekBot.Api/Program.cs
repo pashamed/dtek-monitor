@@ -80,6 +80,7 @@ builder.Services.AddScoped<AddressCheckService>();
 builder.Services.AddScoped<OutageAssessmentService>();
 builder.Services.AddScoped<ChatStatusService>();
 builder.Services.AddScoped<ScheduleNotifier>();
+builder.Services.AddScoped<SvitlobotScheduleSyncService>();
 builder.Services.AddScoped<DtekBot.Api.MiniApp.TemplatePreviewService>();
 builder.Services.AddScoped<AlertCatchUp>();
 builder.Services.AddSingleton<IScheduleProvider, ScheduleProvider>();
@@ -100,7 +101,16 @@ builder.Services.AddHttpClient<IWorkflowTrigger, GitHubWorkflowTrigger>(client =
 var app = builder.Build();
 
 // The Mini App (plain HTML/JS) lives in wwwroot/lite.
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        if (context.Context.Request.Path.StartsWithSegments("/lite"))
+        {
+            context.Context.Response.Headers.CacheControl = "no-cache, must-revalidate";
+        }
+    },
+});
 
 if (app.Configuration.GetValue("Database:AutoMigrate", false))
 {

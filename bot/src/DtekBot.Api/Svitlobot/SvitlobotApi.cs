@@ -30,6 +30,7 @@ public static class SvitlobotApi
             ChatAccessService access,
             SvitlobotKeyProtector protector,
             ISvitlobotClient svitlobot,
+            SvitlobotScheduleSyncService scheduleSync,
             TimeProvider time,
             CancellationToken ct) =>
         {
@@ -83,6 +84,7 @@ public static class SvitlobotApi
 
             var channel = await LoadOrCreateAsync(db, chatId, time, ct);
             channel.SvitlobotKey = stored;
+            await scheduleSync.ResetAsync(chatId, ct);
             await db.SaveChangesAsync(ct);
             return Json(State(info.Value!), 200);
         });
@@ -94,6 +96,7 @@ public static class SvitlobotApi
             BotDbContext db,
             ChatAccessService access,
             SvitlobotKeyProtector protector,
+            SvitlobotScheduleSyncService scheduleSync,
             CancellationToken ct) =>
         {
             if (!protector.IsConfigured)
@@ -110,6 +113,7 @@ public static class SvitlobotApi
             if (channel?.SvitlobotKey is not null)
             {
                 channel.SvitlobotKey = null;
+                await scheduleSync.ResetAsync(chatId, ct);
                 await db.SaveChangesAsync(ct);
             }
 
@@ -252,6 +256,7 @@ public static class SvitlobotApi
             SvitlobotKeyProtector protector,
             ISvitlobotClient svitlobot,
             IScheduleProvider schedules,
+            SvitlobotScheduleSyncService scheduleSync,
             IOptionsMonitor<DtekSettings> settings,
             TimeProvider time,
             CancellationToken ct) =>
@@ -326,11 +331,16 @@ public static class SvitlobotApi
             }
 
             var result = await svitlobot.SetTimetableAsync(key, timetable, ct);
-            return result.Ok
-                ? Json(new SvitlobotResultDto(
-                    $"Тижневі планові відключення черги {channel.GroupId} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
-                    true), 200)
-                : Failed(result);
+            if (!result.Ok)
+            {
+                return Failed(result);
+            }
+
+            await scheduleSync.MarkSyncedAsync(chatId, region.Id, channel.GroupId, timetable, ct);
+            await db.SaveChangesAsync(ct);
+            return Json(new SvitlobotResultDto(
+                $"Тижневі планові відключення черги {channel.GroupId} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
+                true), 200);
         });
 
         // Removes the schedule in Svitlobot and its message in the Telegram channel.
