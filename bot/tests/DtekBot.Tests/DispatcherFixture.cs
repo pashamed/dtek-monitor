@@ -50,7 +50,8 @@ public sealed class DispatcherFixture : IDisposable
         Db.Database.EnsureCreated();
 
         Bot = new FakeTelegramBotClient();
-        Dispatcher = new AlertDispatcher(Bot, Db, TimeProvider.System, NullLogger<AlertDispatcher>.Instance);
+        Clock = new TestClock(new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.FromHours(3)));
+        Dispatcher = new AlertDispatcher(Bot, Db, Clock, NullLogger<AlertDispatcher>.Instance);
     }
 
     public DtekSettings Settings { get; }
@@ -62,6 +63,8 @@ public sealed class DispatcherFixture : IDisposable
     public BotDbContext Db { get; }
 
     public FakeTelegramBotClient Bot { get; }
+
+    public TestClock Clock { get; }
 
     public AlertDispatcher Dispatcher { get; }
 

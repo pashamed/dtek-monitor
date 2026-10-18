@@ -52,6 +52,7 @@ const HELP = {
   image: ['Картинка', 'Таблиця на 2 дні — графік на сьогодні й завтра. Коротка картинка — картка з годинами відключень. Без картинки — лише текст.'],
   schedulePost: ['Публікація графіка', 'Бот публікує в канал окремий пост із графіком відключень вашої черги (картинка з підписом) і оновлює його, коли графік змінюється. Візуальний графік також можна надіслати негайно окремою кнопкою на початку цього розділу. Видалення попереднього повідомлення потребує права «Видаляти повідомлення».'],
   scheduleReminder: ['Попередити перед відключенням', 'Надсилає окреме повідомлення один раз за вибраний час до запланованого початку відключення вашої черги. Час перевірки залежить від оновлення графіків (зазвичай кожні кілька хвилин). Текст редагується у вкладці «Повідомлення».'],
+  quietHours: ['Тихі години', 'Автоматичні повідомлення надходитимуть одразу, але без звукового сповіщення протягом цього щоденного проміжку за київським часом. Ручні дії та тестові повідомлення не приглушуються.'],
   postMode: ['Як публікувати', 'Нове повідомлення — кожне оновлення графіка це новий пост, старі лишаються. Видалити старе й опублікувати нове — бот публікує новий пост і видаляє попередній (потрібне право «Видаляти повідомлення», інакше старий пост лишиться). Редагувати те саме — бот змінює один і той самий пост.'],
   slots: ['Шаблони повідомлень', 'Кожен вид повідомлень, які бот публікує, має свій шаблон. Оберіть вид, змініть текст і стиль та перегляньте, як це виглядатиме в Telegram. Змінені шаблони позначені фіолетовою цяткою.'],
   template: ['Шаблон повідомлення', 'Ваш текст для цього виду повідомлень. Параметри у {фігурних дужках} замінюються даними, теги Telegram дозволені: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Щоб вивести фігурні дужки, пишіть {{ і }}.'],
@@ -300,6 +301,9 @@ function renderEditor(chat) {
     ...chat.settings, partIds: [...(chat.settings.partIds || [])],
     scheduleImage: chat.settings.scheduleImage || 'None', schedulePostImage: chat.settings.schedulePostImage || 'Grid',
     schedulePostMode: chat.settings.schedulePostMode || 'New', scheduleEventMode: chat.settings.scheduleEventMode || 'Edit',
+    quietHoursEnabled: !!chat.settings.quietHoursEnabled,
+    quietHoursStartMinute: Number.isInteger(chat.settings.quietHoursStartMinute) ? chat.settings.quietHoursStartMinute : 1320,
+    quietHoursEndMinute: Number.isInteger(chat.settings.quietHoursEndMinute) ? chat.settings.quietHoursEndMinute : 480,
     slotSettings: slotSettingsOf(chat.settings),
   };
   state.editing = chat;
@@ -330,6 +334,8 @@ function renderEditor(chat) {
       scheduleNotify: false, scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
       scheduleReminder: !!(src.scheduleReminder && ok), scheduleReminderMinutes: Number(src.scheduleReminderMinutes) || 15,
       schedulePost: !!(src.schedulePost && ok), schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
+      quietHoursEnabled: !!src.quietHoursEnabled,
+      quietHoursStartMinute: Number(src.quietHoursStartMinute), quietHoursEndMinute: Number(src.quietHoursEndMinute),
     };
   };
 
@@ -1127,6 +1133,37 @@ function renderEditor(chat) {
   }
 
   // ----- tab: Повідомлення (template studio) -----
+  const minuteToTime = minute => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+  const timeToMinute = value => {
+    const [hours, minutes] = value.split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+  const quietToggleId = 'quietHours' + (++uid);
+  const quietToggle = h('input', { type: 'checkbox', role: 'switch', id: quietToggleId });
+  quietToggle.checked = s.quietHoursEnabled;
+  const quietStart = h('input', { type: 'time', step: '60', 'aria-label': 'Початок тихих годин' });
+  const quietEnd = h('input', { type: 'time', step: '60', 'aria-label': 'Завершення тихих годин' });
+  quietStart.value = minuteToTime(s.quietHoursStartMinute);
+  quietEnd.value = minuteToTime(s.quietHoursEndMinute);
+  const quietTimes = h('div', { class: 'quiet-times' },
+    h('div', { class: 'fld' }, fieldLabel('Початок', 'quietHours'), quietStart),
+    h('div', { class: 'fld' }, fieldLabel('Завершення', 'quietHours'), quietEnd));
+  const paintQuietHours = () => {
+    quietTimes.classList.toggle('dim', !s.quietHoursEnabled);
+    quietStart.disabled = !s.quietHoursEnabled;
+    quietEnd.disabled = !s.quietHoursEnabled;
+  };
+  quietToggle.addEventListener('change', () => { s.quietHoursEnabled = quietToggle.checked; paintQuietHours(); touch(); });
+  quietStart.addEventListener('change', () => { s.quietHoursStartMinute = timeToMinute(quietStart.value); touch(); });
+  quietEnd.addEventListener('change', () => { s.quietHoursEndMinute = timeToMinute(quietEnd.value); touch(); });
+  paintQuietHours();
+  const quietCard = card(
+    h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Тихі години' }), help('quietHours')),
+    h('div', { class: 'row' },
+      fieldLabel('Надсилати автоматичні повідомлення без звуку', 'quietHours', quietToggleId),
+      h('label', { class: 'sw' }, quietToggle, h('i', { class: 'trk' }))),
+    quietTimes,
+    h('p', { class: 'hint', text: 'Щодня за київським часом. Повідомлення надходять одразу, але без звукового сповіщення. Діє на сповіщення та автоматичні повідомлення графіка.' }));
   const slotBar = h('div', { class: 'slotbar', role: 'tablist', 'aria-label': 'Види повідомлень' });
   const studio = h('div', { class: 'studio' });
   // Editor widgets of the current slot (rebuilt whenever the slot changes).
@@ -1305,6 +1342,7 @@ function renderEditor(chat) {
   } });
 
   panels.msg.append(
+    quietCard,
     card(h('div', { class: 'fl big sm' }, h('span', { text: 'Шаблони повідомлень' }), help('slots')),
       h('div', { class: 'slotwrap' }, slotBar)),
     studio,

@@ -66,6 +66,22 @@ public sealed class AlertDispatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task NewAlert_IsSentSilentlyDuringConfiguredQuietHours()
+    {
+        _f.AddChannel(ChatA, c =>
+        {
+            c.QuietHoursEnabled = true;
+            c.QuietHoursStartMinute = 22 * 60;
+            c.QuietHoursEndMinute = 8 * 60;
+        });
+        _f.Clock.Now = new DateTimeOffset(2026, 10, 15, 23, 0, 0, TimeSpan.FromHours(3));
+
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        Assert.True(Assert.Single(_f.Bot.Sent).DisableNotification);
+    }
+
+    [Fact]
     public async Task IdenticalSecondDispatch_IsNoOp()
     {
         _f.AddChannel(ChatA);

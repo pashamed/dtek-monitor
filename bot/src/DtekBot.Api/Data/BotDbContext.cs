@@ -49,6 +49,10 @@ public sealed class Channel
     public bool ScheduleReminder { get; set; }
     public int ScheduleReminderMinutes { get; set; } = 15;
 
+    public bool QuietHoursEnabled { get; set; }
+    public int QuietHoursStartMinute { get; set; } = 22 * 60;
+    public int QuietHoursEndMinute { get; set; } = 8 * 60;
+
     // Picture of the light off/on messages (none by default: the schedule post carries the picture).
     public ScheduleImage ScheduleImage { get; set; } = ScheduleImage.None;
     public PostMode ScheduleEventMode { get; set; } = PostMode.Edit;

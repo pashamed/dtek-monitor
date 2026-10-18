@@ -261,6 +261,9 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 #panel-msg .pvlabel{margin-bottom:6px}
 #panel-msg .tawrap{position:relative;transition:opacity .18s}
 #panel-msg .tawrap.dim{opacity:.55}
+.quiet-times{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.quiet-times.dim{opacity:.55}
+@media(max-width:360px){.quiet-times{grid-template-columns:1fr}}
 .slotopts{display:flex;flex-direction:column;gap:8px;padding:8px 12px;border-radius:16px}
 .slotopts .row{min-height:44px}
 .regline{margin:0 0 10px}
