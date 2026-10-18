@@ -55,7 +55,7 @@ public sealed class ChatStatusService(
         });
         if (state is not null)
         {
-            lines.Add($"Перевірено: {KyivTime.Format(state.ObservedAt)} (Київ)");
+            lines.Add($"Перевірено: {KyivTime.Format(state.ObservedAt)} (час Києва · {region.Name})");
         }
 
         if (groupId is not null)

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using DtekBot.Api.Data;
+using DtekBot.Api.Schedules;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot.Exceptions;
@@ -28,6 +29,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         _factory.Schedules.Snapshots.Clear();
         _factory.Schedules.Snapshots["kyiv"] = RealSnapshot();
         _factory.Schedules.Calls.Clear();
+        _factory.DtekAddresses.Cities = ["м. Одеса"];
+        _factory.DtekAddresses.Streets = ["вул. Дерибасівська"];
+        _factory.DtekAddresses.Houses = [new("12", "6.2")];
 
         // An emergency seeded by one test must not leak into the next.
         _factory.WithDb(db => db.RegionStates.RemoveRange(db.RegionStates));
@@ -732,6 +736,44 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Null(deleted.AddressHouse);
         Assert.Null(deleted.AddressLabel);
         Assert.Equal("2.1", deleted.GroupId);
+    }
+
+    [Fact]
+    public async Task DtekAddressLookup_UsesSelectedRegionCityAndStreet()
+    {
+        var (_, client) = NewUser();
+
+        var cities = await client.GetAsync("/api/address/cities?regionId=odesa&query=%D0%9E%D0%B4%D0%B5%D1%81%D0%B0");
+        var streets = await client.GetAsync("/api/address/streets?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&query=%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81");
+        var houses = await client.GetAsync("/api/address/houses?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&street=%D0%B2%D1%83%D0%BB.%20%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81%D1%96%D0%B2%D1%81%D1%8C%D0%BA%D0%B0&query=12");
+
+        Assert.Equal("м. Одеса", Assert.Single((await cities.ReadAsync<AddressNameDto[]>())!).Name);
+        Assert.Equal("вул. Дерибасівська", Assert.Single((await streets.ReadAsync<AddressNameDto[]>())!).Name);
+        Assert.Equal(new DtekAddressHouseDto("12", "6.2"), Assert.Single((await houses.ReadAsync<DtekAddressHouseDto[]>())!));
+        Assert.Equal(("odesa", "", "Одеса"), _factory.DtekAddresses.LastCitySearch);
+        Assert.Equal(("odesa", "м. Одеса", "Дерибас"), _factory.DtekAddresses.LastStreetSearch);
+        Assert.Equal(("odesa", "м. Одеса", "вул. Дерибасівська", "12"), _factory.DtekAddresses.LastHouseSearch);
+    }
+
+    [Fact]
+    public async Task DtekAddressSave_ValidatesTheDtekHouseAndScheduleGroup()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, channel => channel.RegionId = "odesa");
+        _factory.Schedules.Snapshots["odesa"] = new ScheduleSnapshot(
+            "odesa", "version", _factory.Clock.Now, null,
+            _factory.Clock.Now.AddDays(-1), _factory.Clock.Now.AddDays(1),
+            new Dictionary<string, GroupSchedule> { ["6.2"] = new("6.2", []) });
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}/address/dtek",
+            new SetDtekAddressRequest("odesa", "м. Одеса", "вул. Дерибасівська", "12", "6.2"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal(("м. Одеса", "вул. Дерибасівська", "12", "м. Одеса, вул. Дерибасівська, 12", "6.2"),
+            (saved.AddressCity, saved.AddressStreet, saved.AddressHouse, saved.AddressLabel, saved.GroupId));
+        Assert.Equal(("odesa", "м. Одеса", "вул. Дерибасівська", "12"), _factory.DtekAddresses.LastHouseSearch);
     }
 
     [Fact]

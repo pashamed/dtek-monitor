@@ -615,44 +615,239 @@ public static class MiniAppApi
             return Json(new CheckResultDto(await assessment.AssessAsync(channel, ct)));
         });
 
-        api.MapGet("/address/streets", async (
+        api.MapGet("/address/cities", async (
             string regionId,
             string? query,
+            IOptionsMonitor<DtekSettings> settings,
+            IDtekAddressClient dtek,
+            CancellationToken ct) =>
+        {
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null || string.IsNullOrWhiteSpace(region.SiteUrl) || region.HasGroups)
+            {
+                return Error("Пошук населених пунктів для цього регіону недоступний.");
+            }
+
+            var search = query?.Trim() ?? "";
+            if (search.Length > 64)
+            {
+                return Error("Пошуковий запит задовгий.");
+            }
+
+            if (search.Length < 2)
+            {
+                return Json(Array.Empty<AddressNameDto>());
+            }
+
+            try
+            {
+                return Json((await dtek.SearchCitiesAsync(region, search, ct))
+                    .Select(name => new AddressNameDto(name)).ToList());
+            }
+            catch (DtekAddressUnavailableException ex)
+            {
+                return Results.Json(new ApiError(ex.Message), ApiJson.Options, statusCode: 503);
+            }
+        });
+
+        api.MapGet("/address/streets", async (
+            string regionId,
+            string? city,
+            string? query,
             IYasnoClient yasno,
+            IDtekAddressClient dtek,
             IOptionsMonitor<DtekSettings> settings,
             CancellationToken ct) =>
         {
-            var region = GroupRegion(settings.CurrentValue, regionId);
-            if (region is null)
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null || string.IsNullOrWhiteSpace(region.SiteUrl))
             {
                 return Error("Для цього регіону пошук за адресою недоступний.");
             }
 
-            if ((query?.Trim().Length ?? 0) < 2)
+            var search = query?.Trim() ?? "";
+            if (search.Length > 64)
+            {
+                return Error("Пошуковий запит задовгий.");
+            }
+
+            if (search.Length < 2)
             {
                 return Json(Array.Empty<AddressItemDto>());
             }
 
-            var items = await yasno.SearchStreetsAsync(region.YasnoRegionId, region.YasnoDsoId, query!.Trim(), ct);
-            return Json(items.Take(20).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+            if (region.HasGroups)
+            {
+                var items = await yasno.SearchStreetsAsync(region.YasnoRegionId, region.YasnoDsoId, search, ct);
+                return Json(items.Take(20).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+            }
+
+            if (string.IsNullOrWhiteSpace(city))
+            {
+                return Error("Спершу оберіть населений пункт.");
+            }
+
+            try
+            {
+                return Json((await dtek.SearchStreetsAsync(region, city, search, ct))
+                    .Select(name => new AddressNameDto(name)).ToList());
+            }
+            catch (DtekAddressUnavailableException ex)
+            {
+                return Results.Json(new ApiError(ex.Message), ApiJson.Options, statusCode: 503);
+            }
         });
 
         api.MapGet("/address/houses", async (
             string regionId,
-            int streetId,
+            int? streetId,
+            string? city,
+            string? street,
             string? query,
             IYasnoClient yasno,
+            IDtekAddressClient dtek,
             IOptionsMonitor<DtekSettings> settings,
             CancellationToken ct) =>
         {
-            var region = GroupRegion(settings.CurrentValue, regionId);
-            if (region is null)
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null || string.IsNullOrWhiteSpace(region.SiteUrl))
             {
                 return Error("Для цього регіону пошук за адресою недоступний.");
             }
 
-            var items = await yasno.SearchHousesAsync(region.YasnoRegionId, region.YasnoDsoId, streetId, query?.Trim() ?? "", ct);
-            return Json(items.Take(50).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+            if (region.HasGroups)
+            {
+                if (streetId is null)
+                {
+                    return Error("Оберіть вулицю.");
+                }
+
+                var items = await yasno.SearchHousesAsync(region.YasnoRegionId, region.YasnoDsoId, streetId.Value, query?.Trim() ?? "", ct);
+                return Json(items.Take(50).Select(i => new AddressItemDto(i.Id, i.Value)).ToList());
+            }
+
+            if (string.IsNullOrWhiteSpace(city) || city.Length > 128
+                || string.IsNullOrWhiteSpace(street) || street.Length > 256)
+            {
+                return Error("Оберіть населений пункт і вулицю.");
+            }
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return Json(Array.Empty<DtekAddressHouseDto>());
+            }
+
+            if (query.Length > 64)
+            {
+                return Error("Пошуковий запит задовгий.");
+            }
+
+            try
+            {
+                return Json(await dtek.SearchHousesAsync(region, city, street, query.Trim(), ct));
+            }
+            catch (DtekAddressUnavailableException ex)
+            {
+                return Results.Json(new ApiError(ex.Message), ApiJson.Options, statusCode: 503);
+            }
+        });
+
+        api.MapPut("/chats/{chatId:long}/address/dtek", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            IDtekAddressClient dtek,
+            IScheduleProvider schedules,
+            IOptionsMonitor<DtekSettings> settings,
+            AlertCatchUp catchUp,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            var request = await http.Request.ReadFromJsonAsync<SetDtekAddressRequest>(ApiJson.Options, ct);
+            if (request is null)
+            {
+                return Error("Порожній запит.");
+            }
+
+            if (!await access.CanManageAsync(chatId, userId, ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                string.Equals(r.Id, request.RegionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null || string.IsNullOrWhiteSpace(region.SiteUrl) || region.HasGroups)
+            {
+                return Error("Для цього регіону адресу обирають через інше джерело.");
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || channel.RegionId != region.Id)
+            {
+                return Error($"Спершу оберіть регіон «{region.Name}» і збережіть налаштування.");
+            }
+
+            var parts = new[]
+            {
+                ManualPart(request.City, 128, "населений пункт"),
+                ManualPart(request.Street, 256, "вулицю"),
+                ManualPart(request.House, 64, "будинок"),
+            };
+            var problem = parts.Select(p => p.Error).FirstOrDefault(e => e is not null);
+            if (problem is not null)
+            {
+                return Error(problem);
+            }
+
+            var (city, street, house) = (parts[0].Value!, parts[1].Value!, parts[2].Value!);
+            IReadOnlyList<DtekAddressHouseDto> found;
+            try
+            {
+                found = await dtek.SearchHousesAsync(region, city, street, house, ct);
+            }
+            catch (DtekAddressUnavailableException ex)
+            {
+                return Results.Json(new ApiError(ex.Message), ApiJson.Options, statusCode: 503);
+            }
+
+            if (!found.Any(item => string.Equals(item.House, house, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.GroupId, request.GroupId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Error("Будинок або черга не знайдені на сайті ДТЕК. Оберіть адресу зі списку ще раз.");
+            }
+
+            if (request.GroupId is not null)
+            {
+                if (!region.HasSchedules)
+                {
+                    return Error("Графіки для цього регіону недоступні.");
+                }
+
+                var snapshot = await schedules.GetAsync(region.Id, ct);
+                if (snapshot is null)
+                {
+                    return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
+                }
+
+                if (snapshot.Find(request.GroupId) is null)
+                {
+                    return Error("На сайті ДТЕК визначено чергу, якої немає у графіку. Оберіть її вручну.");
+                }
+            }
+
+            channel.GroupId = request.GroupId;
+            channel.AddressCity = city;
+            channel.AddressStreet = street;
+            channel.AddressHouse = house;
+            var label = $"{city}, {street}, {house}";
+            channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            await db.SaveChangesAsync(ct);
+            await catchUp.RunAsync(channel, ct);
+            return Json(ToSummary(channel, userId));
         });
 
         api.MapDelete("/chats/{chatId:long}", async (

@@ -3,7 +3,9 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using DtekBot.Api.Data;
+using DtekBot.Api.Groups;
 using DtekBot.Api.Schedules;
+using DtekBot.Api.Settings;
 using DtekBot.Shared;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -29,6 +31,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public FakeTelegramBotClient Bot { get; } = new();
 
     public FakeScheduleProvider Schedules { get; } = new();
+
+    public FakeDtekAddressClient DtekAddresses { get; } = new();
 
     public FakeGridProvider Grid { get; } = new();
 
@@ -63,6 +67,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<ITelegramBotClient>(Bot);
             services.RemoveAll<IScheduleProvider>();
             services.AddSingleton<IScheduleProvider>(Schedules);
+            services.RemoveAll<IDtekAddressClient>();
+            services.AddSingleton<IDtekAddressClient>(DtekAddresses);
             services.RemoveAll<DtekBot.Api.Grid.IGridStatusProvider>();
             services.AddSingleton<DtekBot.Api.Grid.IGridStatusProvider>(Grid);
             services.RemoveAll<TimeProvider>();
@@ -125,6 +131,36 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             _connection.Dispose();
         }
+    }
+}
+
+public sealed class FakeDtekAddressClient : IDtekAddressClient
+{
+    public IReadOnlyList<string> Cities { get; set; } = ["м. Одеса"];
+    public IReadOnlyList<string> Streets { get; set; } = ["вул. Дерибасівська"];
+    public IReadOnlyList<DtekAddressHouseDto> Houses { get; set; } = [new("12", null)];
+
+    public (string Region, string City, string Query)? LastCitySearch { get; private set; }
+    public (string Region, string City, string Query)? LastStreetSearch { get; private set; }
+    public (string Region, string City, string Street, string Query)? LastHouseSearch { get; private set; }
+
+    public Task<IReadOnlyList<string>> SearchCitiesAsync(RegionSettings region, string query, CancellationToken ct)
+    {
+        LastCitySearch = (region.Id, "", query);
+        return Task.FromResult(Cities);
+    }
+
+    public Task<IReadOnlyList<string>> SearchStreetsAsync(RegionSettings region, string city, string query, CancellationToken ct)
+    {
+        LastStreetSearch = (region.Id, city, query);
+        return Task.FromResult(Streets);
+    }
+
+    public Task<IReadOnlyList<DtekAddressHouseDto>> SearchHousesAsync(
+        RegionSettings region, string city, string street, string query, CancellationToken ct)
+    {
+        LastHouseSearch = (region.Id, city, street, query);
+        return Task.FromResult(Houses);
     }
 }
 

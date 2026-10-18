@@ -592,6 +592,7 @@ function renderEditor(chat) {
   function makeAddrCtx() {
     const msg = h('div', { class: 'msg', role: 'status' });
     const fail = e => { msg.className = 'msg err'; msg.textContent = errorText(e).join(' '); };
+    const clear = () => { msg.className = 'msg'; msg.textContent = ''; };
 
     async function commit(method, path, body, needSave) {
       msg.className = 'msg'; msg.textContent = 'Зберігаю…';
@@ -607,7 +608,7 @@ function renderEditor(chat) {
         return true;
       } catch (e) { fail(e); return false; }
     }
-    return { msg, fail, commit };
+    return { msg, fail, clear, commit };
   }
 
   function addressPicker(regionId, { msg, fail, commit }) {
@@ -669,11 +670,160 @@ function renderEditor(chat) {
       h('p', { class: 'hint', text: 'Пишіть так, як на сайті ДТЕК: від цього залежить, чи знайде бот адресу.' }), save, ctx.msg);
   }
 
+  function dtekAddressPicker(regionId, ctx) {
+    let city = null, street = null, citySeq = 0, streetSeq = 0, houseSeq = 0;
+    const cityList = h('div', { class: 'picks', role: 'listbox', 'aria-label': 'Населені пункти' });
+    const streetList = h('div', { class: 'picks', role: 'listbox', 'aria-label': 'Вулиці' });
+    const houseList = h('div', { class: 'picks', role: 'listbox', 'aria-label': 'Будинки та черги' });
+    const cityInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Наприклад, Одеса', autocomplete: 'off', 'aria-label': 'Населений пункт', 'aria-controls': 'cityResults' });
+    const streetInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Оберіть населений пункт спочатку', autocomplete: 'off', 'aria-label': 'Вулиця', disabled: true });
+    const houseInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Оберіть вулицю спочатку', autocomplete: 'off', 'aria-label': 'Номер будинку', disabled: true });
+    const stepper = h('ol', { class: 'address-steps', 'aria-label': 'Кроки вибору адреси' });
+    const steps = [
+      h('li', { class: 'address-step current' }, h('span', { class: 'step-number', text: '1' }), h('span', { text: 'Населений пункт' })),
+      h('li', { class: 'address-step' }, h('span', { class: 'step-number', text: '2' }), h('span', { text: 'Вулиця' })),
+      h('li', { class: 'address-step' }, h('span', { class: 'step-number', text: '3' }), h('span', { text: 'Будинок' })),
+    ];
+    stepper.append(...steps);
+    const field = (label, input, list, id) => h('div', { class: 'fld address-field' },
+      h('label', { for: id, text: label }), input, list);
+    cityInput.id = 'cityInput' + (++uid);
+    streetInput.id = 'streetInput' + (++uid);
+    houseInput.id = 'houseInput' + (++uid);
+    cityList.id = 'cityResults';
+    const resultStatus = h('p', { class: 'address-status', role: 'status', 'aria-live': 'polite' });
+    const setStep = current => steps.forEach((step, index) => {
+      step.classList.toggle('done', index < current);
+      step.classList.toggle('current', index === current);
+    });
+    const searching = (list, message) => {
+      list.replaceChildren(h('p', { class: 'pick-state', text: message }));
+      resultStatus.textContent = message;
+    };
+    const setOptions = (list, items, label, select) => list.replaceChildren(...(items.length
+      ? items.map(item => h('button', { type: 'button', class: 'pick', role: 'option', text: label(item), onclick: () => select(item) }))
+      : [h('p', { class: 'pick-state', text: 'Нічого не знайдено. Перевірте написання або спробуйте інший запит.' })]));
+
+    async function searchCities() {
+      const my = ++citySeq, q = cityInput.value.trim();
+      city = null; street = null;
+      streetInput.value = ''; streetInput.disabled = true;
+      houseInput.value = ''; houseInput.disabled = true;
+      streetList.replaceChildren(); houseList.replaceChildren();
+      setStep(0);
+      ctx.clear();
+      resultStatus.textContent = '';
+      if (q.length < 2) { cityList.replaceChildren(); return; }
+      searching(cityList, 'Шукаємо населені пункти…');
+      try {
+        const items = await api('GET', `/api/address/cities?regionId=${encodeURIComponent(regionId)}&query=${encodeURIComponent(q)}`);
+        if (my !== citySeq) return;
+        setOptions(cityList, items, item => item.name, item => {
+          city = item.name; cityInput.value = city; cityList.replaceChildren();
+          streetInput.disabled = false; streetInput.focus(); setStep(1);
+          resultStatus.textContent = 'Населений пункт обрано. Тепер знайдіть вулицю.';
+        });
+        if (!items.length) resultStatus.textContent = 'Населених пунктів за цим запитом не знайдено.';
+      } catch (e) {
+        if (my === citySeq) { cityList.replaceChildren(); ctx.fail(e); }
+      }
+    }
+
+    async function searchStreets() {
+      const my = ++streetSeq, q = streetInput.value.trim();
+      street = null; houseInput.value = ''; houseInput.disabled = true; houseList.replaceChildren();
+      setStep(1);
+      ctx.clear();
+      resultStatus.textContent = '';
+      if (!city || q.length < 2) { streetList.replaceChildren(); return; }
+      searching(streetList, 'Шукаємо вулиці…');
+      try {
+        const items = await api('GET', `/api/address/streets?regionId=${encodeURIComponent(regionId)}&city=${encodeURIComponent(city)}&query=${encodeURIComponent(q)}`);
+        if (my !== streetSeq) return;
+        setOptions(streetList, items, item => item.name, item => {
+          street = item.name; streetInput.value = street; streetList.replaceChildren();
+          houseInput.disabled = false; houseInput.focus(); setStep(2);
+          resultStatus.textContent = 'Вулицю обрано. Тепер введіть номер будинку.';
+        });
+        if (!items.length) resultStatus.textContent = 'Вулиць за цим запитом не знайдено.';
+      } catch (e) {
+        if (my === streetSeq) { streetList.replaceChildren(); ctx.fail(e); }
+      }
+    }
+
+    async function searchHouses() {
+      const my = ++houseSeq, q = houseInput.value.trim();
+      ctx.clear();
+      if (!city || !street || q.length < 1) { houseList.replaceChildren(); return; }
+      searching(houseList, 'Шукаємо будинки та черги…');
+      try {
+        const items = await api('GET', `/api/address/houses?regionId=${encodeURIComponent(regionId)}&city=${encodeURIComponent(city)}&street=${encodeURIComponent(street)}&query=${encodeURIComponent(q)}`);
+        if (my !== houseSeq) return;
+        setOptions(houseList, items,
+          item => item.groupId ? `Будинок ${item.house} · черга ${item.groupId}` : `Будинок ${item.house}`,
+          async item => {
+            const label = item.groupId ? `${item.house}, черга ${item.groupId}` : item.house;
+            resultStatus.textContent = `Зберігаємо: ${city}, ${street}, ${label}…`;
+            houseInput.disabled = true;
+            houseList.replaceChildren();
+            setStep(3);
+            const saved = await ctx.commit(
+              'PUT',
+              '/address/dtek',
+              { regionId, city, street, house: item.house, groupId: item.groupId },
+              true);
+            if (!saved) houseInput.disabled = false;
+          });
+        if (!items.length) resultStatus.textContent = 'Будинок не знайдено. Перевірте номер і спробуйте ще раз.';
+      } catch (e) {
+        if (my === houseSeq) { houseList.replaceChildren(); ctx.fail(e); }
+      }
+    }
+
+    let cityTimer = 0, streetTimer = 0, houseTimer = 0;
+    cityInput.addEventListener('input', () => {
+      city = null; street = null; resultStatus.textContent = '';
+      citySeq++; cityList.replaceChildren(); streetList.replaceChildren(); houseList.replaceChildren();
+      streetInput.value = ''; streetInput.disabled = true;
+      houseInput.value = ''; houseInput.disabled = true;
+      setStep(0);
+      clearTimeout(cityTimer); cityTimer = setTimeout(searchCities, 250);
+    });
+    streetInput.addEventListener('input', () => {
+      street = null; resultStatus.textContent = '';
+      streetSeq++; streetList.replaceChildren(); houseList.replaceChildren();
+      houseInput.value = ''; houseInput.disabled = true;
+      setStep(1);
+      clearTimeout(streetTimer); streetTimer = setTimeout(searchStreets, 250);
+    });
+    houseInput.addEventListener('input', () => {
+      resultStatus.textContent = '';
+      houseSeq++; houseList.replaceChildren();
+      clearTimeout(houseTimer); houseTimer = setTimeout(searchHouses, 250);
+    });
+
+    const manual = h('details', { class: 'fold address-manual' },
+      h('summary', { text: 'Не вдається знайти адресу? Ввести вручну' }),
+      manualAddress(regionId));
+
+    return h('div', { class: 'fld dtek-address' },
+      h('div', { class: 'address-intro' },
+        h('div', { class: 'address-icon', 'aria-hidden': 'true', text: '⌖' }),
+        h('div', null, h('strong', { text: 'Знайдіть свою адресу' }),
+          h('p', { class: 'hint', text: 'Оберіть адресу зі списків ДТЕК — бот підставить чергу, якщо вона вказана.' }))),
+      stepper,
+      field('Населений пункт', cityInput, cityList, cityInput.id),
+      field('Вулиця', streetInput, streetList, streetInput.id),
+      field('Номер будинку', houseInput, houseList, houseInput.id),
+      resultStatus,
+      manual);
+  }
+
   function renderAddr() {
     const r = regionOf(s.regionId);
     const nodes = [];
     if (!r) nodes.push(empty('Оберіть регіон, щоб указати адресу та чергу.'));
-    else if (!r.hasGroups && !r.hasSchedules) nodes.push(empty('Для цього регіону вибір адреси й черги недоступний.'));
+    else if (!r.siteUrl && !r.hasSchedules) nodes.push(empty('Для цього регіону вибір адреси й черги недоступний.'));
     else {
       nodes.push(h('div', { class: 'sechead' }, h('h2', { text: 'Адреса та черга' })));
       const regionId = s.regionId, grp = groupOf(), addr = addrOf();
@@ -687,11 +837,11 @@ function renderEditor(chat) {
             h('div', { class: 'result' }, h('div', { class: 'rl', text: saved }), grp ? h('span', { class: 'chip purple', text: 'Черга ' + grp }) : null),
             h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => commit('DELETE', '/address/manual') })));
         } else {
-          if (manualMainFor !== regionId) {
-            manualMainNode = card(h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })), manualAddress(regionId));
-            manualMainFor = regionId;
-          }
-          nodes.push(manualMainNode);
+          const pickerCard = card(
+            h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })),
+            dtekAddressPicker(regionId, ctx));
+          pickerCard.classList.add('address-card');
+          nodes.push(pickerCard);
         }
       }
 
