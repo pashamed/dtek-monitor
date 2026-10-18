@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 using DtekBot.Api;
 using DtekBot.Api.Bot;
@@ -100,7 +102,54 @@ builder.Services.AddHttpClient<IWorkflowTrigger, GitHubWorkflowTrigger>(client =
 
 var app = builder.Build();
 
+var liteAssetNames = new[] { "app.js", "style.css" };
+var liteAssetContent = new StringBuilder();
+foreach (var assetName in liteAssetNames)
+{
+    var asset = app.Environment.WebRootFileProvider.GetFileInfo($"lite/{assetName}");
+    if (!asset.Exists)
+    {
+        throw new FileNotFoundException($"Mini App asset '{assetName}' was not found.", asset.PhysicalPath);
+    }
+
+    using var reader = new StreamReader(asset.CreateReadStream());
+    liteAssetContent.Append(assetName).Append('\n').Append(reader.ReadToEnd()).Append('\n');
+}
+
+var liteAssetVersion = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(liteAssetContent.ToString())))
+    .ToLowerInvariant()[..16];
+
 // The Mini App (plain HTML/JS) lives in wwwroot/lite.
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path;
+    var isLiteDocument = path.Equals("/lite", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/lite/", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/lite/index.html", StringComparison.OrdinalIgnoreCase)
+        || (path.StartsWithSegments("/lite", out var remainder) && !Path.HasExtension(remainder.Value));
+    if (!isLiteDocument || (context.Request.Method != HttpMethods.Get && context.Request.Method != HttpMethods.Head))
+    {
+        await next();
+        return;
+    }
+
+    var index = app.Environment.WebRootFileProvider.GetFileInfo("lite/index.html");
+    if (!index.Exists)
+    {
+        throw new FileNotFoundException("Mini App entry page was not found.", index.PhysicalPath);
+    }
+
+    using var reader = new StreamReader(index.CreateReadStream());
+    var html = (await reader.ReadToEndAsync(context.RequestAborted))
+        .Replace("__ASSET_VERSION__", liteAssetVersion, StringComparison.Ordinal);
+    context.Response.ContentType = "text/html; charset=utf-8";
+    context.Response.Headers.CacheControl = "no-store";
+    if (context.Request.Method == HttpMethods.Get)
+    {
+        await context.Response.WriteAsync(html, context.RequestAborted);
+    }
+});
+
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = context =>
@@ -219,8 +268,6 @@ app.MapPost("/ingest", async (
         dispatch,
     });
 });
-
-app.MapFallbackToFile("/lite/{*path:nonfile}", "lite/index.html");
 
 app.Run();
 
