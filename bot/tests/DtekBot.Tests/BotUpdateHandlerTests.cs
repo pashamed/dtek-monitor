@@ -726,7 +726,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task PowerOutPost_ForRegionWithoutGroups_SaysCheckIsUnavailable()
+    public async Task PowerOutPost_ForRegionWithoutGroups_AsksForCity()
     {
         _f.AddChannel(ChannelChat, c =>
         {
@@ -737,7 +737,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         await PostAsync(SamplePost);
 
-        Assert.Contains("поки недоступна", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Contains("населений пункт", Assert.Single(_f.Bot.Sent).Text);
         Assert.Equal(0, CheckRows());
     }
 

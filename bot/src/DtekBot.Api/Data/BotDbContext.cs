@@ -133,7 +133,9 @@ public sealed class Channel
     public string? GroupId { get; set; }
     public string? AddressLabel { get; set; }
 
-    // Street and house exactly as the address picker produced them; these are what the DTEK site is queried with.
+    // City, street and house exactly as the address picker (or the user, for regions without a picker) wrote them;
+    // these are what the DTEK site is queried with. The city is only kept for regions without the picker.
+    public string? AddressCity { get; set; }
     public string? AddressStreet { get; set; }
     public string? AddressHouse { get; set; }
 
@@ -199,6 +201,9 @@ public sealed class AddressCheck
     public long Id { get; set; }
     public long ChatId { get; set; }
     public string RegionId { get; set; } = "";
+
+    // Empty for Kyiv, whose DTEK form has no city.
+    public string City { get; set; } = "";
     public string Street { get; set; } = "";
     public string House { get; set; } = "";
     public string Label { get; set; } = "";
@@ -211,6 +216,7 @@ public sealed class AddressCheck
 public sealed class AddressResult
 {
     public string RegionId { get; set; } = "";
+    public string City { get; set; } = "";
     public string Street { get; set; } = "";
     public string House { get; set; } = "";
     public bool Found { get; set; }
@@ -335,6 +341,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.City).HasMaxLength(128);
             e.Property(x => x.Street).HasMaxLength(256);
             e.Property(x => x.House).HasMaxLength(64);
             e.Property(x => x.Label).HasMaxLength(256);
@@ -345,8 +352,9 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
 
         modelBuilder.Entity<AddressResult>(e =>
         {
-            e.HasKey(x => new { x.RegionId, x.Street, x.House });
+            e.HasKey(x => new { x.RegionId, x.City, x.Street, x.House });
             e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.City).HasMaxLength(128);
             e.Property(x => x.Street).HasMaxLength(256);
             e.Property(x => x.House).HasMaxLength(64);
             e.Property(x => x.SubType).HasMaxLength(512);
@@ -390,6 +398,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.ScheduleEventMode).HasConversion<string>().HasMaxLength(16);
             e.Property(x => x.SchedulePostMode).HasConversion<string>().HasMaxLength(16);
             e.Property(x => x.SchedulePostImage).HasConversion<string>().HasMaxLength(8);
+            e.Property(x => x.AddressCity).HasMaxLength(128);
             e.Property(x => x.AddressStreet).HasMaxLength(256);
             e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.Property(x => x.SvitlobotKey).HasMaxLength(512);

@@ -16,20 +16,35 @@ public sealed class ChatStatusService(
     IOptionsMonitor<DtekSettings> options,
     TimeProvider time)
 {
-    public async Task<IReadOnlyList<string>> BuildAsync(Channel? channel, CancellationToken ct)
+    public async Task<IReadOnlyList<string>> BuildAsync(
+        Channel? channel,
+        CancellationToken ct,
+        string? requestedRegionId = null,
+        IReadOnlyList<string>? requestedPartIds = null)
     {
-        var region = channel is null || string.IsNullOrEmpty(channel.RegionId)
+        var regionId = string.IsNullOrWhiteSpace(requestedRegionId) ? channel?.RegionId : requestedRegionId;
+        var region = string.IsNullOrEmpty(regionId)
             ? null
-            : options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
-        if (channel is null || region is null)
+            : options.CurrentValue.Regions.FirstOrDefault(r => string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+        if (region is null)
         {
             return ["Оберіть регіон, щоб побачити поточний стан."];
         }
 
+        var settingsMatch = channel is not null
+            && string.Equals(channel.RegionId, region.Id, StringComparison.OrdinalIgnoreCase);
+        var groupId = settingsMatch ? channel!.GroupId : null;
+        var partIds = requestedPartIds ?? (settingsMatch ? channel!.PartIdList : []);
         var lines = new List<string>();
 
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
-        lines.Add(state?.Kind switch
+        var districtEmergencyApplies = state?.Kind != PopupKind.Emergency
+            || state.PartIdList is not { Count: > 0 }
+            || partIds.Count == 0
+            || state.PartIdList.Intersect(partIds, StringComparer.OrdinalIgnoreCase).Any();
+        lines.Add(state?.Kind == PopupKind.Emergency && !districtEmergencyApplies
+            ? "✅ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено."
+            : state?.Kind switch
         {
             PopupKind.Emergency => "🚨 На сайті ДТЕК діють екстрені відключення.",
             PopupKind.Accident => "⚠️ На сайті ДТЕК повідомлено про аварію в енергосистемі.",
@@ -43,7 +58,7 @@ public sealed class ChatStatusService(
             lines.Add($"Перевірено: {KyivTime.Format(state.ObservedAt)} (Київ)");
         }
 
-        if (channel.GroupId is { } groupId)
+        if (groupId is not null)
         {
             var group = await db.GroupStates.FirstOrDefaultAsync(g => g.RegionId == region.Id && g.GroupId == groupId, ct);
             if (group?.IsEmergency == true)

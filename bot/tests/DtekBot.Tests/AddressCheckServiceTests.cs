@@ -47,12 +47,14 @@ public sealed class AddressCheckServiceTests : IDisposable
         TimeSpan age,
         string street = Street,
         string house = House,
-        string regionId = "kyiv")
+        string regionId = "kyiv",
+        string city = "")
     {
         var check = new AddressCheck
         {
             ChatId = chatId,
             RegionId = regionId,
+            City = city,
             Street = street,
             House = house,
             Label = $"{street}, {house}",
@@ -64,11 +66,17 @@ public sealed class AddressCheckServiceTests : IDisposable
         return check;
     }
 
-    private AddressResult AddResult(TimeSpan age, Action<AddressResult>? configure = null, string street = Street, string house = House)
+    private AddressResult AddResult(
+        TimeSpan age,
+        Action<AddressResult>? configure = null,
+        string street = Street,
+        string house = House,
+        string city = "")
     {
         var result = new AddressResult
         {
             RegionId = "kyiv",
+            City = city,
             Street = street,
             House = house,
             Found = true,
@@ -109,16 +117,40 @@ public sealed class AddressCheckServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Request_ForRegionWithoutGroups_IsNoAddress()
+    public async Task Request_ForRegionWithoutGroups_RequiresCity()
     {
         var channel = AddChannel(ChatA, regionId: "odesa");
 
         var result = await _service.RequestAsync(channel, CancellationToken.None);
 
         Assert.Equal(RequestOutcome.NoAddress, result.Outcome);
-        Assert.Contains("регіону", result.Message);
+        Assert.Contains("населений пункт", result.Message);
         Assert.Empty(Checks());
         Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task Request_ForRegionWithoutGroups_QueuesCityAndAddress()
+    {
+        var channel = AddChannel(ChatA, c => c.AddressCity = "м. Одеса", "odesa");
+
+        var result = await _service.RequestAsync(channel, CancellationToken.None);
+
+        Assert.Equal(RequestOutcome.Queued, result.Outcome);
+        Assert.Equal("м. Одеса", Assert.Single(Checks()).City);
+        Assert.Single(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task Request_CacheDoesNotCrossCities()
+    {
+        AddResult(TimeSpan.FromMinutes(1), city: "м. Буча");
+        var channel = AddChannel(ChatA, c => c.AddressCity = "м. Ірпінь");
+
+        var result = await _service.RequestAsync(channel, CancellationToken.None);
+
+        Assert.Equal(RequestOutcome.Queued, result.Outcome);
+        Assert.Equal("м. Ірпінь", Assert.Single(Checks()).City);
     }
 
     [Fact]
@@ -474,6 +506,17 @@ public sealed class AddressCheckServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPending_KeepsSameStreetInDifferentCitiesSeparate()
+    {
+        AddCheck(ChatA, AddressCheckStatus.Pending, TimeSpan.FromMinutes(2), city: "м. Буча");
+        AddCheck(ChatB, AddressCheckStatus.Pending, TimeSpan.FromMinutes(1), city: "м. Ірпінь");
+
+        var pending = await _service.GetPendingAsync(CancellationToken.None);
+
+        Assert.Equal(["м. Буча", "м. Ірпінь"], pending.Select(p => p.City));
+    }
+
+    [Fact]
     public async Task GetPending_IgnoresDoneAndExpiredChecks()
     {
         AddCheck(301, AddressCheckStatus.Done, TimeSpan.FromMinutes(5), "вул. Done");
@@ -523,8 +566,9 @@ public sealed class AddressCheckServiceTests : IDisposable
     private static AddressResultsRequest Results(
         string street = Street,
         string regionId = "kyiv",
+        string city = "",
         params (string House, HouseResultEntry Entry)[] houses) =>
-        new([new StreetResult(regionId, street, houses.ToDictionary(h => h.House, h => h.Entry))]);
+        new([new StreetResult(regionId, city, street, houses.ToDictionary(h => h.House, h => h.Entry))]);
 
     private static HouseResultEntry Entry(bool found = true, string? subType = null, string? start = null, string? end = null, string? type = null) =>
         new(found, subType, start, end, type);
@@ -537,7 +581,7 @@ public sealed class AddressCheckServiceTests : IDisposable
 
         Assert.Equal(0, first);
         var row = Assert.Single(_f.Db.AddressResults.AsNoTracking());
-        Assert.Equal(("kyiv", Street, "12"), (row.RegionId, row.Street, row.House));
+        Assert.Equal(("kyiv", "", Street, "12"), (row.RegionId, row.City, row.Street, row.House));
         Assert.True(row.Found);
         Assert.Equal(("Аварійне", "a", "b", "t"), (row.SubType, row.StartDate, row.EndDate, row.Type));
         Assert.Equal(Start, row.CheckedAt);
@@ -550,6 +594,19 @@ public sealed class AddressCheckServiceTests : IDisposable
         Assert.Equal("", row.SubType);
         Assert.Equal("", row.StartDate);
         Assert.Equal(Start.AddMinutes(7), row.CheckedAt);
+    }
+
+    [Fact]
+    public async Task Process_StoresSameHouseInDifferentCitiesSeparately()
+    {
+        await _service.ProcessResultsAsync(
+            new AddressResultsRequest([
+                new StreetResult("odesa", "м. Буча", Street, new() { ["12"] = Entry(subType: "аварійне") }),
+                new StreetResult("odesa", "м. Ірпінь", Street, new() { ["12"] = Entry(subType: "планове") }),
+            ]),
+            CancellationToken.None);
+
+        Assert.Equal(2, _f.Db.AddressResults.AsNoTracking().Count());
     }
 
     [Fact]
@@ -680,7 +737,7 @@ public sealed class AddressCheckServiceTests : IDisposable
         Assert.Equal(
             0,
             await _service.ProcessResultsAsync(
-                new AddressResultsRequest([new StreetResult("kyiv", Street, null)]), CancellationToken.None));
+                new AddressResultsRequest([new StreetResult("kyiv", "", Street, null)]), CancellationToken.None));
         Assert.Empty(_f.Db.AddressResults.AsNoTracking());
     }
 

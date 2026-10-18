@@ -48,7 +48,8 @@ public sealed record ChatSettingsDto(
     IReadOnlyDictionary<string, string>? Templates = null,
     string? OutageTriggerPattern = null,
     IReadOnlyDictionary<string, SlotSettingDto>? SlotSettings = null,
-    bool HasSvitlobotKey = false);
+    bool HasSvitlobotKey = false,
+    string? AddressCity = null);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
 // EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.
@@ -93,6 +94,9 @@ public sealed record SetAddressRequest(
     string Label,
     string? Street = null,
     string? House = null);
+
+// Address typed by hand for regions without the address picker: exactly as written on the DTEK site.
+public sealed record ManualAddressRequest(string RegionId, string City, string Street, string House);
 
 public sealed record GroupStatusDto(string GroupId, string Today, string Tomorrow, bool IsEmergency);
 
