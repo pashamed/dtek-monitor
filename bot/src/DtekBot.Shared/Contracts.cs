@@ -51,7 +51,10 @@ public sealed record ChatSettingsDto(
     bool HasSvitlobotKey = false,
     string? AddressCity = null,
     bool ScheduleReminder = false,
-    int ScheduleReminderMinutes = 15);
+    int ScheduleReminderMinutes = 15,
+    bool QuietHoursEnabled = false,
+    int QuietHoursStartMinute = 1320,
+    int QuietHoursEndMinute = 480);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
 // EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.

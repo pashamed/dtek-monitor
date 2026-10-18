@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
 using DtekBot.Api.Schedules;
 using DtekBot.Shared;
@@ -864,6 +865,9 @@ public sealed class ScheduleNotifierTests : IDisposable
             c.ScheduleNotify = false;
             c.ScheduleReminder = true;
             c.ScheduleReminderMinutes = 15;
+            c.QuietHoursEnabled = true;
+            c.QuietHoursStartMinute = 10 * 60;
+            c.QuietHoursEndMinute = 11 * 60;
             c.Templates = TemplatesJson((MessageSlots.BeforeOff, "Черга {group}: {time} за {minutes} хв"));
         });
 
@@ -873,7 +877,29 @@ public sealed class ScheduleNotifierTests : IDisposable
         Assert.Equal(1, first.Sent);
         Assert.Equal(1, duplicate.Skipped);
         Assert.Equal("Черга 45.1: 11:00 за 15 хв", Assert.Single(_f.Bot.Sent).Text);
+        Assert.True(Assert.Single(_f.Bot.Sent).DisableNotification);
         Assert.Single(_f.Db.ScheduleReminderDeliveries);
+    }
+
+    [Fact]
+    public async Task AutomaticSchedulePost_IsSentSilentlyDuringQuietHours()
+    {
+        AddPostChannel(configure: c =>
+        {
+            c.QuietHoursEnabled = true;
+            c.QuietHoursStartMinute = 0;
+            c.QuietHoursEndMinute = 23 * 60 + 59;
+        });
+
+        var channel = _f.Db.Channels.Single();
+        Assert.True(channel.QuietHoursEnabled);
+        Assert.Equal(0, channel.QuietHoursStartMinute);
+        Assert.Equal(23 * 60 + 59, channel.QuietHoursEndMinute);
+        Assert.True(QuietHours.IsQuiet(channel, Kyiv(15, 12)));
+        var summary = await TickAsync(Kyiv(15, 12));
+
+        Assert.Equal(1, summary.Sent);
+        Assert.True(Assert.Single(_f.Bot.Photos).DisableNotification);
     }
 
     [Fact]

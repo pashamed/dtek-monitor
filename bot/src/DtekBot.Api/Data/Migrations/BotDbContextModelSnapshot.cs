@@ -13,6 +13,8 @@ namespace DtekBot.Api.Data.Migrations
     [DbContext(typeof(BotDbContext))]
     partial class BotDbContextModelSnapshot : ModelSnapshot
     {
+        internal void BuildCurrentModel(ModelBuilder modelBuilder) => BuildModel(modelBuilder);
+
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
@@ -186,6 +188,15 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("PartIds")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
+
+                    b.Property<int>("QuietHoursEndMinute")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("QuietHoursEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("QuietHoursStartMinute")
+                        .HasColumnType("int");
 
                     b.Property<string>("RecentPosts")
                         .HasColumnType("nvarchar(max)");

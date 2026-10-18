@@ -56,7 +56,10 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         int scheduleReminderMinutes = 15,
         IReadOnlyList<string>? partIds = null,
         string? partId = null,
-        IReadOnlyDictionary<string, SlotSettingDto>? slotSettings = null) =>
+        IReadOnlyDictionary<string, SlotSettingDto>? slotSettings = null,
+        bool quietHoursEnabled = false,
+        int quietHoursStartMinute = 1320,
+        int quietHoursEndMinute = 480) =>
         new(
             regionId,
             partId,
@@ -80,7 +83,10 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             null,
             slotSettings,
             ScheduleReminder: scheduleReminder,
-            ScheduleReminderMinutes: scheduleReminderMinutes);
+            ScheduleReminderMinutes: scheduleReminderMinutes,
+            QuietHoursEnabled: quietHoursEnabled,
+            QuietHoursStartMinute: quietHoursStartMinute,
+            QuietHoursEndMinute: quietHoursEndMinute);
 
     private static Dictionary<string, string> Map(params (string Slot, string Text)[] items) =>
         items.ToDictionary(i => i.Slot, i => i.Text);
@@ -647,6 +653,42 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var channel = LoadChannel(userId)!;
         Assert.False(channel.ScheduleNotify);
         Assert.False(channel.SchedulePost);
+    }
+
+    [Fact]
+    public async Task Put_QuietHours_PersistsDailyKyivTimeWindow()
+    {
+        var (userId, client) = NewUser();
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(quietHoursEnabled: true, quietHoursStartMinute: 23 * 60, quietHoursEndMinute: 6 * 60));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var channel = LoadChannel(userId)!;
+        Assert.True(channel.QuietHoursEnabled);
+        Assert.Equal(23 * 60, channel.QuietHoursStartMinute);
+        Assert.Equal(6 * 60, channel.QuietHoursEndMinute);
+        var summary = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
+        Assert.True(summary.QuietHoursEnabled);
+        Assert.Equal(23 * 60, summary.QuietHoursStartMinute);
+        Assert.Equal(6 * 60, summary.QuietHoursEndMinute);
+    }
+
+    [Fact]
+    public async Task Put_QuietHours_RejectsEqualOrOutOfRangeTimesWhenEnabled()
+    {
+        var (userId, client) = NewUser();
+
+        var equal = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(quietHoursEnabled: true, quietHoursStartMinute: 600, quietHoursEndMinute: 600));
+        var outOfRange = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(quietHoursEnabled: true, quietHoursStartMinute: 1440, quietHoursEndMinute: 600));
+
+        Assert.Equal(HttpStatusCode.BadRequest, equal.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, outOfRange.StatusCode);
     }
 
     [Fact]

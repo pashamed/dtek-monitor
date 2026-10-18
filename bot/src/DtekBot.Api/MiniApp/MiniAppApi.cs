@@ -279,6 +279,12 @@ public static class MiniAppApi
             {
                 return Error("Оберіть час попередження: 5, 10, 15, 30 або 60 хвилин.");
             }
+            if (dto.QuietHoursStartMinute is < 0 or >= 1440
+                || dto.QuietHoursEndMinute is < 0 or >= 1440
+                || (dto.QuietHoursEnabled && dto.QuietHoursStartMinute == dto.QuietHoursEndMinute))
+            {
+                return Error("Оберіть коректний проміжок тихих годин.");
+            }
 
             var before = (WasActive: !isNew && channel.IsActive, channel.IsPaused, channel.RegionId, channel.PartIds, channel.SlotSettings, channel.GroupId);
 
@@ -356,6 +362,9 @@ public static class MiniAppApi
                 && canSchedule && dto.ScheduleNotify;
             channel.ScheduleReminder = canSchedule && dto.ScheduleReminder;
             channel.ScheduleReminderMinutes = dto.ScheduleReminderMinutes;
+            channel.QuietHoursEnabled = dto.QuietHoursEnabled;
+            channel.QuietHoursStartMinute = dto.QuietHoursStartMinute;
+            channel.QuietHoursEndMinute = dto.QuietHoursEndMinute;
             channel.ScheduleImage = dto.ScheduleImage;
             channel.ScheduleEventMode = dto.ScheduleEventMode;
             channel.SchedulePost = canSchedule && dto.SchedulePost;
@@ -1251,7 +1260,10 @@ public static class MiniAppApi
             !string.IsNullOrEmpty(c.SvitlobotKey),
             c.AddressCity,
             c.ScheduleReminder,
-            c.ScheduleReminderMinutes);
+            c.ScheduleReminderMinutes,
+            c.QuietHoursEnabled,
+            c.QuietHoursStartMinute,
+            c.QuietHoursEndMinute);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 

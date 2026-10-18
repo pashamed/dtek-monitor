@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
@@ -117,7 +118,8 @@ public sealed partial class ScheduleNotifier(
                 if (channel.ScheduleReminder)
                 {
                     var outcome = await SendDueReminderAsync(
-                        channel, region, snapshot, deliveredReminders, now, ct);
+                        channel, region, snapshot, deliveredReminders, now, ct,
+                        disableNotification: QuietHours.IsQuiet(channel, now));
                     Count(outcome);
                     if (outcome is Outcome.Sent)
                     {
@@ -131,7 +133,9 @@ public sealed partial class ScheduleNotifier(
                     var desired = Decide(settings, region, snapshot, channel, thread, now);
                     var outcome = desired is null
                         ? Outcome.Skipped
-                        : await ApplyAsync(channel, region, thread, desired, threads, now, ct);
+                        : await ApplyAsync(
+                            channel, region, thread, desired, threads, now, ct,
+                            disableNotification: QuietHours.IsQuiet(channel, now));
                     Count(outcome);
                     if (outcome is Outcome.Sent or Outcome.Edited)
                     {
@@ -142,7 +146,9 @@ public sealed partial class ScheduleNotifier(
                 if (channel.SchedulePost && channel.IsActive)
                 {
                     posts.TryGetValue(channel.ChatId, out var post);
-                    var outcome = await ApplyPostAsync(settings, channel, region, snapshot, post, posts, now, ct);
+                    var outcome = await ApplyPostAsync(
+                        settings, channel, region, snapshot, post, posts, now, ct,
+                        disableNotification: QuietHours.IsQuiet(channel, now));
                     Count(outcome);
                     if (outcome is Outcome.Sent or Outcome.Edited)
                     {
@@ -197,7 +203,8 @@ public sealed partial class ScheduleNotifier(
         ScheduleSnapshot snapshot,
         HashSet<(long ChatId, string RegionId, string GroupId, DateTimeOffset OutageStart)> delivered,
         DateTimeOffset now,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool disableNotification)
     {
         var group = snapshot.Find(channel.GroupId!);
         if (group is null)
@@ -228,7 +235,8 @@ public sealed partial class ScheduleNotifier(
             {
                 await WithRetry(() => WithMarkupFallback(
                     text,
-                    (t, mode) => bot.SendMessage(channel.ChatId, t, parseMode: mode, cancellationToken: ct)), ct);
+                    (t, mode) => bot.SendMessage(
+                        channel.ChatId, t, parseMode: mode, disableNotification: disableNotification, cancellationToken: ct)), ct);
                 db.ScheduleReminderDeliveries.Add(new ScheduleReminderDelivery
                 {
                     ChatId = channel.ChatId,
@@ -316,7 +324,8 @@ public sealed partial class ScheduleNotifier(
         Desired desired,
         Dictionary<long, ScheduleThread> threads,
         DateTimeOffset now,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool disableNotification)
     {
         var hash = Hash(desired.Text);
         var mode = channel.ScheduleEventMode;
@@ -331,7 +340,8 @@ public sealed partial class ScheduleNotifier(
                 && (thread.ImageKind == ScheduleImage.None) != (desired.ImageKind == ScheduleImage.None);
             if (newEpisode || pictureModeFlipped || (phaseChanged && mode != PostMode.Edit))
             {
-                var (messageId, isPhoto) = await SendNewAsync(channel.ChatId, desired.Text, desired.ImageUrl, ct);
+                var (messageId, isPhoto) = await SendNewAsync(
+                    channel.ChatId, desired.Text, desired.ImageUrl, ct, disableNotification);
                 if (thread is not null && (mode == PostMode.ReplaceDelete || pictureModeFlipped))
                 {
                     await DeleteQuietlyAsync(channel.ChatId, thread.MessageId, ct);
@@ -351,7 +361,8 @@ public sealed partial class ScheduleNotifier(
             if (!await EditAsync(channel.ChatId, thread.MessageId, thread.IsPhoto, thread.ImageVersion, thread.ImageKind, desired, ct))
             {
                 // The message is gone (deleted by an admin): post a fresh one.
-                var (messageId, isPhoto) = await SendNewAsync(channel.ChatId, desired.Text, desired.ImageUrl, ct);
+                var (messageId, isPhoto) = await SendNewAsync(
+                    channel.ChatId, desired.Text, desired.ImageUrl, ct, disableNotification);
                 Save(channel, region, thread, desired, hash, messageId, isPhoto, threads, now);
                 return Outcome.Sent;
             }
@@ -410,7 +421,8 @@ public sealed partial class ScheduleNotifier(
         Dictionary<long, SchedulePostThread> posts,
         DateTimeOffset now,
         CancellationToken ct,
-        bool force = false)
+        bool force = false,
+        bool disableNotification = false)
     {
         var groupId = channel.GroupId!;
         if (snapshot.Find(groupId) is null || now < snapshot.CoverageStart || now >= snapshot.CoverageEnd)
@@ -453,12 +465,14 @@ public sealed partial class ScheduleNotifier(
                 }
                 else
                 {
-                    (messageId, isPhoto) = await SendNewAsync(channel.ChatId, text, imageUrl, ct);
+                    (messageId, isPhoto) = await SendNewAsync(
+                        channel.ChatId, text, imageUrl, ct, disableNotification);
                 }
             }
             else
             {
-                (messageId, isPhoto) = await SendNewAsync(channel.ChatId, text, imageUrl, ct);
+                (messageId, isPhoto) = await SendNewAsync(
+                    channel.ChatId, text, imageUrl, ct, disableNotification);
                 if (post is not null && (mode == PostMode.ReplaceDelete || (mode == PostMode.Edit && sameDay && flipped)))
                 {
                     await DeleteQuietlyAsync(channel.ChatId, post.MessageId, ct);
@@ -512,7 +526,12 @@ public sealed partial class ScheduleNotifier(
 
     // Used by the test post as well: sends one schedule-style message (picture first, text-only as a fallback).
     // The picture is nice to have: if Telegram cannot load it, the text alone still goes out.
-    public async Task<(int MessageId, bool IsPhoto)> SendNewAsync(long chatId, string text, string? imageUrl, CancellationToken ct)
+    public async Task<(int MessageId, bool IsPhoto)> SendNewAsync(
+        long chatId,
+        string text,
+        string? imageUrl,
+        CancellationToken ct,
+        bool disableNotification = false)
     {
         if (imageUrl is not null && text.Length <= MaxCaptionLength)
         {
@@ -520,7 +539,9 @@ public sealed partial class ScheduleNotifier(
             {
                 var message = await WithRetry(() => WithMarkupFallback(
                     text,
-                    (t, mode) => bot.SendPhoto(chatId, InputFile.FromString(imageUrl), caption: t, parseMode: mode, cancellationToken: ct)), ct);
+                    (t, mode) => bot.SendPhoto(
+                        chatId, InputFile.FromString(imageUrl), caption: t, parseMode: mode,
+                        disableNotification: disableNotification, cancellationToken: ct)), ct);
                 return (message.Id, true);
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400 && !IsChatProblem(ex))
@@ -531,7 +552,9 @@ public sealed partial class ScheduleNotifier(
 
         var sent = await WithRetry(() => WithMarkupFallback(
             text,
-            (t, mode) => bot.SendMessage(chatId, t, parseMode: mode, linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true }, cancellationToken: ct)), ct);
+            (t, mode) => bot.SendMessage(
+                chatId, t, parseMode: mode, linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true },
+                disableNotification: disableNotification, cancellationToken: ct)), ct);
         return (sent.Id, false);
     }
 

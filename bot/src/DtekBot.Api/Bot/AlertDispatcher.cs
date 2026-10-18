@@ -248,6 +248,7 @@ public sealed class AlertDispatcher(
                 t,
                 parseMode: ParseMode.Html,
                 linkPreviewOptions: NoPreview,
+                disableNotification: QuietHours.IsQuiet(channel, now),
                 cancellationToken: ct),
             channel);
 
@@ -327,6 +328,7 @@ public sealed class AlertDispatcher(
                         MessageId = delivery.TelegramMessageId,
                         AllowSendingWithoutReply = true,
                     },
+                disableNotification: QuietHours.IsQuiet(channel, now),
                 cancellationToken: ct),
             channel);
         return Outcome.Closed;
