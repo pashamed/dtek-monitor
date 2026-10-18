@@ -17,6 +17,7 @@ public static class PlaceholderNames
         ["where"] = "місце",
         ["popup"] = "текст_сайту",
         ["time"] = "час",
+        ["minutes"] = "хвилин",
         ["site"] = "сайт",
         ["group"] = "черга",
         ["address"] = "адреса",

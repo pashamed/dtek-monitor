@@ -50,7 +50,8 @@ const HELP = {
   triggerText: ['Текст повідомлення «світла немає»', 'Це текст, який ваш застосунок моніторингу світла пише в канал, коли світло зникає, наприклад «зараз світло зникло». Регістр не враховується. Можна вказати регулярний вираз, наприклад світло\\s+(зникло|вимкнули). Бот порівнює його з новими публікаціями каналу й перевіряє адресу.'],
   schedule: ['Сповіщення за графіком', 'Бот пише в канал, коли за графіком світло вимикається й коли воно має зʼявитися, з тривалістю та очікуваним часом. Використовує дані outage-data-ua.'],
   image: ['Картинка', 'Таблиця на 2 дні — графік на сьогодні й завтра. Коротка картинка — картка з годинами відключень. Без картинки — лише текст.'],
-  schedulePost: ['Публікація графіка', 'Бот публікує в канал окремий пост із графіком відключень вашої черги (картинка з підписом) і оновлює його, коли графік змінюється. Те, як саме зʼявляються нові пости, задає режим нижче. Видалення попереднього повідомлення потребує в бота права адміністратора «Видаляти повідомлення»; без нього старе повідомлення просто лишається.'],
+  schedulePost: ['Публікація графіка', 'Бот публікує в канал окремий пост із графіком відключень вашої черги (картинка з підписом) і оновлює його, коли графік змінюється. Можна також надіслати або оновити цей пост негайно кнопкою нижче. Видалення попереднього повідомлення потребує права «Видаляти повідомлення».'],
+  scheduleReminder: ['Попередити перед відключенням', 'Надсилає окреме повідомлення один раз за вибраний час до запланованого початку відключення вашої черги. Час перевірки залежить від оновлення графіків (зазвичай кожні кілька хвилин). Текст редагується у вкладці «Повідомлення».'],
   postMode: ['Як публікувати', 'Нове повідомлення — кожне оновлення графіка це новий пост, старі лишаються. Видалити старе й опублікувати нове — бот публікує новий пост і видаляє попередній (потрібне право «Видаляти повідомлення», інакше старий пост лишиться). Редагувати те саме — бот змінює один і той самий пост.'],
   events: ['Події: світло вимкнено / зʼявилося', 'Бот пише, коли за графіком світло вимикається й коли воно має зʼявитися: з тривалістю, очікуваним часом і статистикою. Для кожної події є свій шаблон. Видалення попереднього повідомлення потребує права «Видаляти повідомлення».'],
   eventMode: ['Як показувати події', 'Нове повідомлення — кожна подія окремим постом, старі лишаються. Видалити старе й опублікувати нове — попереднє повідомлення про подію видаляється (потрібне право «Видаляти повідомлення», інакше воно лишиться). Редагувати те саме — один пост оновлюється на місці.'],
@@ -63,7 +64,7 @@ const HELP = {
   svbKey: ['Ключ каналу', 'Цей ключ (channel_key) потрібен, щоб бот міг керувати справжнім розкладом вашого каналу у Світлоботі: надсилати графік, підключати шаблон чи видаляти розклад. Без нього Світлобот не дозволить нічого змінити. Ключ видно в налаштуваннях каналу в чат-боті Світлобот. Бот перевірить його, збереже зашифрованим і більше не покаже.'],
   svbCheck: ['Перевірити ключ', 'Показує, який саме ключ збережено, не розкриваючи його: вісім крапок і останні два символи, а також короткий «відбиток». Відбиток однаковий для того самого ключа, тож ним можна звірити ключ зі Світлобота. Сам ключ ніколи не повертається.'],
   svbForget: ['Забути ключ', 'Видаляє збережений ключ лише тут, у боті. Графік і пост у каналі лишаються як є. Щоб знову керувати Світлоботом, введіть ключ ще раз.'],
-  svbPush: ['Оновити графік у Світлоботі', 'Бот збереже у Світлоботі тижневий графік обраної тут черги. Світлобот сам керує публікацією та закріпленням за своїм розкладом; ця дія не надсилає негайне повідомлення в канал.'],
+  svbPush: ['Оновити планові відключення у Світлоботі', 'Бот передає Світлоботу тижневі планові відключення обраної тут черги. Ця дія не змінює картинку графіка й не надсилає негайне повідомлення в канал; публікацією та закріпленням керує сам Світлобот.'],
   svbMaybe: ['Можливі відключення', 'Якщо увімкнено, «можливі» відключення (коли світло може бути, а може не бути) вважаються відключеннями. Якщо вимкнено, враховуються лише точні відключення.'],
   svbTpl: ['Готові шаблони', 'Готовий вигляд публікації з графіком у Світлоботі. Спочатку автоматично обирається шаблон вашої черги; його можна змінити вручну.'],
   svbDel: ['Видалити розклад', 'Видаляє розклад у Світлоботі, а також його допис із графіком у вашому каналі. Дію не можна скасувати, але графік можна надіслати знову.'],
@@ -323,6 +324,7 @@ function renderEditor(chat) {
       slotSettings, notifyOnEnd: slotSettings.ended.enabled, editInPlace: slotSettings.emergency.editInPlace, // the two mirror the old fields for older servers
       outageTrigger: !!src.outageTrigger, outageTriggerPattern: (src.outageTriggerPattern || '').trim() || null, templates,
       scheduleNotify: !!(src.scheduleNotify && ok), scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
+      scheduleReminder: !!(src.scheduleReminder && ok), scheduleReminderMinutes: Number(src.scheduleReminderMinutes) || 15,
       schedulePost: !!(src.schedulePost && ok), schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
     };
   };
@@ -524,11 +526,12 @@ function renderEditor(chat) {
     chat = c; state.editing = c;
     const i = state.chats.findIndex(x => x.chatId === c.chatId);
     if (i >= 0) state.chats[i] = c;
-    if (!c.settings.groupId) { s.scheduleNotify = false; s.schedulePost = false; }
+    if (!c.settings.groupId) { s.scheduleNotify = false; s.scheduleReminder = false; s.schedulePost = false; }
     const r = regionOf(c.settings.regionId);
     const ok = !!(c.settings.groupId && r && r.hasSchedules);
     const b = JSON.parse(base);
     b.scheduleNotify = !!(c.settings.scheduleNotify && ok);
+    b.scheduleReminder = !!(c.settings.scheduleReminder && ok);
     b.schedulePost = !!(c.settings.schedulePost && ok);
     base = JSON.stringify(b);
   }
@@ -933,7 +936,7 @@ function renderEditor(chat) {
           h('div', { class: 'fl' }, btn('forget', 'ghost sm', 'Забути ключ', svbForget), help('svbForget'))),
         h('div', { class: 'svbblk' }, h('div', { class: 'fl big' }, h('span', { text: 'Графік вашої черги' }), help('svbPush')),
           mb, svb.has ? null : svb.lock(),
-          btn('push', 'primary', 'Оновити графік у Світлоботі', () => svbRun('push', () => api('POST', svbBase() + '/push', { includeMaybe: !!s.svbMaybe }), true), !svb.has)),
+          btn('push', 'primary', 'Оновити планові відключення у Світлоботі', () => svbRun('push', () => api('POST', svbBase() + '/push', { includeMaybe: !!s.svbMaybe }), true), !svb.has)),
         svb.templates.length ? h('div', { class: 'svbblk' }, fieldLabel('Готові шаблони', 'svbTpl', 'svbTpl'), sel,
           btn('tpl', 'ghost', 'Підключити шаблон', () => svbRun('tpl', () => api('POST', svbBase() + '/template', { templateId: Number(svb.tplId) }), true), svb.tplId == null)) : null,
         h('div', { class: 'svbblk' }, h('div', { class: 'fl big' }, h('span', { text: 'Розклад у Світлоботі' }), help('svbDel')),
@@ -949,6 +952,36 @@ function renderEditor(chat) {
     }
   }
 
+  let scheduleSendBusy = false;
+  const scheduleSendStatus = h('div', { class: 'msg', role: 'status', 'aria-live': 'polite' });
+  async function sendScheduleNow(button) {
+    if (scheduleSendBusy) return;
+    scheduleSendBusy = true;
+    button.disabled = true;
+    button.classList.add('busy');
+    scheduleSendStatus.className = 'msg';
+    scheduleSendStatus.textContent = 'Зберігаю налаштування…';
+    try {
+      if (isDirty()) {
+        const error = await doSave(true);
+        if (error) throw error;
+      }
+      scheduleSendStatus.textContent = 'Надсилаю графік у канал…';
+      const response = await api('POST', `/api/chats/${encodeURIComponent(chat.chatId)}/schedules/send`);
+      scheduleSendStatus.className = 'msg ok';
+      scheduleSendStatus.textContent = response.message || 'Графік надіслано в канал.';
+      haptic('success');
+    } catch (error) {
+      scheduleSendStatus.className = 'msg err';
+      scheduleSendStatus.textContent = errorText(error).join(' ');
+      haptic('error');
+    } finally {
+      scheduleSendBusy = false;
+      button.classList.remove('busy');
+      button.disabled = !groupOf();
+    }
+  }
+
   function renderSched() {
     const r = regionOf(s.regionId);
     if (!r || !r.hasSchedules) {
@@ -961,6 +994,8 @@ function renderEditor(chat) {
     const lock = () => has ? null : h('div', { class: 'lockhint' }, h('span', { class: 'hint', text: 'Спершу оберіть адресу або чергу.' }),
       h('button', { type: 'button', class: 'btn ghost sm', text: 'Адреса і черга', onclick: () => setTab('addr') }));
     const edit = (id, label) => slotOf(id) ? h('button', { type: 'button', class: 'btn ghost sm', text: label, onclick: () => openSlot(id) }) : null;
+    const sendNow = h('button', { type: 'button', class: 'btn primary', text: 'Надіслати графік у канал зараз', disabled: !has || scheduleSendBusy });
+    sendNow.addEventListener('click', () => sendScheduleNow(sendNow));
     if (!has) {
       // Without a group there is no schedule to preview: one clear step instead of two locked sections.
       pvSeq++; pv.key = '';
@@ -981,7 +1016,23 @@ function renderEditor(chat) {
         h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
         h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
         edit('schedule', 'Редагувати шаблон'),
+        sendNow, scheduleSendStatus,
         pvx.node),
+      card(
+        h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Попередження перед відключенням' }), help('scheduleReminder')),
+        toggle('Надсилати попередження', 'scheduleReminder', null, { disabled: !has }),
+        h('div', { class: 'fld' }, fieldLabel('За скільки хвилин', 'scheduleReminder'),
+          (() => {
+            const options = [5, 10, 15, 30, 60];
+            const select = h('select', { 'aria-label': 'За скільки хвилин попередити' },
+              options.map(minutes => h('option', { value: String(minutes), text: `${minutes} хвилин` })));
+            select.value = String(options.includes(Number(s.scheduleReminderMinutes)) ? Number(s.scheduleReminderMinutes) : 15);
+            select.disabled = !has;
+            select.addEventListener('change', () => { s.scheduleReminderMinutes = Number(select.value); touch(); });
+            return select;
+          })()),
+        edit('before-off', 'Редагувати шаблон попередження'),
+        lock()),
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Події: світло вимкнено / зʼявилося' }), help('events')),
         toggle('Сповіщення за графіком', 'scheduleNotify', null, { disabled: !has }), lock(),
