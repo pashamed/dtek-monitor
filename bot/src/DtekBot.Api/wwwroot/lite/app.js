@@ -49,13 +49,10 @@ const HELP = {
   group: ['Черга', 'Номер черги в графіку відключень, наприклад 45.1. Визначається за адресою, але її можна змінити вручну. Від черги залежать повідомлення за графіком і сповіщення про екстрені відключення черги. Оберіть адресу й чергу на вкладці «Основне».'],
   outage: ['Реагувати на «Світло зникло»', 'Якщо застосунок моніторингу світла пише в канал «Світло зникло», бот знайде причину: спершу перевіряє графік черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише тоді адресу на сайті ДТЕК.'],
   triggerText: ['Текст повідомлення «світла немає»', 'Це текст, який ваш застосунок моніторингу світла пише в канал, коли світло зникає, наприклад «зараз світло зникло». Регістр не враховується. Можна вказати регулярний вираз, наприклад світло\\s+(зникло|вимкнули). Бот порівнює його з новими публікаціями каналу й перевіряє адресу.'],
-  schedule: ['Сповіщення за графіком', 'Бот пише в канал, коли за графіком світло вимикається й коли воно має зʼявитися, з тривалістю та очікуваним часом. Використовує дані outage-data-ua.'],
   image: ['Картинка', 'Таблиця на 2 дні — графік на сьогодні й завтра. Коротка картинка — картка з годинами відключень. Без картинки — лише текст.'],
   schedulePost: ['Публікація графіка', 'Бот публікує в канал окремий пост із графіком відключень вашої черги (картинка з підписом) і оновлює його, коли графік змінюється. Візуальний графік також можна надіслати негайно окремою кнопкою на початку цього розділу. Видалення попереднього повідомлення потребує права «Видаляти повідомлення».'],
   scheduleReminder: ['Попередити перед відключенням', 'Надсилає окреме повідомлення один раз за вибраний час до запланованого початку відключення вашої черги. Час перевірки залежить від оновлення графіків (зазвичай кожні кілька хвилин). Текст редагується у вкладці «Повідомлення».'],
   postMode: ['Як публікувати', 'Нове повідомлення — кожне оновлення графіка це новий пост, старі лишаються. Видалити старе й опублікувати нове — бот публікує новий пост і видаляє попередній (потрібне право «Видаляти повідомлення», інакше старий пост лишиться). Редагувати те саме — бот змінює один і той самий пост.'],
-  events: ['Повідомлення за подіями графіка', 'Автоматично повідомляє, коли за графіком починається й завершується відключення, з тривалістю та очікуваним часом. Це окремо від попередження за вибраний час до відключення — його можна ввімкнути вище. Для кожної події є свій шаблон.'],
-  eventMode: ['Як показувати події', 'Нове повідомлення — кожна подія окремим постом, старі лишаються. Видалити старе й опублікувати нове — попереднє повідомлення про подію видаляється (потрібне право «Видаляти повідомлення», інакше воно лишиться). Редагувати те саме — один пост оновлюється на місці.'],
   slots: ['Шаблони повідомлень', 'Кожен вид повідомлень, які бот публікує, має свій шаблон. Оберіть вид, змініть текст і стиль та перегляньте, як це виглядатиме в Telegram. Змінені шаблони позначені фіолетовою цяткою.'],
   template: ['Шаблон повідомлення', 'Ваш текст для цього виду повідомлень. Параметри у {фігурних дужках} замінюються даними, теги Telegram дозволені: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Щоб вивести фігурні дужки, пишіть {{ і }}.'],
   cond: ['Умовні блоки', 'Фрагмент {#назва}…{/назва} лишається в тексті, лише якщо значення параметра «назва» не порожнє. Наприклад: {#світло_було}🕓 Воно було {світло_було}{/світло_було}. Блоки не можна вкладати.'],
@@ -235,7 +232,6 @@ function chatCard(c) {
     names.length > 2 ? h('span', { class: 'chip grey', text: '+' + (names.length - 2) }) : null,
     s.groupId ? h('span', { class: 'chip purple', text: 'Черга ' + s.groupId }) : null,
     s.schedulePost ? h('span', { class: 'chip purple', text: 'Графік' }) : null,
-    s.scheduleNotify ? h('span', { class: 'chip purple', text: 'Події' }) : null,
     s.outageTrigger ? h('span', { class: 'chip blue', text: 'Реакція на «Світло зникло»' }) : null,
     Object.values(s.templates || {}).some(v => v && v.trim()) ? h('span', { class: 'chip grey', text: 'Свої шаблони' }) : null,
   ].filter(Boolean);
@@ -295,7 +291,10 @@ function renderList(note, errNote) {
 function renderEditor(chat) {
   const { boot } = state;
   const isPriv = !!chat.isPrivate;
-  const slots = boot.templateSlots || [];
+  const slots = (boot.templateSlots || []).filter(x => x.id !== 'off' && x.id !== 'on');
+  const hiddenEventTemplates = Object.fromEntries(
+    ['off', 'on'].filter(id => chat.settings.templates && chat.settings.templates[id])
+      .map(id => [id, chat.settings.templates[id]]));
   const slotOf = id => slots.find(x => x.id === id) || null;
   const s = {
     ...chat.settings, partIds: [...(chat.settings.partIds || [])],
@@ -316,7 +315,10 @@ function renderEditor(chat) {
   const manualOf = () => (chat.settings.regionId === s.regionId && chat.settings.addressLabel) || null;
   const customised = (x, v) => !!(x && v && v.trim() && v !== x.defaultTemplate);
   const isCustom = id => customised(slotOf(id), tpls[id]);
-  const tplMap = get => Object.fromEntries(slots.filter(x => customised(x, get(x.id))).map(x => [x.id, get(x.id)]));
+  const tplMap = get => ({
+    ...hiddenEventTemplates,
+    ...Object.fromEntries(slots.filter(x => customised(x, get(x.id))).map(x => [x.id, get(x.id)])),
+  });
   // Form fields only; schedule flags count only when a group is saved for the chosen region.
   const form = (src, templates, saved) => {
     const r = regionOf(src.regionId), ok = !!(r && r.hasSchedules && saved.regionId === src.regionId && saved.groupId);
@@ -325,7 +327,7 @@ function renderEditor(chat) {
       regionId: src.regionId || null, partIds: partIdsOf(src), isActive: !!src.isActive, isPaused: !!src.isPaused,
       slotSettings, notifyOnEnd: slotSettings.ended.enabled, editInPlace: slotSettings.emergency.editInPlace, // the two mirror the old fields for older servers
       outageTrigger: !!src.outageTrigger, outageTriggerPattern: (src.outageTriggerPattern || '').trim() || null, templates,
-      scheduleNotify: !!(src.scheduleNotify && ok), scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
+      scheduleNotify: false, scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
       scheduleReminder: !!(src.scheduleReminder && ok), scheduleReminderMinutes: Number(src.scheduleReminderMinutes) || 15,
       schedulePost: !!(src.schedulePost && ok), schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
     };
@@ -490,7 +492,7 @@ function renderEditor(chat) {
     const r = regionOf(c.settings.regionId);
     const ok = !!(c.settings.groupId && r && r.hasSchedules);
     const b = JSON.parse(base);
-    b.scheduleNotify = !!(c.settings.scheduleNotify && ok);
+    b.scheduleNotify = false;
     b.scheduleReminder = !!(c.settings.scheduleReminder && ok);
     b.schedulePost = !!(c.settings.schedulePost && ok);
     base = JSON.stringify(b);
@@ -912,7 +914,7 @@ function renderEditor(chat) {
       },
     };
   }
-  const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : (id === 'off' || id === 'on') ? s.scheduleImage : 'None';
+  const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : 'None';
   const previewBody = id => ({
     slot: id, template: customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
     groupId: groupOf(), kind: KIND_OF[id] || 'Emergency', imageKind: imageKindOf(id),
@@ -1073,7 +1075,7 @@ function renderEditor(chat) {
       panels.sched.replaceChildren(empty(r ? 'Графіки відключень для цього регіону поки недоступні.' : 'Спершу оберіть регіон на вкладці «Основне».', r ? null : 'main'));
       return;
     }
-    const has = !!groupOf(), off = slotOf('off'), on = slotOf('on');
+    const has = !!groupOf();
     const lock = () => has ? null : h('div', { class: 'lockhint' }, h('span', { class: 'hint', text: 'Спершу оберіть адресу або чергу на вкладці «Основне».' }),
       h('button', { type: 'button', class: 'btn ghost sm', text: 'Перейти до адреси й черги', onclick: goToAddress }));
     const edit = (id, label) => slotOf(id) ? h('button', { type: 'button', class: 'btn ghost sm', text: label, onclick: () => openSlot(id) }) : null;
@@ -1118,13 +1120,6 @@ function renderEditor(chat) {
           })()),
         edit('before-off', 'Редагувати шаблон попередження'),
         lock()),
-      card(
-        h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Повідомлення за подіями графіка' }), help('events')),
-        toggle('Сповіщення за графіком', 'scheduleNotify', null, { disabled: !has }), lock(),
-        h('div', { class: 'fld' }, fieldLabel('Як показувати', 'eventMode'), ...modeSeg('event', () => s.scheduleEventMode, v => { s.scheduleEventMode = v; }, 'Як показувати')),
-        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'),
-          seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], () => s.scheduleImage, v => { s.scheduleImage = v; touch(); }, 'Картинка подій')),
-        off || on ? h('div', { class: 'btnrow' }, edit('off', 'Редагувати шаблон: ' + (off ? off.title : '')), edit('on', 'Редагувати шаблон: ' + (on ? on.title : ''))) : null),
       ...(svbNode ? [svbNode] : []),
       h('p', { class: 'hint credit', text: CREDIT }));
     svbPaint();

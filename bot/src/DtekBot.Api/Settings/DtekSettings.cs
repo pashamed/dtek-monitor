@@ -107,6 +107,7 @@ public sealed class ScheduleSettings
 {
     public string BaseUrl { get; set; } = "https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/";
     public int CacheMinutes { get; set; } = 5;
+    public bool EnableEventNotifications { get; set; }
 
     // A failed refresh keeps serving the last good copy for this long.
     public int MaxStaleMinutes { get; set; } = 120;
