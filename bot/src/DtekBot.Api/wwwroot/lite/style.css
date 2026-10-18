@@ -219,6 +219,7 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 }
 .lockhint{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .credit{text-align:center;margin:4px 0 12px}
+.ui-version{position:relative;z-index:1;margin:16px 0 0;padding:10px 0 4px;color:var(--muted);font-size:12px;text-align:center;overflow-wrap:anywhere}
 
 /* previews */
 .tgb{background:rgba(30,42,78,.9);border:1px solid rgba(255,255,255,.08);border-radius:18px 18px 18px 6px;padding:10px 14px;white-space:pre-wrap;overflow-wrap:anywhere;min-height:44px;font-family:var(--font)}
