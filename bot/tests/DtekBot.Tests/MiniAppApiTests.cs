@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using DtekBot.Api.Data;
+using DtekBot.Api.Groups;
 using DtekBot.Api.Schedules;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
@@ -753,6 +754,28 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(("odesa", "", "Одеса"), _factory.DtekAddresses.LastCitySearch);
         Assert.Equal(("odesa", "м. Одеса", "Дерибас"), _factory.DtekAddresses.LastStreetSearch);
         Assert.Equal(("odesa", "м. Одеса", "вул. Дерибасівська", "12"), _factory.DtekAddresses.LastHouseSearch);
+    }
+
+    [Fact]
+    public async Task KyivHouseLookup_IncludesTheResolvedQueueBesideEachHouse()
+    {
+        var (_, client) = NewUser();
+        _factory.Yasno.Houses =
+        [
+            new YasnoItem(12634, "12"),
+            new YasnoItem(12635, "12А"),
+        ];
+        _factory.Yasno.Groups[12635] = new YasnoGroup(3, 1);
+
+        var response = await client.GetAsync("/api/address/houses?regionId=kyiv&streetId=283&query=12");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            [
+                new AddressItemDto(12634, "12", "6.2"),
+                new AddressItemDto(12635, "12А", "3.1"),
+            ],
+            (await response.ReadAsync<AddressItemDto[]>())!);
     }
 
     [Fact]

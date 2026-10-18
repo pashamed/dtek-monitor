@@ -11,9 +11,9 @@ public sealed class DtekAddressClientTests
 {
     private const string SiteUrl = "https://www.dtek-odesa.com.ua/ua/";
     private const string StreetDirectory =
-        """{"result":true,"streets":{"м. Одеса":["вул. Дерибасівська","вул. Приморська"],"м. Чорноморськ":["вул. Морська"]}}""";
+        """{"result":true,"streets":{"м. Одеса":["вул. Дерибасівська","вул. Приморська"],"м. Чорноморськ":["вул. Морська"],"г. Ирпень":["вул. Центральна"]}}""";
     private const string Houses =
-        """{"result":true,"data":{"12":{"sub_type_reason":["GPV6.2","other"]},"12А":{"sub_type_reason":["GPV3.1"]},"14":{"sub_type_reason":[]}}}""";
+        """{"result":true,"data":{"12":{"sub_type_reason":["GPV6.2","other"]},"12А":{"sub_type_reason":["GPV3.1"]},"12Б":{"sub_type_reason":["GPV 2.2"]},"14":{"sub_type_reason":[]}}}""";
 
     private sealed class FakeHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
         : HttpMessageHandler
@@ -82,8 +82,13 @@ public sealed class DtekAddressClientTests
 
         Assert.Equal(["м. Одеса"], cities);
         Assert.Equal(["вул. Дерибасівська"], streets);
+        Assert.Equal(["г. Ирпень"], await client.SearchCitiesAsync(region, "Ірпінь", CancellationToken.None));
         Assert.Equal(
-            [new DtekBot.Shared.DtekAddressHouseDto("12", "6.2"), new DtekBot.Shared.DtekAddressHouseDto("12А", "3.1")],
+            [
+                new DtekBot.Shared.DtekAddressHouseDto("12", "6.2"),
+                new DtekBot.Shared.DtekAddressHouseDto("12А", "3.1"),
+                new DtekBot.Shared.DtekAddressHouseDto("12Б", "2.2"),
+            ],
             houses);
         Assert.Equal(2, handler.Requests.Count(request => request.Method == HttpMethod.Get));
         var ajax = handler.Requests.Where(request => request.Method == HttpMethod.Post).ToList();

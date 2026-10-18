@@ -29,8 +29,23 @@ public sealed partial class DtekAddressClient(
     public async Task<IReadOnlyList<string>> SearchCitiesAsync(RegionSettings region, string query, CancellationToken ct)
     {
         var directory = await GetDirectoryAsync(region, ct);
+        var search = query.Trim();
+        var matches = directory.Keys
+            .Where(city => city.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(city => city, StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToArray();
+        if (matches.Length > 0 || search.Length < 5)
+        {
+            return matches;
+        }
+
+        var normalized = NormalizeCity(search);
         return directory.Keys
-            .Where(city => city.Contains(query.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Select(city => (City: city, Key: NormalizeCity(city)))
+            .Where(item => Math.Abs(item.Key.Length - normalized.Length) <= 1
+                && EditDistanceAtMostOne(item.Key, normalized))
+            .Select(item => item.City)
             .OrderBy(city => city, StringComparer.OrdinalIgnoreCase)
             .Take(20)
             .ToArray();
@@ -225,9 +240,67 @@ public sealed partial class DtekAddressClient(
         }
     }
 
+    private static string NormalizeCity(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        foreach (var prefix in new[] { "місто ", "м. ", "м ", "город ", "г. ", "г " })
+        {
+            if (normalized.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                normalized = normalized[prefix.Length..];
+                break;
+            }
+        }
+
+        return new string(normalized
+            .Replace('і', 'и')
+            .Replace('ї', 'и')
+            .Replace('є', 'е')
+            .Replace('ґ', 'г')
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
+    }
+
+    private static bool EditDistanceAtMostOne(string left, string right)
+    {
+        var leftIndex = 0;
+        var rightIndex = 0;
+        var differences = 0;
+        while (leftIndex < left.Length && rightIndex < right.Length)
+        {
+            if (left[leftIndex] == right[rightIndex])
+            {
+                leftIndex++;
+                rightIndex++;
+                continue;
+            }
+
+            if (++differences > 1)
+            {
+                return false;
+            }
+
+            if (left.Length > right.Length)
+            {
+                leftIndex++;
+            }
+            else if (right.Length > left.Length)
+            {
+                rightIndex++;
+            }
+            else
+            {
+                leftIndex++;
+                rightIndex++;
+            }
+        }
+
+        return differences + (leftIndex < left.Length || rightIndex < right.Length ? 1 : 0) <= 1;
+    }
+
     [GeneratedRegex("<meta\\s+name=[\"']csrf-token[\"']\\s+content=[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase)]
     private static partial Regex CsrfToken();
 
-    [GeneratedRegex("^GPV(\\d{1,2}\\.\\d{1,2})$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("^GPV\\s*(\\d{1,2}\\.\\d{1,2})$", RegexOptions.IgnoreCase)]
     private static partial Regex GroupId();
 }

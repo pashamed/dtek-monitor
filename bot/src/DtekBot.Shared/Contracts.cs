@@ -87,7 +87,7 @@ public enum ScheduleImage
 // Exactly what the bot would post for the chat's group right now.
 public sealed record SchedulePreviewDto(string GroupId, string Text, string? ImageUrl);
 
-public sealed record AddressItemDto(int Id, string Name);
+public sealed record AddressItemDto(int Id, string Name, string? GroupId = null);
 
 public sealed record AddressNameDto(string Name);
 
