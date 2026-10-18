@@ -284,6 +284,7 @@ public static class MiniAppApi
                 {
                     channel.GroupId = null;
                     channel.AddressLabel = null;
+                    channel.AddressCity = null;
                     channel.AddressStreet = null;
                     channel.AddressHouse = null;
                     channel.ScheduleNotify = false;
@@ -299,6 +300,7 @@ public static class MiniAppApi
             {
                 channel.GroupId = null;
                 channel.AddressLabel = null;
+                channel.AddressCity = null;
                 channel.AddressStreet = null;
                 channel.AddressHouse = null;
                 channel.OutageTrigger = false;
@@ -517,6 +519,9 @@ public static class MiniAppApi
             BotDbContext db,
             ChatAccessService access,
             ChatStatusService status,
+            string? regionId,
+            string? partIds,
+            IOptionsMonitor<DtekSettings> settings,
             CancellationToken ct) =>
         {
             if (!await access.CanManageAsync(chatId, UserId(http), ct))
@@ -525,7 +530,23 @@ public static class MiniAppApi
             }
 
             var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
-            return Json(new ChatStatusDto(await status.BuildAsync(channel, ct)));
+            var targetRegionId = string.IsNullOrWhiteSpace(regionId) ? channel?.RegionId : regionId;
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                string.Equals(r.Id, targetRegionId, StringComparison.OrdinalIgnoreCase));
+            IReadOnlyList<string>? requestedParts = null;
+            if (partIds is not null && region is not null)
+            {
+                var requested = partIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var knownParts = region.Parts.ToDictionary(p => p.Id, p => p.Id, StringComparer.OrdinalIgnoreCase);
+                if (requested.Any(id => !knownParts.ContainsKey(id)))
+                {
+                    return Error("Невідомий район.");
+                }
+
+                requestedParts = requested.Select(id => knownParts[id]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+
+            return Json(new ChatStatusDto(await status.BuildAsync(channel, ct, regionId, requestedParts)));
         });
 
         // "The power is off, why?" from the editor (replaces the old /check). Only for the user's own chat:
@@ -653,6 +674,7 @@ public static class MiniAppApi
             var label = request.Label?.Trim() ?? "";
             channel.GroupId = group.Id;
             channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            channel.AddressCity = null;
             channel.AddressStreet = CleanPart(request.Street, 256);
             channel.AddressHouse = CleanPart(request.House, 64);
             await db.SaveChangesAsync(ct);
@@ -681,10 +703,116 @@ public static class MiniAppApi
 
             channel.GroupId = null;
             channel.AddressLabel = null;
+            channel.AddressCity = null;
             channel.AddressStreet = null;
             channel.AddressHouse = null;
             channel.ScheduleNotify = false;
             channel.SchedulePost = false;
+            await db.SaveChangesAsync(ct);
+            return Json(ToSummary(channel, userId));
+        });
+
+        // Address typed by hand for regions without the picker: city, street and house exactly as on the DTEK site.
+        api.MapPut("/chats/{chatId:long}/address/manual", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            IOptionsMonitor<DtekSettings> settings,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            var request = await http.Request.ReadFromJsonAsync<ManualAddressRequest>(ApiJson.Options, ct);
+            if (request is null)
+            {
+                return Error("Порожній запит.");
+            }
+
+            if (!await access.CanManageAsync(chatId, userId, ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r =>
+                string.Equals(r.Id, request.RegionId, StringComparison.OrdinalIgnoreCase));
+            if (region is null)
+            {
+                return Error("Невідомий регіон.");
+            }
+
+            if (region.HasGroups)
+            {
+                return Error("Для цього регіону адресу обирають зі списку.");
+            }
+            if (string.IsNullOrWhiteSpace(region.SiteUrl))
+            {
+                return Error("Для цього регіону перевірка адреси недоступна.");
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || channel.RegionId != region.Id)
+            {
+                return Error($"Спершу оберіть регіон «{region.Name}» і збережіть налаштування.");
+            }
+
+            var parts = new[]
+            {
+                ManualPart(request.City, 128, "населений пункт"),
+                ManualPart(request.Street, 256, "вулицю"),
+                ManualPart(request.House, 64, "будинок"),
+            };
+            var problem = parts.Select(p => p.Error).FirstOrDefault(e => e is not null);
+            if (problem is not null)
+            {
+                return Error(problem);
+            }
+
+            var (city, street, house) = (parts[0].Value!, parts[1].Value!, parts[2].Value!);
+            var label = $"{city}, {street}, {house}";
+            channel.AddressCity = city;
+            channel.AddressStreet = street;
+            channel.AddressHouse = house;
+            channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            await db.SaveChangesAsync(ct);
+            return Json(ToSummary(channel, userId));
+        });
+
+        // Forgets the typed address only; the group and every other setting stay.
+        api.MapDelete("/chats/{chatId:long}/address/manual", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            TimeProvider time,
+            CancellationToken ct) =>
+        {
+            var userId = UserId(http);
+            if (!await access.CanManageAsync(chatId, userId, ct))
+            {
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null)
+            {
+                return Error("Чат не знайдено.");
+            }
+
+            channel.AddressLabel = null;
+            channel.AddressCity = null;
+            channel.AddressStreet = null;
+            channel.AddressHouse = null;
+
+            // A queued check is about the address that was just removed.
+            var pending = await db.AddressChecks
+                .Where(c => c.ChatId == chatId && c.Status == AddressCheckStatus.Pending)
+                .ToListAsync(ct);
+            foreach (var check in pending)
+            {
+                check.Status = AddressCheckStatus.Expired;
+                check.CompletedAt = time.GetUtcNow();
+            }
+
             await db.SaveChangesAsync(ct);
             return Json(ToSummary(channel, userId));
         });
@@ -815,6 +943,22 @@ public static class MiniAppApi
         return text;
     }
 
+    private static (string? Value, string? Error) ManualPart(string? value, int max, string what)
+    {
+        var text = value?.Trim();
+        if (string.IsNullOrEmpty(text))
+        {
+            return (null, $"Вкажіть {what}.");
+        }
+
+        if (text.Length > max)
+        {
+            return (null, $"Поле «{what}» задовге: щонайбільше {max} символів.");
+        }
+
+        return text.Any(char.IsControl) ? (null, $"Поле «{what}» містить недопустимі символи.") : (text, null);
+    }
+
     private static RegionSettings? GroupRegion(DtekSettings settings, string? regionId) =>
         settings.Regions.FirstOrDefault(r => r.HasGroups && string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
 
@@ -851,7 +995,8 @@ public static class MiniAppApi
             c.OutageTriggerPattern,
             MessageSlots.All.Where(s => MessageSlots.IsAlert(s.Id))
                 .ToDictionary(s => s.Id, s => new SlotSettingDto(c.SlotEnabled(s.Id), c.SlotEditInPlace(s.Id), c.SlotEndStyle(s.Id))),
-            !string.IsNullOrEmpty(c.SvitlobotKey));
+            !string.IsNullOrEmpty(c.SvitlobotKey),
+            c.AddressCity);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 

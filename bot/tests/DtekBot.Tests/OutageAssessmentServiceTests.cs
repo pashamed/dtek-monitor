@@ -466,7 +466,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
 
         var text = await AssessAsync(channel);
 
-        Assert.Contains("поки недоступна", text);
+        Assert.Contains("населений пункт", text);
         Assert.Empty(_schedules.Calls);
         Assert.Equal(0, CheckRows());
     }
@@ -480,7 +480,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
         var text = await AssessAsync(channel);
 
         Assert.Equal(["odesa"], _schedules.Calls);
-        Assert.Contains("поки недоступна", text);
+        Assert.Contains("населений пункт", text);
     }
 
     [Fact]

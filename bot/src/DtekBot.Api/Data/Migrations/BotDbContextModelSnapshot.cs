@@ -33,6 +33,11 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("City")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -79,6 +84,10 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("City")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<string>("Street")
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
@@ -113,7 +122,7 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
-                    b.HasKey("RegionId", "Street", "House");
+                    b.HasKey("RegionId", "City", "Street", "House");
 
                     b.ToTable("AddressResults");
                 });
@@ -122,6 +131,10 @@ namespace DtekBot.Api.Data.Migrations
                 {
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
+
+                    b.Property<string>("AddressCity")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<string>("AddressHouse")
                         .HasMaxLength(64)

@@ -43,6 +43,7 @@ const HELP = {
   slotEnded: ['Сповіщати про зняття аварійного запису', 'Коли екстрений запис зникає з сайту ДТЕК, бот повідомляє про це (спосіб обираєте нижче). Можна вимкнути лише це повідомлення, а саме сповіщення й його оновлення залишаться. Зникнення запису не означає, що світло вже повернулося.'],
   slotEndStyle: ['Як показувати', 'Відповіддю на сповіщення — бот відповідає на початкове сповіщення (так за замовчуванням). Окремим повідомленням — надсилається нове повідомлення без привʼязки до початкового. Змінити початкове повідомлення — його текст замінюється на повідомлення про зняття; якщо повідомлення вже видалено або його не можна змінити, бот відповість на нього новим.'],
   slotEdit: ['Оновлення', 'Редагувати те саме повідомлення — одне повідомлення оновлюється на місці. Щоразу нове — кожна зміна приходить окремим повідомленням зі сповіщенням.'],
+  addrManual: ['Адреса для перевірки', 'Вкажіть населений пункт (місто, село чи селище), вулицю та номер будинку так, як вони написані на сайті ДТЕК: з «м.», «с.» або «смт», з «вул.» або «просп.», і номер будинку в тому ж вигляді (наприклад 12 або 12А). Бот сам не може перевірити написання: чи знайшов він адресу, стане видно після першої перевірки.'],
   address: ['Адреса', 'Потрібна, щоб визначити вашу чергу й перевіряти саме вашу адресу на сайті ДТЕК. Зберігається, поки діє підписка, і видаляється при відписці.'],
   group: ['Черга', 'Номер черги в графіку відключень, наприклад 45.1. Визначається за адресою, але її можна змінити вручну. Від черги залежать повідомлення за графіком і сповіщення про екстрені відключення черги.'],
   outage: ['Реагувати на «Світло зникло»', 'Якщо застосунок моніторингу світла пише в канал «Світло зникло», бот знайде причину: спершу перевіряє графік черги, потім загальне повідомлення ДТЕК про екстрені відключення чи аварію, і лише тоді адресу на сайті ДТЕК.'],
@@ -62,9 +63,9 @@ const HELP = {
   svbKey: ['Ключ каналу', 'Цей ключ (channel_key) потрібен, щоб бот міг керувати справжнім розкладом вашого каналу у Світлоботі: надсилати графік, підключати шаблон чи видаляти розклад. Без нього Світлобот не дозволить нічого змінити. Ключ видно в налаштуваннях каналу в чат-боті Світлобот. Бот перевірить його, збереже зашифрованим і більше не покаже.'],
   svbCheck: ['Перевірити ключ', 'Показує, який саме ключ збережено, не розкриваючи його: вісім крапок і останні два символи, а також короткий «відбиток». Відбиток однаковий для того самого ключа, тож ним можна звірити ключ зі Світлобота. Сам ключ ніколи не повертається.'],
   svbForget: ['Забути ключ', 'Видаляє збережений ключ лише тут, у боті. Графік і пост у каналі лишаються як є. Щоб знову керувати Світлоботом, введіть ключ ще раз.'],
-  svbPush: ['Надіслати мій графік', 'Бот надішле у Світлобот тижневий графік вашої черги, збереженої в цьому каналі, і Світлобот оновить графік у каналі. Потрібні регіон із графіками та обрана черга.'],
+  svbPush: ['Оновити графік у Світлоботі', 'Бот збереже у Світлоботі тижневий графік обраної тут черги. Світлобот сам керує публікацією та закріпленням за своїм розкладом; ця дія не надсилає негайне повідомлення в канал.'],
   svbMaybe: ['Можливі відключення', 'Якщо увімкнено, «можливі» відключення (коли світло може бути, а може не бути) вважаються відключеннями. Якщо вимкнено, враховуються лише точні відключення.'],
-  svbTpl: ['Готові шаблони', 'Готовий вигляд публікації з графіком у Світлоботі. Оберіть шаблон і натисніть «Підключити шаблон» — Світлобот використовуватиме його для вашого каналу.'],
+  svbTpl: ['Готові шаблони', 'Готовий вигляд публікації з графіком у Світлоботі. Спочатку автоматично обирається шаблон вашої черги; його можна змінити вручну.'],
   svbDel: ['Видалити розклад', 'Видаляє розклад у Світлоботі, а також його допис із графіком у вашому каналі. Дію не можна скасувати, але графік можна надіслати знову.'],
   remove: ['Видалити зі списку', 'Знімає канал зі списку. Якщо ви єдиний адміністратор у боті, сповіщення вимикаються, а адреса видаляється. Сам бот лишається в каналі.'],
 };
@@ -301,13 +302,15 @@ function renderEditor(chat) {
   };
   state.editing = chat;
   try { tg.BackButton.show(); } catch { /* optional */ }
-  let seq = 0, timer = 0, busy = false, tab = 'main', hintFor = null, inlineFor = null, inlineNode = null, uid = 0, cs = slots.length ? slots[0].id : null;
+  let seq = 0, timer = 0, busy = false, tab = 'main', hintFor = null, inlineFor = null, inlineNode = null, manualMainFor = null, manualMainNode = null, manualTabFor = null, manualTabNode = null, uid = 0, cs = slots.length ? slots[0].id : null;
   // Per-slot editor state: current text (the default text when not customised), errors from preview / from the server.
   const tpls = Object.fromEntries(slots.map(x => [x.id, (chat.settings.templates || {})[x.id] || x.defaultTemplate]));
   const perr = {}, serr = {};
 
   const groupOf = () => (chat.settings.regionId === s.regionId && chat.settings.groupId) || null;
   const addrOf = () => (groupOf() && chat.settings.addressLabel) || null;
+  // A hand-typed address (regions without the address search) does not depend on the group.
+  const manualOf = () => (chat.settings.regionId === s.regionId && chat.settings.addressLabel) || null;
   const customised = (x, v) => !!(x && v && v.trim() && v !== x.defaultTemplate);
   const isCustom = id => customised(slotOf(id), tpls[id]);
   const tplMap = get => Object.fromEntries(slots.filter(x => customised(x, get(x.id))).map(x => [x.id, get(x.id)]));
@@ -411,9 +414,9 @@ function renderEditor(chat) {
     dqIn.hidden = !many;
     dList.classList.toggle('scroll', many);
     const chip = (label, on, fn) => h('button', { type: 'button', class: 'dchip' + (on ? ' on' : ''), 'aria-pressed': String(on), text: label, onclick: fn });
-    const flip = id => { sel.has(id) ? sel.delete(id) : sel.add(id); s.partIds = [...sel]; touch(); renderDistricts(); };
+    const flip = id => { sel.has(id) ? sel.delete(id) : sel.add(id); s.partIds = [...sel]; touch(); renderDistricts(); syncStatus(); };
     const top = dList.scrollTop;
-    dList.replaceChildren(chip('Усі райони', !sel.size, () => { s.partIds = []; touch(); renderDistricts(); }),
+    dList.replaceChildren(chip('Усі райони', !sel.size, () => { s.partIds = []; touch(); renderDistricts(); syncStatus(); }),
       ...r.parts.filter(p => !q || p.name.toLowerCase().includes(q)).map(p => chip(p.name, sel.has(p.id), () => flip(p.id))));
     dList.scrollTop = top;
     const names = partNames(s);
@@ -424,13 +427,16 @@ function renderEditor(chat) {
   const stLines = h('div', { class: 'stlines', 'aria-live': 'polite' });
   const stBtn = h('button', { type: 'button', class: 'btn ghost sm', text: 'Оновити', onclick: () => loadStatus() });
   const stCard = card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Поточний стан' }), help('status')), stLines, stBtn);
-  let stSeq = 0, stFor;
+  let stSeq = 0, stFor, stPartsFor;
   async function loadStatus() {
     const my = ++stSeq;
     stBtn.disabled = true;
     stLines.replaceChildren(h('div', { class: 'sk sk-line' }), h('div', { class: 'sk sk-line s' }));
     try {
-      const d = await api('GET', '/api/chats/' + encodeURIComponent(chat.chatId) + '/status');
+      const regionId = s.regionId;
+      const parts = partIdsOf(s).join(',');
+      const suffix = regionId ? '?regionId=' + encodeURIComponent(regionId) + '&partIds=' + encodeURIComponent(parts) : '';
+      const d = await api('GET', '/api/chats/' + encodeURIComponent(chat.chatId) + '/status' + suffix);
       if (my !== stSeq) return;
       const lines = (d && d.lines) || [];
       stLines.replaceChildren(...(lines.length ? lines.map(t => h('div', { class: 'stl', text: t })) : [h('div', { class: 'hint', text: 'Поки немає даних.' })]));
@@ -440,13 +446,41 @@ function renderEditor(chat) {
     if (my === stSeq) stBtn.disabled = false;
   }
   function syncStatus() {
-    const has = !!(chat.settings.regionId || chat.settings.isActive);
+    const regionId = s.regionId;
+    const has = !!regionId;
     stCard.hidden = !has;
-    if (has && stFor !== chat.settings.regionId) { stFor = chat.settings.regionId; loadStatus(); }
+    if (!has) {
+      stFor = undefined;
+      stPartsFor = undefined;
+      stSeq++;
+      stBtn.disabled = false;
+      stLines.replaceChildren();
+    } else {
+      const parts = partIdsOf(s).join(',');
+      if (stFor !== regionId || stPartsFor !== parts) {
+        stFor = regionId;
+        stPartsFor = parts;
+        loadStatus();
+      }
+    }
   }
 
   function renderHint() {
     const r = regionOf(s.regionId);
+    if (r && !r.hasGroups) {
+      const nodes = [];
+      if (!manualOf()) {
+        if (manualMainFor !== s.regionId) {
+          manualMainNode = card(h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })), manualAddress(s.regionId));
+          manualMainFor = s.regionId;
+        }
+        nodes.push(manualMainNode);
+      } else manualMainFor = null;
+      if (!groupOf() && hintFor === s.regionId && r.hasSchedules) nodes.push(scheduleNudge());
+      inlineFor = null; hintBox.replaceChildren(...nodes);
+      return;
+    }
+    manualMainFor = null;
     if (!r || groupOf()) { inlineFor = null; hintBox.replaceChildren(); return; }
 
     // A region with the address search: the address is typed right here, no need to find another tab.
@@ -463,11 +497,13 @@ function renderEditor(chat) {
     }
 
     if (hintFor !== s.regionId || !r.hasSchedules) { hintBox.replaceChildren(); return; }
-    hintBox.replaceChildren(h('div', { class: 'nudge glass' },
-      h('div', {}, h('b', { text: 'Тепер оберіть чергу' }),
-        h('p', { class: 'hint', text: 'Це потрібно, щоб отримувати сповіщення саме для вашої черги.' })),
-      h('button', { type: 'button', class: 'btn sm', text: 'Адреса і черга', onclick: () => setTab('addr') })));
+    hintBox.replaceChildren(scheduleNudge());
   }
+
+  const scheduleNudge = () => h('div', { class: 'nudge glass' },
+    h('div', {}, h('b', { text: 'Тепер оберіть чергу' }),
+      h('p', { class: 'hint', text: 'Це потрібно, щоб отримувати сповіщення саме для вашої черги.' })),
+    h('button', { type: 'button', class: 'btn sm', text: 'Адреса і черга', onclick: () => setTab('addr') }));
 
   regionSel.addEventListener('change', () => {
     s.regionId = regionSel.value || null; s.partIds = []; dq = ''; dqIn.value = '';
@@ -597,7 +633,9 @@ function renderEditor(chat) {
       }
       try {
         applyChat(await api(method, '/api/chats/' + encodeURIComponent(chat.chatId) + path, body));
-        haptic('success'); inlineFor = null; refreshAll();
+        haptic('success'); inlineFor = null;
+        if (path.startsWith('/address')) { manualMainFor = null; manualTabFor = null; }
+        refreshAll();
         return true;
       } catch (e) { fail(e); return false; }
     }
@@ -636,6 +674,33 @@ function renderEditor(chat) {
       h('p', { class: 'hint', text: 'Знайдіть вулицю, потім номер будинку: черга визначиться автоматично, а налаштування збережуться.' }));
   }
 
+  // Address typed by hand for regions without the search; it saves the chat first (like the picker), then PUT /address/manual.
+  function manualAddress(regionId) {
+    const ctx = makeAddrCtx();
+    const field = (title, placeholder) => {
+      const id = 'addrM' + (++uid);
+      const input = h('input', { type: 'text', id, placeholder, autocomplete: 'off', spellcheck: 'false', 'aria-label': title });
+      return { input, node: h('div', { class: 'fld' }, h('label', { for: id, text: title }), input) };
+    };
+    const city = field('Населений пункт', 'м. Буча'), street = field('Вулиця', 'вул. Вокзальна'), house = field('Будинок', '12');
+    const ins = [city, street, house].map(x => x.input);
+    const save = h('button', { type: 'button', class: 'btn primary', text: 'Зберегти адресу' });
+    let working = false;
+    const sync = () => { save.disabled = working || ins.some(i => !i.value.trim()); };
+    async function submit() {
+      if (save.disabled) return;
+      working = true; save.classList.add('busy'); sync();
+      const ok = await ctx.commit('PUT', '/address/manual',
+        { regionId, city: city.input.value.trim(), street: street.input.value.trim(), house: house.input.value.trim() }, true);
+      if (!ok) { working = false; save.classList.remove('busy'); sync(); }
+    }
+    ins.forEach(i => { i.addEventListener('input', sync); i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }); });
+    save.addEventListener('click', submit);
+    sync();
+    return h('div', { class: 'fld' }, fieldLabel('Адреса для перевірки', 'addrManual'), city.node, street.node, house.node,
+      h('p', { class: 'hint', text: 'Пишіть так, як на сайті ДТЕК: від цього залежить, чи знайде бот адресу.' }), save, ctx.msg);
+  }
+
   function renderAddr() {
     const r = regionOf(s.regionId);
     const nodes = [];
@@ -645,6 +710,22 @@ function renderEditor(chat) {
       const regionId = s.regionId, grp = groupOf(), addr = addrOf();
       const ctx = makeAddrCtx();
       const { msg, fail, commit } = ctx;
+
+      if (!r.hasGroups) {
+        const saved = manualOf();
+        if (saved) {
+          manualTabFor = null;
+          nodes.push(card(fieldLabel('Адреса', 'addrManual'),
+            h('div', { class: 'result' }, h('div', { class: 'rl', text: saved }), grp ? h('span', { class: 'chip purple', text: 'Черга ' + grp }) : null),
+            h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => commit('DELETE', '/address/manual') })));
+        } else {
+          if (manualTabFor !== regionId) {
+            manualTabNode = card(h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })), manualAddress(regionId));
+            manualTabFor = regionId;
+          }
+          nodes.push(manualTabNode);
+        }
+      }
 
       if (r.hasGroups && !addr) nodes.push(h('div', { class: 'regline' }, h('span', { class: 'chip purple', text: 'Адреса для: ' + r.name })));
       if (r.hasGroups) {
@@ -674,7 +755,7 @@ function renderEditor(chat) {
           grp && !addr ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути чергу', onclick: () => commit('DELETE', '/address') }) : null));
       }
       nodes.push(msg);
-      if (isPriv && addrOf()) nodes.push(chkCard, chkOut);
+      if (isPriv && (addrOf() || (!r.hasGroups && manualOf()))) nodes.push(chkCard, chkOut);
     }
     if (!isPriv) {
       const trig = toggle('Реагувати на «Світло зникло»', 'outageTrigger', 'outage');
@@ -748,7 +829,7 @@ function renderEditor(chat) {
   const imgSeg = (get, set) => seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], get, v => { set(v); touch(); loadPv(); }, 'Картинка');
 
   // ----- Світлобот (channels only) -----
-  const svb = { hasKey: !!chat.settings.hasSvitlobotKey, loaded: false, loading: false, off: false, busy: '', templates: [], hasSchedule: null, tplId: null, msg: null, has: false, lock: null };
+  const svb = { hasKey: !!chat.settings.hasSvitlobotKey, loaded: false, loading: false, off: false, busy: '', templates: [], hasSchedule: null, tplId: null, templateGroup: undefined, manualTemplate: false, msg: null, has: false, lock: null };
   s.svbMaybe = true;
   const svbNode = isPriv ? null : h('section', { class: 'card glass', id: 'svb' });
   const keyIn = h('input', { type: 'password', id: 'svbKey', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: 'channel_key', 'aria-label': 'Ключ каналу (channel_key)' });
@@ -758,6 +839,20 @@ function renderEditor(chat) {
     if (e.status === 503) svb.off = true;
     return e.status === 429 ? 'Забагато дій, спробуйте за хвилину' : e.message;
   };
+  function svbSyncTemplate() {
+    const group = groupOf();
+    if (svb.templateGroup !== group) {
+      svb.templateGroup = group;
+      svb.manualTemplate = false;
+    }
+    const exists = svb.templates.some(t => String(t.id) === String(svb.tplId));
+    if (svb.manualTemplate && exists) return;
+    const match = group && svb.templates.find(t => {
+      const candidate = String(t.name || '').match(/\b(\d{1,2}\.\d{1,2})\b/);
+      return candidate && candidate[1] === group;
+    });
+    svb.tplId = match ? match.id : (exists ? svb.tplId : svb.templates.length ? svb.templates[0].id : null);
+  }
   function svbApply(d) {
     if (!d) return;
     if ('hasKey' in d) {
@@ -766,7 +861,7 @@ function renderEditor(chat) {
     }
     if (Array.isArray(d.templates)) svb.templates = d.templates;
     if ('hasSchedule' in d) svb.hasSchedule = !!d.hasSchedule;
-    if (!svb.templates.some(t => String(t.id) === String(svb.tplId))) svb.tplId = svb.templates.length ? svb.templates[0].id : null;
+    svbSyncTemplate();
   }
   async function svbLoad() {
     if (svb.loading) return;
@@ -776,16 +871,20 @@ function renderEditor(chat) {
   function svbEnsure() { if (svbNode && svb.lock && svb.hasKey && !svb.loaded && !svb.loading && !svb.off) svbLoad(); }
   async function svbRun(name, call, refetch) {
     if (svb.busy) return;
-    svb.busy = name; svb.msg = null; svbPaint();
+    svb.busy = name; svb.msg = { kind: 'ok', text: 'Виконую…' }; svbPaint();
     try {
       const d = await call();
       svbApply(d);
       svb.msg = { kind: 'ok', text: (d && d.message) || 'Готово ✓' };
+      svb.scrollMsg = true;
       haptic('success');
       if (refetch) { try { svbApply(await api('GET', svbBase())); svb.loaded = true; } catch { /* the action itself succeeded */ } }
-    } catch (e) { svb.msg = { kind: 'err', text: svbText(e) }; haptic('error'); } finally { svb.busy = ''; svbPaint(); }
+    } catch (e) { svb.msg = { kind: 'err', text: svbText(e) }; svb.scrollMsg = true; haptic('error'); } finally { svb.busy = ''; svbPaint(); }
   }
-  const svbAsk = ask => new Promise(resolve => tg.showConfirm ? tg.showConfirm(ask, resolve) : resolve(confirm(ask)));
+  const svbAsk = ask => new Promise(resolve => {
+    try { tg.showConfirm ? tg.showConfirm(ask, resolve) : resolve(confirm(ask)); }
+    catch { resolve(confirm(ask)); } // an old Telegram client without showConfirm
+  });
   function svbConnect() {
     const key = keyIn.value.trim();
     if (!key) { svb.msg = { kind: 'err', text: 'Введіть ключ каналу.' }; svbPaint(); return; }
@@ -824,7 +923,7 @@ function renderEditor(chat) {
       const sel = h('select', { id: 'svbTpl', 'aria-label': 'Готові шаблони', disabled: busy },
         svb.templates.map(t => h('option', { value: String(t.id), text: t.name })));
       sel.value = String(svb.tplId);
-      sel.addEventListener('change', () => { svb.tplId = sel.value; });
+      sel.addEventListener('change', () => { svb.tplId = sel.value; svb.manualTemplate = true; });
       const mb = toggle('Враховувати можливі відключення', 'svbMaybe', 'svbMaybe', { disabled: !svb.has });
       mb.cb.disabled = busy || !svb.has;
       mb.cb.addEventListener('change', () => { svb.msg = null; });
@@ -834,15 +933,20 @@ function renderEditor(chat) {
           h('div', { class: 'fl' }, btn('forget', 'ghost sm', 'Забути ключ', svbForget), help('svbForget'))),
         h('div', { class: 'svbblk' }, h('div', { class: 'fl big' }, h('span', { text: 'Графік вашої черги' }), help('svbPush')),
           mb, svb.has ? null : svb.lock(),
-          btn('push', 'primary', 'Надіслати мій графік у Світлобот', () => svbRun('push', () => api('POST', svbBase() + '/push', { includeMaybe: !!s.svbMaybe }), true), !svb.has)),
+          btn('push', 'primary', 'Оновити графік у Світлоботі', () => svbRun('push', () => api('POST', svbBase() + '/push', { includeMaybe: !!s.svbMaybe }), true), !svb.has)),
         svb.templates.length ? h('div', { class: 'svbblk' }, fieldLabel('Готові шаблони', 'svbTpl', 'svbTpl'), sel,
           btn('tpl', 'ghost', 'Підключити шаблон', () => svbRun('tpl', () => api('POST', svbBase() + '/template', { templateId: Number(svb.tplId) }), true), svb.tplId == null)) : null,
         h('div', { class: 'svbblk' }, h('div', { class: 'fl big' }, h('span', { text: 'Розклад у Світлоботі' }), help('svbDel')),
-          svb.hasSchedule == null ? null : h('p', { class: 'hint', text: svb.hasSchedule ? 'Розклад зараз опубліковано.' : 'Розкладу ще немає.' }),
+          svb.hasSchedule == null ? null : h('p', { class: 'hint', text: svb.hasSchedule ? 'Розклад налаштовано у Світлоботі.' : 'Розкладу ще немає.' }),
           btn('del', 'danger', 'Видалити розклад у Світлоботі', svbDelete)),
       ];
     }
-    svbNode.replaceChildren(...[head, ...body, msg].filter(Boolean));
+    svbNode.replaceChildren(...[head, msg, ...body].filter(Boolean));
+    // The card is long, so the answer sits right under its title and is brought into view.
+    if (msg && svb.scrollMsg) {
+      svb.scrollMsg = false;
+      try { msg.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* optional */ }
+    }
   }
 
   function renderSched() {
@@ -853,6 +957,7 @@ function renderEditor(chat) {
       return;
     }
     const has = !!groupOf(), off = slotOf('off'), on = slotOf('on');
+    svbSyncTemplate();
     const lock = () => has ? null : h('div', { class: 'lockhint' }, h('span', { class: 'hint', text: 'Спершу оберіть адресу або чергу.' }),
       h('button', { type: 'button', class: 'btn ghost sm', text: 'Адреса і черга', onclick: () => setTab('addr') }));
     const edit = (id, label) => slotOf(id) ? h('button', { type: 'button', class: 'btn ghost sm', text: label, onclick: () => openSlot(id) }) : null;

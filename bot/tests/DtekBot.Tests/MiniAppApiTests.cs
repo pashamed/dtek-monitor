@@ -662,6 +662,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         {
             c.GroupId = "45.1";
             c.AddressLabel = "вул. А";
+            c.AddressCity = "м. Буча";
             c.AddressStreet = "вул. А";
             c.AddressHouse = "1";
             c.ScheduleNotify = true;
@@ -674,10 +675,62 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal("odesa", channel.RegionId);
         Assert.Null(channel.GroupId);
         Assert.Null(channel.AddressLabel);
+        Assert.Null(channel.AddressCity);
         Assert.Null(channel.AddressStreet);
         Assert.Null(channel.AddressHouse);
         Assert.False(channel.ScheduleNotify);
         Assert.False(channel.SchedulePost);
+    }
+
+    [Fact]
+    public async Task ManualAddress_SaveAndDelete_PreservesManuallySelectedGroup()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => { c.RegionId = "odesa"; c.GroupId = "2.1"; });
+
+        var save = await client.PutJsonAsync(
+            $"/api/chats/{userId}/address/manual",
+            new ManualAddressRequest("odesa", "м. Буча", "вул. Центральна", "12А"));
+
+        Assert.Equal(HttpStatusCode.OK, save.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal(("м. Буча", "вул. Центральна", "12А", "м. Буча, вул. Центральна, 12А"),
+            (saved.AddressCity, saved.AddressStreet, saved.AddressHouse, saved.AddressLabel));
+        Assert.Equal("2.1", saved.GroupId);
+
+        var delete = await client.DeleteAsync($"/api/chats/{userId}/address/manual");
+
+        Assert.Equal(HttpStatusCode.OK, delete.StatusCode);
+        var deleted = LoadChannel(userId)!;
+        Assert.Null(deleted.AddressCity);
+        Assert.Null(deleted.AddressStreet);
+        Assert.Null(deleted.AddressHouse);
+        Assert.Null(deleted.AddressLabel);
+        Assert.Equal("2.1", deleted.GroupId);
+    }
+
+    [Fact]
+    public async Task Status_ValidatesDistrictsAndUsesTheSelectedRegionDraft()
+    {
+        var (userId, client) = NewUser();
+        _factory.WithDb(db => db.RegionStates.Add(new RegionState
+        {
+            RegionId = "kyiv",
+            Kind = DtekBot.Api.Parsing.PopupKind.Emergency,
+            PartIdList = ["darnytskyi"],
+            Hash = "h",
+            ObservedAt = _factory.Clock.Now,
+            UpdatedAt = _factory.Clock.Now,
+        }));
+
+        var response = await client.GetAsync($"/api/chats/{userId}/status?regionId=kyiv&partIds=obolonskyi");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var status = await response.ReadAsync<ChatStatusDto>();
+        Assert.Equal("✅ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", status!.Lines[0]);
+
+        var invalid = await client.GetAsync($"/api/chats/{userId}/status?regionId=kyiv&partIds=unknown");
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
     }
 
     [Fact]
@@ -687,6 +740,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         SeedChannel(userId, c =>
         {
             c.GroupId = "45.1";
+            c.AddressCity = "м. Буча";
             c.AddressStreet = "вул. А";
             c.OutageTrigger = true;
             c.ScheduleNotify = true;
@@ -698,6 +752,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var channel = LoadChannel(userId)!;
         Assert.False(channel.IsActive);
         Assert.Null(channel.GroupId);
+        Assert.Null(channel.AddressCity);
         Assert.Null(channel.AddressStreet);
         Assert.False(channel.OutageTrigger);
         Assert.False(channel.ScheduleNotify);

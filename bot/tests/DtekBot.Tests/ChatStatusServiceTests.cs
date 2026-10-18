@@ -27,14 +27,20 @@ public sealed class ChatStatusServiceTests : IDisposable
     private Channel AddChannel(Action<Channel>? configure = null, string regionId = "kyiv") =>
         _f.AddChannel(Chat, configure, regionId);
 
-    private Task<IReadOnlyList<string>> BuildAsync(Channel? channel) => _service.BuildAsync(channel, CancellationToken.None);
+    private Task<IReadOnlyList<string>> BuildAsync(Channel? channel, string? regionId = null) =>
+        _service.BuildAsync(channel, CancellationToken.None, regionId);
 
-    private void StoreState(PopupKind kind, string regionId = "kyiv", DateTimeOffset? observed = null)
+    private void StoreState(
+        PopupKind kind,
+        string regionId = "kyiv",
+        DateTimeOffset? observed = null,
+        IReadOnlyList<string>? partIds = null)
     {
         _f.Db.RegionStates.Add(new RegionState
         {
             RegionId = regionId,
             Kind = kind,
+            PartIdList = partIds,
             Hash = "h",
             ObservedAt = observed ?? new DateTimeOffset(2026, 7, 15, 12, 0, 0, TimeSpan.Zero),
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -145,6 +151,31 @@ public sealed class ChatStatusServiceTests : IDisposable
         var lines = await BuildAsync(channel);
 
         Assert.Equal(["Даних із сайту ДТЕК ще немає."], lines);
+    }
+
+    [Fact]
+    public async Task RequestedRegion_IsUsedInsteadOfSavedRegion()
+    {
+        StoreState(PopupKind.Emergency, "odesa");
+        var channel = AddChannel(c => c.GroupId = "45.1");
+
+        var lines = await BuildAsync(channel, "odesa");
+
+        Assert.Equal("🚨 На сайті ДТЕК діють екстрені відключення.", lines[0]);
+        Assert.DoesNotContain(lines, line => line.Contains("45.1"));
+        Assert.Empty(_schedules.Calls);
+    }
+
+    [Fact]
+    public async Task EmergencyPopupForOtherDistricts_IsNotShownAsApplyingToChat()
+    {
+        StoreState(PopupKind.Emergency, partIds: ["north"]);
+        var channel = AddChannel(c => c.PartIdList = ["south"]);
+
+        var lines = await BuildAsync(channel);
+
+        Assert.Equal("✅ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", lines[0]);
+        Assert.DoesNotContain(lines, line => line.Contains("🚨"));
     }
 
     // ---- Yasno group emergency ----

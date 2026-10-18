@@ -23,6 +23,7 @@ public sealed record CheckRequestResult(RequestOutcome Outcome, string Message);
 
 public sealed record PendingStreet(
     [property: JsonPropertyName("regionId")] string RegionId,
+    [property: JsonPropertyName("city")] string City,
     [property: JsonPropertyName("street")] string Street,
     [property: JsonPropertyName("houses")] IReadOnlyList<string> Houses);
 
@@ -35,6 +36,7 @@ public sealed record HouseResultEntry(
 
 public sealed record StreetResult(
     [property: JsonPropertyName("regionId")] string RegionId,
+    [property: JsonPropertyName("city")] string? City,
     [property: JsonPropertyName("street")] string Street,
     [property: JsonPropertyName("houses")] Dictionary<string, HouseResultEntry>? Houses);
 
@@ -64,9 +66,15 @@ public sealed class AddressCheckService(
         }
 
         var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
-        if (region is null || !region.HasGroups)
+        if (region is null || string.IsNullOrWhiteSpace(region.SiteUrl))
         {
             return new(RequestOutcome.NoAddress, "Для цього регіону перевірка за адресою поки недоступна.");
+        }
+
+        var city = channel.AddressCity ?? "";
+        if (!region.HasGroups && string.IsNullOrWhiteSpace(city))
+        {
+            return new(RequestOutcome.NoAddress, "Спершу вкажіть населений пункт разом із вулицею та будинком.");
         }
 
         await ExpireStaleAsync(now, ct);
@@ -78,7 +86,8 @@ public sealed class AddressCheckService(
 
         var cutoff = now - TimeSpan.FromMinutes(Limits.ResultCacheMinutes);
         var cached = await db.AddressResults.FirstOrDefaultAsync(r =>
-            r.RegionId == channel.RegionId && r.Street == channel.AddressStreet && r.House == channel.AddressHouse
+            r.RegionId == channel.RegionId && r.City == city
+            && r.Street == channel.AddressStreet && r.House == channel.AddressHouse
             && r.CheckedAt >= cutoff, ct);
         if (cached is not null)
         {
@@ -107,6 +116,7 @@ public sealed class AddressCheckService(
         {
             ChatId = channel.ChatId,
             RegionId = channel.RegionId,
+            City = city,
             Street = channel.AddressStreet,
             House = channel.AddressHouse,
             Label = channel.AddressLabel ?? $"{channel.AddressStreet}, {channel.AddressHouse}",
@@ -158,9 +168,9 @@ public sealed class AddressCheckService(
             .ToListAsync(ct);
 
         return pending
-            .GroupBy(c => (c.RegionId, c.Street))
+            .GroupBy(c => (c.RegionId, c.City, c.Street))
             .Take(Limits.MaxStreetsPerRun)
-            .Select(g => new PendingStreet(g.Key.RegionId, g.Key.Street, g.Select(c => c.House).Distinct().ToList()))
+            .Select(g => new PendingStreet(g.Key.RegionId, g.Key.City, g.Key.Street, g.Select(c => c.House).Distinct().ToList()))
             .ToList();
     }
 
@@ -171,13 +181,14 @@ public sealed class AddressCheckService(
 
         foreach (var street in request.Results ?? [])
         {
+            var city = street.City ?? "";
             foreach (var (house, entry) in street.Houses ?? [])
             {
                 var result = await db.AddressResults.FirstOrDefaultAsync(r =>
-                    r.RegionId == street.RegionId && r.Street == street.Street && r.House == house, ct);
+                    r.RegionId == street.RegionId && r.City == city && r.Street == street.Street && r.House == house, ct);
                 if (result is null)
                 {
-                    result = new AddressResult { RegionId = street.RegionId, Street = street.Street, House = house };
+                    result = new AddressResult { RegionId = street.RegionId, City = city, Street = street.Street, House = house };
                     db.AddressResults.Add(result);
                 }
 
@@ -192,7 +203,8 @@ public sealed class AddressCheckService(
             await db.SaveChangesAsync(ct);
 
             var waiting = await db.AddressChecks
-                .Where(c => c.Status == AddressCheckStatus.Pending && c.RegionId == street.RegionId && c.Street == street.Street)
+                .Where(c => c.Status == AddressCheckStatus.Pending && c.RegionId == street.RegionId
+                    && c.City == city && c.Street == street.Street)
                 .ToListAsync(ct);
             foreach (var check in waiting)
             {
@@ -202,7 +214,8 @@ public sealed class AddressCheckService(
                 }
 
                 var result = await db.AddressResults.FirstAsync(r =>
-                    r.RegionId == check.RegionId && r.Street == check.Street && r.House == check.House, ct);
+                    r.RegionId == check.RegionId && r.City == check.City
+                    && r.Street == check.Street && r.House == check.House, ct);
                 await TrySendAsync(check.ChatId, await BuildReplyAsync(check.Label, result, check.RegionId, ct), ct);
                 check.Status = AddressCheckStatus.Done;
                 check.CompletedAt = now;
@@ -241,7 +254,7 @@ public sealed class AddressCheckService(
 
         if (!result.Found)
         {
-            lines.Add($"❓ Адресу «{where}» не знайдено на сайті ДТЕК. Перевірте адресу в редакторі.");
+            lines.Add($"❓ Адресу «{where}» не знайдено на сайті ДТЕК. Перевірте, що населений пункт, вулицю й будинок введено точно так, як на сайті ДТЕК.");
         }
         else if (result.IsEmergency)
         {

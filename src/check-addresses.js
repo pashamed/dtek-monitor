@@ -69,15 +69,16 @@ async function openRegion(browser, region) {
   return { context, page, csrfToken: await tag.getAttribute("content") }
 }
 
-// One call returns every house on the street.
-async function getStreetHouses(session, region, street) {
+// One call returns every house on the street. For DTEK regional sites the city is required;
+// Kyiv city uses the same form without a city field.
+async function getStreetHouses(session, region, pending) {
   const info = await session.page.evaluate(
-    async ({ street, csrfToken, needsCity }) => {
+    async ({ street, city, csrfToken, needsCity }) => {
       const form = new URLSearchParams()
       form.append("method", "getHomeNum")
       if (needsCity) {
         form.append("data[0][name]", "city")
-        form.append("data[0][value]", "")
+        form.append("data[0][value]", city)
       }
       form.append("data[1][name]", "street")
       form.append("data[1][value]", street)
@@ -94,7 +95,12 @@ async function getStreetHouses(session, region, street) {
       })
       return await response.json()
     },
-    { street, csrfToken: session.csrfToken, needsCity: region.Id !== "kyiv" }
+    {
+      street: pending.street,
+      city: pending.city ?? "",
+      csrfToken: session.csrfToken,
+      needsCity: region.Id !== "kyiv",
+    }
   )
   return info?.data && typeof info.data === "object" ? info.data : {}
 }
@@ -116,7 +122,7 @@ function buildStreetResult(pending, houses) {
         }
       : { found: false }
   }
-  return { regionId: pending.regionId, street: pending.street, houses: result }
+  return { regionId: pending.regionId, city: pending.city ?? "", street: pending.street, houses: result }
 }
 
 async function postResults(results) {
@@ -174,7 +180,7 @@ async function run() {
       try {
         for (const street of streets) {
           try {
-            const houses = await getStreetHouses(session, region, street.street)
+            const houses = await getStreetHouses(session, region, street)
             results.push(buildStreetResult(street, houses))
             console.log(
               `ℹ️ ${regionId}: street checked (${street.houses.length} house(s) requested, ${Object.keys(houses).length} on the street)`
