@@ -46,6 +46,24 @@ public sealed class AddressDirectoryApiTests : IDisposable
         Assert.Null(_factory.DtekAddresses.ImportedDirectory);
     }
 
+    [Fact]
+    public async Task BlankStreetEntriesAreIgnoredWhenImportingDirectory()
+    {
+        var response = await _client.PostAsJsonAsync("/ingest/address-directory", new
+        {
+            regionId = "kyiv-oblast",
+            streets = new Dictionary<string, string[]>
+            {
+                ["м. Ірпінь"] = ["вул. Західна", "", "   "],
+            },
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            new[] { "вул. Західна" },
+            _factory.DtekAddresses.ImportedDirectory!["м. Ірпінь"]);
+    }
+
     public void Dispose()
     {
         _client.Dispose();

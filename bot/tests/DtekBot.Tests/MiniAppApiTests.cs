@@ -784,7 +784,14 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task DtekAddressLookup_UsesSelectedRegionCityAndStreet()
     {
-        var (_, client) = NewUser();
+        var (userId, client) = NewUser();
+        SeedChannel(userId, channel =>
+        {
+            channel.RegionId = "odesa";
+            channel.GroupId = "6.2";
+            channel.AddressCity = "м. Одеса";
+            channel.AddressStreet = "вул. Дерибасівська";
+        });
 
         var cities = await client.GetAsync("/api/address/cities?regionId=odesa&query=%D0%9E%D0%B4%D0%B5%D1%81%D0%B0");
         var streets = await client.GetAsync("/api/address/streets?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&query=%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81");
@@ -795,7 +802,34 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(new DtekAddressHouseDto("12", "6.2"), Assert.Single((await houses.ReadAsync<DtekAddressHouseDto[]>())!));
         Assert.Equal(("odesa", "", "Одеса"), _factory.DtekAddresses.LastCitySearch);
         Assert.Equal(("odesa", "м. Одеса", "Дерибас"), _factory.DtekAddresses.LastStreetSearch);
-        Assert.Equal(("odesa", "м. Одеса", "вул. Дерибасівська", "12"), _factory.DtekAddresses.LastHouseSearch);
+        Assert.Null(_factory.DtekAddresses.LastHouseSearch);
+    }
+
+    [Fact]
+    public async Task DtekAddressLookup_AllowsFreeHouseAndDoesNotGuessWhenStreetHasMultipleGroups()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, channel =>
+        {
+            channel.RegionId = "odesa";
+            channel.GroupId = "6.2";
+            channel.AddressCity = "м. Одеса";
+            channel.AddressStreet = "вул. Дерибасівська";
+        });
+
+        var unique = await client.GetAsync("/api/address/houses?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&street=%D0%B2%D1%83%D0%BB.%20%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81%D1%96%D0%B2%D1%81%D1%8C%D0%BA%D0%B0&query=999");
+        Assert.Equal(new DtekAddressHouseDto("999", "6.2"), Assert.Single((await unique.ReadAsync<DtekAddressHouseDto[]>())!));
+
+        SeedChannel(_factory.NextId(), channel =>
+        {
+            channel.RegionId = "odesa";
+            channel.GroupId = "3.1";
+            channel.AddressCity = "м. Одеса";
+            channel.AddressStreet = "вул. Дерибасівська";
+        });
+
+        var ambiguous = await client.GetAsync("/api/address/houses?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&street=%D0%B2%D1%83%D0%BB.%20%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81%D1%96%D0%B2%D1%81%D1%8C%D0%BA%D0%B0&query=1000");
+        Assert.Equal(new DtekAddressHouseDto("1000", null), Assert.Single((await ambiguous.ReadAsync<DtekAddressHouseDto[]>())!));
     }
 
     [Fact]
@@ -821,7 +855,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task DtekAddressSave_ValidatesTheDtekHouseAndScheduleGroup()
+    public async Task DtekAddressSave_ValidatesTheScheduleGroupWithoutCallingDtek()
     {
         var (userId, client) = NewUser();
         SeedChannel(userId, channel => channel.RegionId = "odesa");
@@ -838,7 +872,50 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var saved = LoadChannel(userId)!;
         Assert.Equal(("м. Одеса", "вул. Дерибасівська", "12", "м. Одеса, вул. Дерибасівська, 12", "6.2"),
             (saved.AddressCity, saved.AddressStreet, saved.AddressHouse, saved.AddressLabel, saved.GroupId));
-        Assert.Equal(("odesa", "м. Одеса", "вул. Дерибасівська", "12"), _factory.DtekAddresses.LastHouseSearch);
+        Assert.Null(_factory.DtekAddresses.LastHouseSearch);
+    }
+
+    [Fact]
+    public async Task DtekAddressSave_AllowsFreeHouseAndInfersUniqueStreetGroup()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, channel => channel.RegionId = "odesa");
+        SeedChannel(_factory.NextId(), channel =>
+        {
+            channel.RegionId = "odesa";
+            channel.GroupId = "6.2";
+            channel.AddressCity = "м. Одеса";
+            channel.AddressStreet = "вул. Дерибасівська";
+        });
+        _factory.Schedules.Snapshots["odesa"] = new ScheduleSnapshot(
+            "odesa", "version", _factory.Clock.Now, null,
+            _factory.Clock.Now.AddDays(-1), _factory.Clock.Now.AddDays(1),
+            new Dictionary<string, GroupSchedule> { ["6.2"] = new("6.2", []) });
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}/address/dtek",
+            new SetDtekAddressRequest("odesa", "м. Одеса", "вул. Дерибасівська", "999", null));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal(("999", "6.2"), (saved.AddressHouse, saved.GroupId));
+        Assert.Null(_factory.DtekAddresses.LastHouseSearch);
+    }
+
+    [Fact]
+    public async Task DtekAddressSave_AllowsFreeHouseWhenNoStreetGroupIsKnown()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, channel => channel.RegionId = "odesa");
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}/address/dtek",
+            new SetDtekAddressRequest("odesa", "м. Одеса", "вул. Дерибасівська", "999", null));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal(("999", null), (saved.AddressHouse, saved.GroupId));
+        Assert.Null(_factory.DtekAddresses.LastHouseSearch);
     }
 
     [Fact]

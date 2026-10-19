@@ -48,19 +48,26 @@ public static class AddressDirectoryApi
             foreach (var (city, streets) in body.Streets)
             {
                 if (string.IsNullOrWhiteSpace(city) || city.Length > MaxNameLength
-                    || streets is null || streets.Count == 0)
+                    || streets is null)
                 {
                     return Results.BadRequest(new { error = "invalid address directory entry" });
                 }
 
-                streetCount += streets.Count;
-                if (streetCount > MaxStreets || streets.Any(street =>
-                        string.IsNullOrWhiteSpace(street) || street.Length > MaxNameLength))
+                var validStreets = streets
+                    .Where(street => !string.IsNullOrWhiteSpace(street))
+                    .ToArray();
+                if (validStreets.Length == 0)
+                {
+                    return Results.BadRequest(new { error = "invalid address directory entry" });
+                }
+
+                streetCount += validStreets.Length;
+                if (streetCount > MaxStreets || validStreets.Any(street => street.Length > MaxNameLength))
                 {
                     return Results.BadRequest(new { error = "invalid or oversized address directory" });
                 }
 
-                if (!normalized.TryAdd(city, streets))
+                if (!normalized.TryAdd(city, validStreets))
                 {
                     return Results.BadRequest(new { error = "duplicate city in address directory" });
                 }
