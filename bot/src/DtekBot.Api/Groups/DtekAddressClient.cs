@@ -1,8 +1,10 @@
 using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DtekBot.Api.Data;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace DtekBot.Api.Groups;
@@ -13,7 +15,10 @@ public interface IDtekAddressClient
     Task<IReadOnlyList<string>> SearchStreetsAsync(RegionSettings region, string city, string query, CancellationToken ct);
     Task<IReadOnlyList<DtekAddressHouseDto>> SearchHousesAsync(
         RegionSettings region, string city, string street, string query, CancellationToken ct);
-    void ImportDirectory(RegionSettings region, IReadOnlyDictionary<string, IReadOnlyList<string>> streets);
+    Task ImportDirectoryAsync(
+        RegionSettings region,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> streets,
+        CancellationToken ct);
 }
 
 public sealed class DtekAddressUnavailableException(string regionName, Exception? inner = null)
@@ -22,15 +27,37 @@ public sealed class DtekAddressUnavailableException(string regionName, Exception
 public sealed partial class DtekAddressClient(
     HttpClient http,
     IMemoryCache cache,
+    BotDbContext db,
+    TimeProvider time,
     ILogger<DtekAddressClient> logger) : IDtekAddressClient
 {
-    private static readonly TimeSpan DirectoryCacheDuration = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan ImportedDirectoryCacheDuration = TimeSpan.FromHours(1);
+    private static readonly TimeSpan DirectoryCacheDuration = TimeSpan.FromMinutes(1);
 
-    public void ImportDirectory(RegionSettings region, IReadOnlyDictionary<string, IReadOnlyList<string>> streets)
+    public async Task ImportDirectoryAsync(
+        RegionSettings region,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> streets,
+        CancellationToken ct)
     {
+        var row = await db.AddressDirectories.SingleOrDefaultAsync(entry => entry.RegionId == region.Id, ct);
+        var json = JsonSerializer.Serialize(streets);
+        if (row is null)
+        {
+            db.AddressDirectories.Add(new AddressDirectoryState
+            {
+                RegionId = region.Id,
+                Data = json,
+                UpdatedAt = time.GetUtcNow(),
+            });
+        }
+        else
+        {
+            row.Data = json;
+            row.UpdatedAt = time.GetUtcNow();
+        }
+
+        await db.SaveChangesAsync(ct);
         var directory = streets.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        cache.Set(DirectoryCacheKey(region.Id), directory, ImportedDirectoryCacheDuration);
+        cache.Set(DirectoryCacheKey(region.Id), directory, DirectoryCacheDuration);
     }
 
     public async Task<IReadOnlyList<string>> SearchCitiesAsync(RegionSettings region, string query, CancellationToken ct)
@@ -122,6 +149,18 @@ public sealed partial class DtekAddressClient(
             async entry =>
             {
                 entry.AbsoluteExpirationRelativeToNow = DirectoryCacheDuration;
+                var stored = await db.AddressDirectories.AsNoTracking()
+                    .SingleOrDefaultAsync(row => row.RegionId == region.Id, ct);
+                if (stored is not null)
+                {
+                    var persisted = JsonSerializer.Deserialize<Dictionary<string, List<string>>>(stored.Data)
+                        ?? throw new JsonException($"Stored DTEK address directory for {region.Id} is empty.");
+                    return persisted.ToDictionary(
+                        pair => pair.Key,
+                        pair => (IReadOnlyList<string>)pair.Value,
+                        StringComparer.OrdinalIgnoreCase);
+                }
+
                 var response = await PostAjaxAsync(region, [new("method", "getStreets")], ct);
                 if (!response.TryGetProperty("streets", out var streets) || streets.ValueKind != JsonValueKind.Object)
                 {
@@ -140,6 +179,7 @@ public sealed partial class DtekAddressClient(
                     }
                 }
 
+                await ImportDirectoryAsync(region, directory, ct);
                 return directory;
             })
         ?? throw new DtekAddressUnavailableException(region.Name);

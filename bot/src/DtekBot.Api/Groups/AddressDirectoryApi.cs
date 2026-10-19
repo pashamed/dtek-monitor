@@ -16,13 +16,14 @@ public static class AddressDirectoryApi
 
     public static void MapAddressDirectoryIngest(this WebApplication app)
     {
-        app.MapPost("/ingest/address-directory", (
+        app.MapPost("/ingest/address-directory", async (
             AddressDirectoryIngestRequest body,
             HttpRequest request,
             IDtekAddressClient addresses,
             IOptionsMonitor<DtekSettings> settings,
             IConfiguration config,
-            ILogger<Program> logger) =>
+            ILogger<Program> logger,
+            CancellationToken ct) =>
         {
             if (!Security.SecretMatches(request.Headers["X-Ingest-Secret"].ToString(), config["Ingest:Secret"]))
             {
@@ -65,7 +66,7 @@ public static class AddressDirectoryApi
                 }
             }
 
-            addresses.ImportDirectory(region, normalized);
+            await addresses.ImportDirectoryAsync(region, normalized, ct);
             logger.LogInformation(
                 "Address directory refreshed for {RegionId}: {Cities} cities, {Streets} streets",
                 region.Id, normalized.Count, streetCount);

@@ -756,7 +756,7 @@ function renderEditor(chat) {
         });
         if (!items.length) resultStatus.textContent = 'Населених пунктів за цим запитом не знайдено.';
       } catch (e) {
-        if (my === citySeq) { cityList.replaceChildren(); ctx.fail(e); }
+        if (my === citySeq) { cityList.replaceChildren(); resultStatus.textContent = ''; ctx.fail(e); }
       }
     }
 

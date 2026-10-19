@@ -257,6 +257,13 @@ public sealed class KeyValue
     public string Value { get; set; } = "";
 }
 
+public sealed class AddressDirectoryState
+{
+    public string RegionId { get; set; } = "";
+    public string Data { get; set; } = "";
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 // Latest known status of one power group, as reported by the Yasno planned-outages feed.
 public sealed class GroupState
 {
@@ -323,6 +330,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<GroupState> GroupStates => Set<GroupState>();
     public DbSet<AddressCheck> AddressChecks => Set<AddressCheck>();
     public DbSet<AddressResult> AddressResults => Set<AddressResult>();
+    public DbSet<AddressDirectoryState> AddressDirectories => Set<AddressDirectoryState>();
     public DbSet<KeyValue> KeyValues => Set<KeyValue>();
     public DbSet<ScheduleThread> ScheduleThreads => Set<ScheduleThread>();
     public DbSet<SchedulePostThread> SchedulePostThreads => Set<SchedulePostThread>();
@@ -396,6 +404,13 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.HasKey(x => x.Key);
             e.Property(x => x.Key).HasMaxLength(64);
             e.Property(x => x.Value).HasMaxLength(256);
+        });
+
+        modelBuilder.Entity<AddressDirectoryState>(e =>
+        {
+            e.HasKey(x => x.RegionId);
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.Data).IsRequired();
         });
 
         modelBuilder.Entity<GroupState>(e =>

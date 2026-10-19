@@ -168,8 +168,14 @@ public sealed class FakeDtekAddressClient : IDtekAddressClient
         return Task.FromResult(Houses);
     }
 
-    public void ImportDirectory(RegionSettings region, IReadOnlyDictionary<string, IReadOnlyList<string>> streets) =>
+    public Task ImportDirectoryAsync(
+        RegionSettings region,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> streets,
+        CancellationToken ct)
+    {
         ImportedDirectory = streets;
+        return Task.CompletedTask;
+    }
 }
 
 public sealed class FakeYasnoClient : IYasnoClient
