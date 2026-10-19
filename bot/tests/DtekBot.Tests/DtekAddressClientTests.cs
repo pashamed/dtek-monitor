@@ -50,10 +50,11 @@ public sealed class DtekAddressClientTests
     private static HttpResponseMessage Json(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
-    private static DtekAddressClient Create(FakeHandler handler) =>
+    private static DtekAddressClient Create(FakeHandler handler, TimeProvider? time = null) =>
         new(
             new HttpClient(handler),
             new MemoryCache(new MemoryCacheOptions()),
+            time ?? TimeProvider.System,
             NullLogger<DtekAddressClient>.Instance);
 
     [Fact]
@@ -102,14 +103,15 @@ public sealed class DtekAddressClientTests
             bodies.Last());
         var houseRequest = WebUtility.UrlDecode(bodies.Last());
         Assert.Contains("data[1][name]=street&data[1][value]=вул. Дерибасівська", houseRequest);
-        Assert.Matches(@"data\[2\]\[value\]=\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}:\d{2}", houseRequest);
+        Assert.Contains("data[2][name]=house_num&data[2][value]=12", houseRequest);
+        Assert.Matches(@"data\[3\]\[name\]=updateFact&data\[3\]\[value\]=\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}", houseRequest);
     }
 
     [Fact]
     public async Task SearchesKyivOblastHouses_AndParsesKremQueueReasonShape()
     {
         const string kremHouses =
-            """{"result":true,"data":{"8":{"sub_type_reason":["GPV3.2"]},"10/139":{"sub_type_reason":["GPV3.2"]},"10/140":{"sub_type_reason":["GPV3.2"]}}}""";
+            """{"result":true,"data":{"8":{"sub_type_reason":["GPV3.2"]},"14":{"sub_type_reason":["GPV3.2"]},"10/139":{"sub_type_reason":["GPV3.2"]},"4":{"sub_type_reason":["GPV3.2"]},"10/140":{"sub_type_reason":["GPV3.2"]},"10/156":{"sub_type_reason":["GPV3.2"]},"10/144/2":{"sub_type_reason":["GPV3.2"]},"12":{"sub_type_reason":["GPV3.2"]},"10/148-1":{"sub_type_reason":["GPV3.2"]},"10":{"sub_type_reason":["GPV3.2"]},"6":{"sub_type_reason":["GPV3.2"]},"10/143":{"sub_type_reason":["GPV3.2"]},"2":{"sub_type_reason":["GPV3.2"]}}}""";
         string? requestBody = null;
         var handler = new FakeHandler(async (request, _) =>
         {
@@ -121,7 +123,8 @@ public sealed class DtekAddressClientTests
             requestBody = await request.Content!.ReadAsStringAsync();
             return Json(kremHouses);
         });
-        var client = Create(handler);
+        var clock = new TestClock(new DateTimeOffset(2026, 10, 19, 6, 50, 0, TimeSpan.Zero));
+        var client = Create(handler, clock);
         var region = new RegionSettings
         {
             Id = "kyiv-oblast",
@@ -130,14 +133,22 @@ public sealed class DtekAddressClientTests
         };
 
         var houses = await client.SearchHousesAsync(
-            region, "м. Ірпінь", "вул. Шевченка", "10/139", CancellationToken.None);
+            region, "м. Ірпінь", "вул. Західна", "2", CancellationToken.None);
 
-        Assert.Equal([new DtekBot.Shared.DtekAddressHouseDto("10/139", "3.2")], houses);
+        Assert.Equal(
+            [
+                new DtekBot.Shared.DtekAddressHouseDto("10/144/2", "3.2"),
+                new DtekBot.Shared.DtekAddressHouseDto("12", "3.2"),
+                new DtekBot.Shared.DtekAddressHouseDto("2", "3.2"),
+            ],
+            houses);
         Assert.Single(handler.Requests, request => request.Method == HttpMethod.Post);
         var body = WebUtility.UrlDecode(requestBody);
         Assert.Contains("method=getHomeNum", body);
         Assert.Contains("data[0][name]=city&data[0][value]=м. Ірпінь", body);
-        Assert.Contains("data[1][name]=street&data[1][value]=вул. Шевченка", body);
+        Assert.Contains("data[1][name]=street&data[1][value]=вул. Західна", body);
+        Assert.Contains("data[2][name]=house_num&data[2][value]=2", body);
+        Assert.Contains("data[3][name]=updateFact&data[3][value]=19.10.2026 09:50", body);
     }
 
     [Fact]

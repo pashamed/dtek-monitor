@@ -22,6 +22,7 @@ public sealed class DtekAddressUnavailableException(string regionName, Exception
 public sealed partial class DtekAddressClient(
     HttpClient http,
     IMemoryCache cache,
+    TimeProvider time,
     ILogger<DtekAddressClient> logger) : IDtekAddressClient
 {
     private static readonly TimeSpan DirectoryCacheDuration = TimeSpan.FromMinutes(10);
@@ -75,9 +76,11 @@ public sealed partial class DtekAddressClient(
             new("data[0][value]", city.Trim()),
             new("data[1][name]", "street"),
             new("data[1][value]", street.Trim()),
-            new("data[2][name]", "updateFact"),
-            new("data[2][value]", KyivTime.FromUtc(DateTimeOffset.UtcNow)
-                .ToString("dd.MM.yyyy, HH:mm:ss", CultureInfo.GetCultureInfo("uk-UA"))),
+            new("data[2][name]", "house_num"),
+            new("data[2][value]", query.Trim()),
+            new("data[3][name]", "updateFact"),
+            new("data[3][value]", KyivTime.FromUtc(time.GetUtcNow())
+                .ToString("dd.MM.yyyy HH:mm", CultureInfo.GetCultureInfo("uk-UA"))),
         ], ct);
 
         if (!response.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
