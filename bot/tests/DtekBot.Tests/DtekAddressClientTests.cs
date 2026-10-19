@@ -1,7 +1,11 @@
 using System.Net;
 using System.Text;
+using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
 using DtekBot.Api.Settings;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -24,6 +28,30 @@ public sealed class DtekAddressClientTests
         {
             Requests.Add(request);
             return await respond(request, ct);
+        }
+    }
+
+    private sealed class TestDatabase : IDisposable
+    {
+        private readonly SqliteConnection _connection = new("DataSource=:memory:");
+
+        public BotDbContext Context { get; }
+
+        public TestDatabase()
+        {
+            _connection.Open();
+            var options = new DbContextOptionsBuilder<BotDbContext>()
+                .UseSqlite(_connection)
+                .ReplaceService<IModelCustomizer, UtcTicksModelCustomizer>()
+                .Options;
+            Context = new BotDbContext(options);
+            Context.Database.EnsureCreated();
+        }
+
+        public void Dispose()
+        {
+            Context.Dispose();
+            _connection.Dispose();
         }
     }
 
@@ -50,10 +78,12 @@ public sealed class DtekAddressClientTests
     private static HttpResponseMessage Json(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
-    private static DtekAddressClient Create(FakeHandler handler) =>
+    private static DtekAddressClient Create(FakeHandler handler, BotDbContext db) =>
         new(
             new HttpClient(handler),
             new MemoryCache(new MemoryCacheOptions()),
+            db,
+            TimeProvider.System,
             NullLogger<DtekAddressClient>.Instance);
 
     [Fact]
@@ -73,7 +103,8 @@ public sealed class DtekAddressClientTests
                 ? Json(body.Contains("getHomeNum", StringComparison.Ordinal) ? Houses : StreetDirectory)
                 : new HttpResponseMessage(HttpStatusCode.NotFound);
         });
-        var client = Create(handler);
+        using var database = new TestDatabase();
+        var client = Create(handler, database.Context);
         var region = Region();
 
         var cities = await client.SearchCitiesAsync(region, "Одеса", CancellationToken.None);
@@ -122,7 +153,8 @@ public sealed class DtekAddressClientTests
             requestBody = await request.Content!.ReadAsStringAsync();
             return Json(kremHouses);
         });
-        var client = Create(handler);
+        using var database = new TestDatabase();
+        var client = Create(handler, database.Context);
         var region = new RegionSettings
         {
             Id = "kyiv-oblast",
@@ -154,21 +186,41 @@ public sealed class DtekAddressClientTests
     {
         var handler = new FakeHandler((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)));
-        var client = Create(handler);
+        using var database = new TestDatabase();
+        var client = Create(handler, database.Context);
         var region = new RegionSettings
         {
             Id = "kyiv-oblast",
             Name = "Київська область",
             SiteUrl = "https://www.dtek-krem.com.ua/ua/shutdowns",
         };
-        client.ImportDirectory(region, new Dictionary<string, IReadOnlyList<string>>
+        await client.ImportDirectoryAsync(region, new Dictionary<string, IReadOnlyList<string>>
         {
             ["м. Ірпінь"] = ["вул. Західна", "вул. Центральна"],
-        });
+        }, CancellationToken.None);
 
         Assert.Equal(["м. Ірпінь"], await client.SearchCitiesAsync(region, "Ірпінь", CancellationToken.None));
         Assert.Equal(["вул. Західна"], await client.SearchStreetsAsync(region, "м. Ірпінь", "Західна", CancellationToken.None));
         Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task DirectorySurvivesClientRestartAndUsesPersistedCacheWhenDtekIsBlocked()
+    {
+        using var database = new TestDatabase();
+        var importer = Create(new FakeHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden))), database.Context);
+        await importer.ImportDirectoryAsync(Region(), new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["м. Ірпінь"] = ["вул. Західна"],
+        }, CancellationToken.None);
+
+        var blockedHandler = new FakeHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)));
+        var restartedClient = Create(blockedHandler, database.Context);
+
+        Assert.Equal(["м. Ірпінь"], await restartedClient.SearchCitiesAsync(Region(), "Ірпінь", CancellationToken.None));
+        Assert.Equal(["вул. Західна"], await restartedClient.SearchStreetsAsync(
+            Region(), "м. Ірпінь", "Західна", CancellationToken.None));
+        Assert.Empty(blockedHandler.Requests);
     }
 
     [Fact]
@@ -178,7 +230,8 @@ public sealed class DtekAddressClientTests
         {
             Content = new StringContent("<html>challenge</html>"),
         }));
-        var client = Create(handler);
+        using var database = new TestDatabase();
+        var client = Create(handler, database.Context);
 
         var error = await Assert.ThrowsAsync<DtekAddressUnavailableException>(
             () => client.SearchCitiesAsync(Region(), "Одеса", CancellationToken.None));

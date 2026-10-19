@@ -129,6 +129,24 @@ namespace DtekBot.Api.Data.Migrations
                     b.ToTable("AddressResults");
                 });
 
+            modelBuilder.Entity("DtekBot.Api.Data.AddressDirectoryState", b =>
+                {
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Data")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("RegionId");
+
+                    b.ToTable("AddressDirectories");
+                });
+
             modelBuilder.Entity("DtekBot.Api.Data.Channel", b =>
                 {
                     b.Property<long>("ChatId")
