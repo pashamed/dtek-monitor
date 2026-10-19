@@ -25,6 +25,10 @@ function loadClassification() {
   return loadSettings().Dtek.Classification
 }
 
+function ingestEndpoint(path) {
+  return `${INGEST_URL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`
+}
+
 // Returns { ok: false } when the page is not the real DTEK page, so the caller
 // can skip it instead of reporting "no popup" (which would cancel an alert).
 async function readRegion(browser, region) {
@@ -109,7 +113,7 @@ async function readRegion(browser, region) {
 }
 
 async function ingestAddressDirectory(region, streets) {
-  const response = await fetch(`${INGEST_URL.replace(/\/+$/, "")}/ingest/address-directory`, {
+  const response = await fetch(ingestEndpoint("address-directory"), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -163,7 +167,7 @@ async function ingestGroups(region) {
     throw new Error("Yasno returned no groups")
   }
 
-  const response = await fetch(`${INGEST_URL.replace(/\/+$/, "")}/groups`, {
+  const response = await fetch(ingestEndpoint("groups"), {
     method: "POST",
     headers: {
       "content-type": "application/json",
