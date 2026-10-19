@@ -717,7 +717,7 @@ public static class MiniAppApi
             string? street,
             string? query,
             IYasnoClient yasno,
-            IDtekAddressClient dtek,
+            BotDbContext db,
             IOptionsMonitor<DtekSettings> settings,
             CancellationToken ct) =>
         {
@@ -769,14 +769,9 @@ public static class MiniAppApi
                 return Error("Пошуковий запит задовгий.");
             }
 
-            try
-            {
-                return Json(await dtek.SearchHousesAsync(region, city, street, query.Trim(), ct));
-            }
-            catch (DtekAddressUnavailableException ex)
-            {
-                return Results.Json(new ApiError(ex.Message), ApiJson.Options, statusCode: 503);
-            }
+            var house = query.Trim();
+            var groupId = await FindStreetGroupAsync(db, region.Id, city.Trim(), street.Trim(), ct);
+            return Json(new[] { new DtekAddressHouseDto(house, groupId) });
         });
 
         api.MapPut("/chats/{chatId:long}/address/dtek", async (
@@ -784,7 +779,6 @@ public static class MiniAppApi
             HttpContext http,
             BotDbContext db,
             ChatAccessService access,
-            IDtekAddressClient dtek,
             IScheduleProvider schedules,
             IOptionsMonitor<DtekSettings> settings,
             AlertCatchUp catchUp,
@@ -828,23 +822,11 @@ public static class MiniAppApi
             }
 
             var (city, street, house) = (parts[0].Value!, parts[1].Value!, parts[2].Value!);
-            IReadOnlyList<DtekAddressHouseDto> found;
-            try
-            {
-                found = await dtek.SearchHousesAsync(region, city, street, house, ct);
-            }
-            catch (DtekAddressUnavailableException ex)
-            {
-                return Results.Json(new ApiError(ex.Message), ApiJson.Options, statusCode: 503);
-            }
+            var groupId = string.IsNullOrWhiteSpace(request.GroupId)
+                ? await FindStreetGroupAsync(db, region.Id, city, street, ct)
+                : request.GroupId.Trim();
 
-            if (!found.Any(item => string.Equals(item.House, house, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(item.GroupId, request.GroupId, StringComparison.OrdinalIgnoreCase)))
-            {
-                return Error("Будинок або черга не знайдені на сайті ДТЕК. Оберіть адресу зі списку ще раз.");
-            }
-
-            if (request.GroupId is not null)
+            if (groupId is not null)
             {
                 if (!region.HasSchedules)
                 {
@@ -857,13 +839,18 @@ public static class MiniAppApi
                     return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
                 }
 
-                if (snapshot.Find(request.GroupId) is null)
+                if (snapshot.Find(groupId) is null)
                 {
-                    return Error("На сайті ДТЕК визначено чергу, якої немає у графіку. Оберіть її вручну.");
+                    if (!string.IsNullOrWhiteSpace(request.GroupId))
+                    {
+                        return Error("У вибраній черзі немає даних графіка. Оберіть її вручну.");
+                    }
+
+                    groupId = null;
                 }
             }
 
-            channel.GroupId = request.GroupId;
+            channel.GroupId = groupId;
             channel.AddressCity = city;
             channel.AddressStreet = street;
             channel.AddressHouse = house;
@@ -1223,6 +1210,26 @@ public static class MiniAppApi
 
     private static RegionSettings? GroupRegion(DtekSettings settings, string? regionId) =>
         settings.Regions.FirstOrDefault(r => r.HasGroups && string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
+
+    private static async Task<string?> FindStreetGroupAsync(
+        BotDbContext db,
+        string regionId,
+        string city,
+        string street,
+        CancellationToken ct)
+    {
+        var groupIds = await db.Channels.AsNoTracking()
+            .Where(channel => channel.RegionId == regionId
+                && channel.AddressCity == city
+                && channel.AddressStreet == street
+                && channel.GroupId != null)
+            .Select(channel => channel.GroupId!)
+            .Distinct()
+            .Take(2)
+            .ToListAsync(ct);
+
+        return groupIds.Count == 1 ? groupIds[0] : null;
+    }
 
     private static long UserId(HttpContext http) => (long)http.Items[UserIdKey]!;
 
