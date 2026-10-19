@@ -150,6 +150,28 @@ public sealed class DtekAddressClientTests
     }
 
     [Fact]
+    public async Task ImportedDirectory_ServesCitiesAndStreetsWithoutRequestingBlockedSite()
+    {
+        var handler = new FakeHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)));
+        var client = Create(handler);
+        var region = new RegionSettings
+        {
+            Id = "kyiv-oblast",
+            Name = "Київська область",
+            SiteUrl = "https://www.dtek-krem.com.ua/ua/shutdowns",
+        };
+        client.ImportDirectory(region, new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["м. Ірпінь"] = ["вул. Західна", "вул. Центральна"],
+        });
+
+        Assert.Equal(["м. Ірпінь"], await client.SearchCitiesAsync(region, "Ірпінь", CancellationToken.None));
+        Assert.Equal(["вул. Західна"], await client.SearchStreetsAsync(region, "м. Ірпінь", "Західна", CancellationToken.None));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task MissingCsrfToken_ThrowsExplicitUnavailableError()
     {
         var handler = new FakeHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

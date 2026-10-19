@@ -171,6 +171,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapMiniAppApi();
 app.MapGroupIngest();
+app.MapAddressDirectoryIngest();
 app.MapAddressCheckIngest();
 app.MapScheduleTick();
 app.MapGridTick();
