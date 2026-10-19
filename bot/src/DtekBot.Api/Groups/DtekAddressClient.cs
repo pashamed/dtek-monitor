@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -22,7 +21,6 @@ public sealed class DtekAddressUnavailableException(string regionName, Exception
 public sealed partial class DtekAddressClient(
     HttpClient http,
     IMemoryCache cache,
-    TimeProvider time,
     ILogger<DtekAddressClient> logger) : IDtekAddressClient
 {
     private static readonly TimeSpan DirectoryCacheDuration = TimeSpan.FromMinutes(10);
@@ -76,12 +74,7 @@ public sealed partial class DtekAddressClient(
             new("data[0][value]", city.Trim()),
             new("data[1][name]", "street"),
             new("data[1][value]", street.Trim()),
-            new("data[2][name]", "house_num"),
-            new("data[2][value]", query.Trim()),
-            new("data[3][name]", "updateFact"),
-            new("data[3][value]", KyivTime.FromUtc(time.GetUtcNow())
-                .ToString("dd.MM.yyyy HH:mm", CultureInfo.GetCultureInfo("uk-UA"))),
-        ], ct);
+        ], ct, includeUpdateFact: true);
 
         if (!response.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
         {
@@ -144,7 +137,10 @@ public sealed partial class DtekAddressClient(
         ?? throw new DtekAddressUnavailableException(region.Name);
 
     private async Task<JsonElement> PostAjaxAsync(
-        RegionSettings region, IEnumerable<KeyValuePair<string, string>> fields, CancellationToken ct)
+        RegionSettings region,
+        IEnumerable<KeyValuePair<string, string>> fields,
+        CancellationToken ct,
+        bool includeUpdateFact = false)
     {
         try
         {
@@ -169,13 +165,29 @@ public sealed partial class DtekAddressClient(
                 throw Unavailable(region, "CSRF token missing from site response");
             }
 
+            var requestFields = fields;
+            if (includeUpdateFact)
+            {
+                var updateFact = UpdateFact().Match(html);
+                if (!updateFact.Success)
+                {
+                    throw Unavailable(region, "updateFact missing from site response");
+                }
+
+                requestFields = fields.Concat(
+                [
+                    new("data[2][name]", "updateFact"),
+                    new("data[2][value]", WebUtility.HtmlDecode(updateFact.Groups[1].Value)),
+                ]);
+            }
+
             var cookies = pageResponse.Headers.TryGetValues("Set-Cookie", out var values)
                 ? string.Join("; ", values.Select(value => value.Split(';', 2)[0]))
                 : null;
             var ajaxUri = new Uri(pageUri, "/ua/ajax");
             using var request = new HttpRequestMessage(HttpMethod.Post, ajaxUri)
             {
-                Content = new FormUrlEncodedContent(fields),
+                Content = new FormUrlEncodedContent(requestFields),
             };
             request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
             request.Headers.TryAddWithoutValidation("X-CSRF-Token", WebUtility.HtmlDecode(csrf.Groups[1].Value));
@@ -304,6 +316,9 @@ public sealed partial class DtekAddressClient(
 
     [GeneratedRegex("<meta\\s+name=[\"']csrf-token[\"']\\s+content=[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase)]
     private static partial Regex CsrfToken();
+
+    [GeneratedRegex("<input\\b(?=[^>]*\\bname=[\"']updateFact[\"'])(?=[^>]*\\bvalue=[\"']([^\"']*)[\"'])[^>]*>", RegexOptions.IgnoreCase)]
+    private static partial Regex UpdateFact();
 
     [GeneratedRegex("^GPV\\s*(\\d{1,2}\\.\\d{1,2})$", RegexOptions.IgnoreCase)]
     private static partial Regex GroupId();

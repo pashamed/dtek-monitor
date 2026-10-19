@@ -39,7 +39,7 @@ public sealed class DtekAddressClientTests
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
-                """<html><head><meta name="csrf-token" content="test-token"></head></html>""",
+                """<html><head><meta name="csrf-token" content="test-token"></head><body><input type="hidden" name="updateFact" value="18.10.2026 22:42"></body></html>""",
                 Encoding.UTF8,
                 "text/html"),
         };
@@ -50,11 +50,10 @@ public sealed class DtekAddressClientTests
     private static HttpResponseMessage Json(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
-    private static DtekAddressClient Create(FakeHandler handler, TimeProvider? time = null) =>
+    private static DtekAddressClient Create(FakeHandler handler) =>
         new(
             new HttpClient(handler),
             new MemoryCache(new MemoryCacheOptions()),
-            time ?? TimeProvider.System,
             NullLogger<DtekAddressClient>.Instance);
 
     [Fact]
@@ -103,8 +102,8 @@ public sealed class DtekAddressClientTests
             bodies.Last());
         var houseRequest = WebUtility.UrlDecode(bodies.Last());
         Assert.Contains("data[1][name]=street&data[1][value]=вул. Дерибасівська", houseRequest);
-        Assert.Contains("data[2][name]=house_num&data[2][value]=12", houseRequest);
-        Assert.Matches(@"data\[3\]\[name\]=updateFact&data\[3\]\[value\]=\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}", houseRequest);
+        Assert.DoesNotContain("house_num", houseRequest);
+        Assert.Contains("data[2][name]=updateFact&data[2][value]=18.10.2026 22:42", houseRequest);
     }
 
     [Fact]
@@ -123,8 +122,7 @@ public sealed class DtekAddressClientTests
             requestBody = await request.Content!.ReadAsStringAsync();
             return Json(kremHouses);
         });
-        var clock = new TestClock(new DateTimeOffset(2026, 10, 19, 6, 50, 0, TimeSpan.Zero));
-        var client = Create(handler, clock);
+        var client = Create(handler);
         var region = new RegionSettings
         {
             Id = "kyiv-oblast",
@@ -147,8 +145,8 @@ public sealed class DtekAddressClientTests
         Assert.Contains("method=getHomeNum", body);
         Assert.Contains("data[0][name]=city&data[0][value]=м. Ірпінь", body);
         Assert.Contains("data[1][name]=street&data[1][value]=вул. Західна", body);
-        Assert.Contains("data[2][name]=house_num&data[2][value]=2", body);
-        Assert.Contains("data[3][name]=updateFact&data[3][value]=19.10.2026 09:50", body);
+        Assert.DoesNotContain("house_num", body);
+        Assert.Contains("data[2][name]=updateFact&data[2][value]=18.10.2026 22:42", body);
     }
 
     [Fact]
