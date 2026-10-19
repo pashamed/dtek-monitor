@@ -106,6 +106,41 @@ public sealed class DtekAddressClientTests
     }
 
     [Fact]
+    public async Task SearchesKyivOblastHouses_AndParsesKremQueueReasonShape()
+    {
+        const string kremHouses =
+            """{"result":true,"data":{"8":{"sub_type_reason":["GPV3.2"]},"10/139":{"sub_type_reason":["GPV3.2"]},"10/140":{"sub_type_reason":["GPV3.2"]}}}""";
+        string? requestBody = null;
+        var handler = new FakeHandler(async (request, _) =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return Page();
+            }
+
+            requestBody = await request.Content!.ReadAsStringAsync();
+            return Json(kremHouses);
+        });
+        var client = Create(handler);
+        var region = new RegionSettings
+        {
+            Id = "kyiv-oblast",
+            Name = "Київська область",
+            SiteUrl = "https://www.dtek-krem.com.ua/ua/",
+        };
+
+        var houses = await client.SearchHousesAsync(
+            region, "м. Ірпінь", "вул. Шевченка", "10/139", CancellationToken.None);
+
+        Assert.Equal([new DtekBot.Shared.DtekAddressHouseDto("10/139", "3.2")], houses);
+        Assert.Single(handler.Requests, request => request.Method == HttpMethod.Post);
+        var body = WebUtility.UrlDecode(requestBody);
+        Assert.Contains("method=getHomeNum", body);
+        Assert.Contains("data[0][name]=city&data[0][value]=м. Ірпінь", body);
+        Assert.Contains("data[1][name]=street&data[1][value]=вул. Шевченка", body);
+    }
+
+    [Fact]
     public async Task MissingCsrfToken_ThrowsExplicitUnavailableError()
     {
         var handler = new FakeHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
