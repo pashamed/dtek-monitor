@@ -430,7 +430,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
         {
             WeeklyPresets = new Dictionary<string, string> { ["45.1"] = Week },
-            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Quiet },
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Week },
         };
 
         var changed = await service.TickAsync(CancellationToken.None);
@@ -441,6 +441,59 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
             .Where(channel => channel.ChatId == chatId)
             .Select(channel => channel.ChatId)
             .Single()));
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_ResendsAfterMondaySvitlobotRedraw_OnlyOncePerWeek()
+    {
+        _factory.WithDb(db =>
+        {
+            foreach (var channel in db.Channels)
+            {
+                channel.SvitlobotKey = null;
+            }
+
+            db.KeyValues.RemoveRange(db.KeyValues.Where(value =>
+                value.Key.StartsWith("svitlobot-schedule:")
+                || value.Key.StartsWith("svitlobot-weekly-refresh:")));
+        });
+        UserWithKey(c => c.GroupId = "45.1");
+        _factory.Clock.Now = new DateTimeOffset(2026, 10, 18, 23, 4, 0, TimeSpan.Zero); // Monday 02:04 in Kyiv.
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Single(_factory.Svitlobot.Requests);
+
+        _factory.Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+
+        _factory.Clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_DoesNotSendWhenWeeklyTimetableHasNoOutages()
+    {
+        _factory.WithDb(db =>
+        {
+            foreach (var channel in db.Channels)
+            {
+                channel.SvitlobotKey = null;
+            }
+        });
+        UserWithKey(c => c.GroupId = "45.1");
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Quiet },
+        };
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+        Assert.Empty(_factory.Svitlobot.Requests);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Text;
 using DtekBot.Api.Data;
 using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
+using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -18,6 +19,8 @@ public sealed class SvitlobotScheduleSyncService(
     ILogger<SvitlobotScheduleSyncService> logger)
 {
     private const string StateKeyPrefix = "svitlobot-schedule:";
+    private const string WeeklyRefreshStateKeyPrefix = "svitlobot-weekly-refresh:";
+    private static readonly TimeSpan WeeklyRefreshTime = new(2, 5, 0);
     private static readonly TimeSpan WriteSpacing = TimeSpan.FromMilliseconds(100);
 
     public async Task<int> TickAsync(CancellationToken ct)
@@ -37,8 +40,12 @@ public sealed class SvitlobotScheduleSyncService(
 
         var regionSettings = options.CurrentValue;
         var states = await db.KeyValues
-            .Where(state => state.Key.StartsWith(StateKeyPrefix))
+            .Where(state => state.Key.StartsWith(StateKeyPrefix) || state.Key.StartsWith(WeeklyRefreshStateKeyPrefix))
             .ToDictionaryAsync(state => state.Key, ct);
+        var localNow = KyivTime.FromUtc(time.GetUtcNow());
+        var weeklyRefreshDate = localNow.DayOfWeek == DayOfWeek.Monday && localNow.TimeOfDay >= WeeklyRefreshTime
+            ? localNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+            : null;
         var updated = 0;
 
         foreach (var regionChannels in channels.GroupBy(channel => channel.RegionId))
@@ -76,7 +83,16 @@ public sealed class SvitlobotScheduleSyncService(
 
                 var stateKey = StateKey(channel.ChatId);
                 var signature = Signature(region.Id, channel.GroupId!, timetable);
-                if (states.TryGetValue(stateKey, out var previous) && previous.Value == signature)
+                var refreshKey = WeeklyRefreshStateKey(channel.ChatId);
+                var refreshDue = weeklyRefreshDate is not null
+                    && (!states.TryGetValue(refreshKey, out var previousRefresh) || previousRefresh.Value != weeklyRefreshDate);
+                var signatureChanged = !states.TryGetValue(stateKey, out var previous) || previous.Value != signature;
+                if (!signatureChanged && !refreshDue)
+                {
+                    continue;
+                }
+
+                if (!WeeklyPreset.HasOutages(timetable))
                 {
                     continue;
                 }
@@ -105,6 +121,20 @@ public sealed class SvitlobotScheduleSyncService(
                 else
                 {
                     previous.Value = signature;
+                }
+
+                if (refreshDue)
+                {
+                    if (states.TryGetValue(refreshKey, out var refreshState))
+                    {
+                        refreshState.Value = weeklyRefreshDate!;
+                    }
+                    else
+                    {
+                        refreshState = new KeyValue { Key = refreshKey, Value = weeklyRefreshDate! };
+                        db.KeyValues.Add(refreshState);
+                        states[refreshKey] = refreshState;
+                    }
                 }
 
                 updated++;
@@ -146,6 +176,7 @@ public sealed class SvitlobotScheduleSyncService(
     }
 
     private static string StateKey(long chatId) => $"{StateKeyPrefix}{chatId}";
+    private static string WeeklyRefreshStateKey(long chatId) => $"{WeeklyRefreshStateKeyPrefix}{chatId}";
 
     private static string Signature(string regionId, string groupId, string timetable)
     {
