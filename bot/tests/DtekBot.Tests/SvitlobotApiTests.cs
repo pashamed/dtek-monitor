@@ -497,6 +497,63 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task OneTelegramUser_CanManageSeparateSvitlobotKeysForMultipleLinkedChannels()
+    {
+        const long firstChatId = -10070001;
+        const long secondChatId = -10070002;
+        const string firstKey = "first-channel-key";
+        const string secondKey = "second-channel-key";
+        var userId = _factory.NextId();
+        var protector = new SvitlobotKeyProtector(() => _factory.SvitlobotEncryptionKey);
+        _factory.Bot.SetStatus(userId, Telegram.Bot.Types.Enums.ChatMemberStatus.Administrator);
+        _factory.Svitlobot.Responder = _ => FakeSvitlobotHandler.Text("12;&;Графік;&&&;no data");
+        _factory.WithDb(db =>
+        {
+            foreach (var channel in db.Channels)
+            {
+                channel.SvitlobotKey = null;
+            }
+
+            db.KeyValues.RemoveRange(db.KeyValues.Where(value =>
+                value.Key.StartsWith("svitlobot-schedule:")
+                || value.Key.StartsWith("svitlobot-weekly-refresh:")));
+            db.Channels.AddRange(
+                new Channel { ChatId = firstChatId, RegionId = "kyiv", GroupId = "45.1", CreatedAt = _factory.Clock.Now },
+                new Channel { ChatId = secondChatId, RegionId = "kyiv", GroupId = "2.2", CreatedAt = _factory.Clock.Now });
+            db.ChannelAdmins.AddRange(
+                new ChannelAdmin { ChatId = firstChatId, UserId = userId, LinkedAt = _factory.Clock.Now },
+                new ChannelAdmin { ChatId = secondChatId, UserId = userId, LinkedAt = _factory.Clock.Now });
+        });
+        using var client = _factory.ClientFor(userId);
+
+        var firstConnected = await client.PutJsonAsync(
+            $"/api/chats/{firstChatId}/svitlobot/key",
+            new SetSvitlobotKeyRequest(firstKey));
+        var secondConnected = await client.PutJsonAsync(
+            $"/api/chats/{secondChatId}/svitlobot/key",
+            new SetSvitlobotKeyRequest(secondKey));
+
+        Assert.Equal(HttpStatusCode.OK, firstConnected.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondConnected.StatusCode);
+        Assert.True((await firstConnected.ReadAsync<SvitlobotStateDto>())!.HasKey);
+        Assert.True((await secondConnected.ReadAsync<SvitlobotStateDto>())!.HasKey);
+
+        var chats = (await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!;
+        Assert.True(Assert.Single(chats, chat => chat.ChatId == firstChatId).Settings.HasSvitlobotKey);
+        Assert.True(Assert.Single(chats, chat => chat.ChatId == secondChatId).Settings.HasSvitlobotKey);
+
+        _factory.Svitlobot.Reset();
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+        Assert.Equal(2, await service.TickAsync(CancellationToken.None));
+
+        Assert.Contains(_factory.Svitlobot.Requests, request =>
+            request.PathAndQuery == $"/website/timetableEditEvent?channel_key={firstKey}&timetableData={Uri.EscapeDataString(WeekMaybe)}");
+        Assert.Contains(_factory.Svitlobot.Requests, request =>
+            request.PathAndQuery == $"/website/timetableEditEvent?channel_key={secondKey}&timetableData={Uri.EscapeDataString(Week)}");
+    }
+
+    [Fact]
     public async Task Push_WithoutAGroup_Is400()
     {
         var (chatId, client) = UserWithKey();
