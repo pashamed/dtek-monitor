@@ -143,6 +143,7 @@ public sealed class FakeDtekAddressClient : IDtekAddressClient
     public IReadOnlyList<string> Cities { get; set; } = ["м. Одеса"];
     public IReadOnlyList<string> Streets { get; set; } = ["вул. Дерибасівська"];
     public IReadOnlyList<DtekAddressHouseDto> Houses { get; set; } = [new("12", null)];
+    public IReadOnlyDictionary<string, IReadOnlyList<string>>? ImportedDirectory { get; private set; }
 
     public (string Region, string City, string Query)? LastCitySearch { get; private set; }
     public (string Region, string City, string Query)? LastStreetSearch { get; private set; }
@@ -166,6 +167,9 @@ public sealed class FakeDtekAddressClient : IDtekAddressClient
         LastHouseSearch = (region.Id, city, street, query);
         return Task.FromResult(Houses);
     }
+
+    public void ImportDirectory(RegionSettings region, IReadOnlyDictionary<string, IReadOnlyList<string>> streets) =>
+        ImportedDirectory = streets;
 }
 
 public sealed class FakeYasnoClient : IYasnoClient

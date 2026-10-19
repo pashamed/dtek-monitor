@@ -78,10 +78,49 @@ async function readRegion(browser, region) {
       if (!hasToken) return { ok: false, reason: "page is not the real site" }
     }
 
-    return { ok: true, popupText: popupText ?? "" }
+    const addressDirectory = await page.evaluate(async () => {
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.content
+      if (!csrf) return null
+
+      const response = await fetch("/ua/ajax", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "x-csrf-token": csrf,
+          "x-requested-with": "XMLHttpRequest",
+        },
+        body: "method=getStreets",
+      })
+      if (!response.ok) return null
+
+      const data = await response.json()
+      return data?.result === true && data.streets && typeof data.streets === "object"
+        ? data.streets
+        : null
+    }).catch((error) => {
+      console.log(`🟡 ${region.Id}: address directory fetch failed (${error.message})`)
+      return null
+    })
+
+    return { ok: true, popupText: popupText ?? "", addressDirectory }
   } finally {
     await context.close()
   }
+}
+
+async function ingestAddressDirectory(region, streets) {
+  const response = await fetch(`${INGEST_URL.replace(/\/+$/, "")}/ingest/address-directory`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ingest-secret": INGEST_SECRET,
+    },
+    body: JSON.stringify({ regionId: region.Id, streets }),
+    signal: AbortSignal.timeout(60000),
+  })
+  const body = await response.text()
+  console.log(`📚 ${region.Id} address directory: HTTP ${response.status} ${body.slice(0, 300)}`)
+  if (!response.ok) throw new Error(`address directory ingest returned ${response.status}`)
 }
 
 async function ingest(region, popupText) {
@@ -176,6 +215,14 @@ async function run() {
             ? `ℹ️ ${region.Id}: popup found (${result.popupText.length} chars)`
             : `✅ ${region.Id}: no popup`
         )
+        if (result.addressDirectory && !region.YasnoRegionId) {
+          try {
+            await ingestAddressDirectory(region, result.addressDirectory)
+          } catch (error) {
+            failures++
+            console.error(`⚠️ ${region.Id} address directory: ${error.message}`)
+          }
+        }
         await ingest(region, result.popupText)
       } catch (error) {
         failures++

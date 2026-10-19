@@ -13,6 +13,7 @@ public interface IDtekAddressClient
     Task<IReadOnlyList<string>> SearchStreetsAsync(RegionSettings region, string city, string query, CancellationToken ct);
     Task<IReadOnlyList<DtekAddressHouseDto>> SearchHousesAsync(
         RegionSettings region, string city, string street, string query, CancellationToken ct);
+    void ImportDirectory(RegionSettings region, IReadOnlyDictionary<string, IReadOnlyList<string>> streets);
 }
 
 public sealed class DtekAddressUnavailableException(string regionName, Exception? inner = null)
@@ -24,6 +25,13 @@ public sealed partial class DtekAddressClient(
     ILogger<DtekAddressClient> logger) : IDtekAddressClient
 {
     private static readonly TimeSpan DirectoryCacheDuration = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ImportedDirectoryCacheDuration = TimeSpan.FromHours(1);
+
+    public void ImportDirectory(RegionSettings region, IReadOnlyDictionary<string, IReadOnlyList<string>> streets)
+    {
+        var directory = streets.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        cache.Set(DirectoryCacheKey(region.Id), directory, ImportedDirectoryCacheDuration);
+    }
 
     public async Task<IReadOnlyList<string>> SearchCitiesAsync(RegionSettings region, string query, CancellationToken ct)
     {
@@ -110,7 +118,7 @@ public sealed partial class DtekAddressClient(
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> GetDirectoryAsync(
         RegionSettings region, CancellationToken ct) =>
         await cache.GetOrCreateAsync<IReadOnlyDictionary<string, IReadOnlyList<string>>>(
-            $"dtek-addresses:{region.Id}",
+            DirectoryCacheKey(region.Id),
             async entry =>
             {
                 entry.AbsoluteExpirationRelativeToNow = DirectoryCacheDuration;
@@ -135,6 +143,8 @@ public sealed partial class DtekAddressClient(
                 return directory;
             })
         ?? throw new DtekAddressUnavailableException(region.Name);
+
+    private static string DirectoryCacheKey(string regionId) => $"dtek-addresses:{regionId}";
 
     private async Task<JsonElement> PostAjaxAsync(
         RegionSettings region,
