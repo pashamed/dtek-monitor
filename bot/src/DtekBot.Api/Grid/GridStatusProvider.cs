@@ -13,6 +13,7 @@ public interface IGridStatusProvider
 {
     // Null when nothing usable could be fetched: the caller then changes nothing.
     Task<GridFeed?> GetAsync(CancellationToken ct);
+    Task<GridFeed?> RefreshAsync(CancellationToken ct) => GetAsync(ct);
 }
 
 public static class GridFeedParser
@@ -89,11 +90,15 @@ public sealed class GridStatusProvider(
     private string? _etag;
     private DateTimeOffset _checkedAt;
 
-    public async Task<GridFeed?> GetAsync(CancellationToken ct)
+    public Task<GridFeed?> GetAsync(CancellationToken ct) => GetCoreAsync(false, ct);
+
+    public Task<GridFeed?> RefreshAsync(CancellationToken ct) => GetCoreAsync(true, ct);
+
+    private async Task<GridFeed?> GetCoreAsync(bool force, CancellationToken ct)
     {
         var settings = options.CurrentValue.Grid;
         var ttl = TimeSpan.FromMinutes(settings.CacheMinutes);
-        if (WithinWindow(ttl))
+        if (!force && WithinWindow(ttl))
         {
             return _feed;
         }
@@ -101,7 +106,7 @@ public sealed class GridStatusProvider(
         await _gate.WaitAsync(ct);
         try
         {
-            if (WithinWindow(ttl))
+            if (!force && WithinWindow(ttl))
             {
                 return _feed;
             }

@@ -1,11 +1,6 @@
-using DtekBot.Api.Grid;
-using DtekBot.Api.Schedules;
-
 namespace DtekBot.Api.Bot;
 
-// Posts schedules (and the Ukrenergo status) soon after they arrive instead of waiting for the next workflow run:
-// GitHub's cron is routinely hours late. It runs only while the application is alive; the workflow and any outside
-// pinger keep calling the same ticks, which are safe to repeat because they only compare stored state with the sources.
+// Collects sources in parallel before evaluating alerts and schedules. IIS must keep the application alive.
 public sealed class TickLoop(
     IServiceScopeFactory scopes,
     IConfiguration config,
@@ -40,12 +35,16 @@ public sealed class TickLoop(
 
     public async Task RunOnceAsync(CancellationToken ct)
     {
-        await RunAsync(TickGate.Grid, "grid", (sp, token) => sp.GetRequiredService<GridTickService>().TickAsync(token), ct);
-        await RunAsync(TickGate.Schedules, "schedules", async (sp, token) =>
+        if (!await TickGate.Grid.WaitAsync(0, ct)) return;
+        try
         {
-            await sp.GetRequiredService<ScheduleNotifier>().TickAsync(token);
-            await sp.GetRequiredService<DtekBot.Api.Svitlobot.SvitlobotScheduleSyncService>().TickAsync(token);
-        }, ct);
+            await RunAsync(TickGate.Schedules, "monitoring", (sp, token) =>
+                sp.GetRequiredService<MonitoringCycle>().RunAsync(token), ct);
+        }
+        finally
+        {
+            TickGate.Grid.Release();
+        }
     }
 
     private async Task RunAsync(SemaphoreSlim gate, string name, Func<IServiceProvider, CancellationToken, Task> tick, CancellationToken ct)

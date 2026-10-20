@@ -1,19 +1,20 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 
 namespace DtekBot.Api.Checks;
 
 public interface IWorkflowTrigger
 {
     // True when GitHub accepted the dispatch. Never throws; a failed dispatch is picked up by the next scheduled run.
-    Task<bool> TriggerAsync(string eventType, CancellationToken ct);
+    Task<bool> TriggerAsync(string eventType, CancellationToken ct, object? payload = null);
 }
 
 // Starts the monitor workflow through GitHub's repository_dispatch. The token lives in appsettings.Production.json.
 public sealed class GitHubWorkflowTrigger(HttpClient http, IConfiguration config, ILogger<GitHubWorkflowTrigger> logger)
     : IWorkflowTrigger
 {
-    public async Task<bool> TriggerAsync(string eventType, CancellationToken ct)
+    public async Task<bool> TriggerAsync(string eventType, CancellationToken ct, object? payload = null)
     {
         var repository = config["GitHub:Repository"];
         var token = config["GitHub:DispatchToken"];
@@ -27,7 +28,9 @@ public sealed class GitHubWorkflowTrigger(HttpClient http, IConfiguration config
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"repos/{repository}/dispatches")
             {
-                Content = new StringContent($$"""{"event_type":"{{eventType}}"}""", Encoding.UTF8, "application/json"),
+                Content = new StringContent(payload is null
+                    ? JsonSerializer.Serialize(new { event_type = eventType })
+                    : JsonSerializer.Serialize(new { event_type = eventType, client_payload = payload }), Encoding.UTF8, "application/json"),
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 

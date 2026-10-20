@@ -17,7 +17,9 @@ function loadSettings() {
 }
 
 function loadRegions() {
-  return loadSettings().Dtek.Regions.filter((region) => region.SiteUrl)
+  const requested = process.env.DTEK_REGION_IDS ? JSON.parse(process.env.DTEK_REGION_IDS) : null
+  if (requested !== null && !Array.isArray(requested)) throw new Error("DTEK_REGION_IDS must be an array")
+  return loadSettings().Dtek.Regions.filter((region) => region.SiteUrl && (!requested || requested.includes(region.Id)))
 }
 
 // The same keyword rules the backend uses; they decide whether a popup is familiar enough to skip the model.
@@ -140,6 +142,7 @@ async function ingest(region, popupText) {
       regionId,
       popupText,
       observedAt: new Date().toISOString(),
+      ...(process.env.DTEK_COLLECTION_ID ? { collectionId: process.env.DTEK_COLLECTION_ID } : {}),
       ...(structured ? { structured } : {}),
     }),
     signal: AbortSignal.timeout(60000),
@@ -194,7 +197,7 @@ async function run() {
 
   let failures = 0
 
-  for (const region of loadRegions().filter((r) => r.YasnoRegionId)) {
+  for (const region of loadRegions().filter((r) => r.YasnoRegionId && !process.env.DTEK_COLLECTION_ID)) {
     try {
       await ingestGroups(region)
     } catch (error) {
@@ -205,21 +208,21 @@ async function run() {
 
   const browser = await chromium.launch({ headless: true })
   try {
-    for (const region of loadRegions()) {
+    const checkRegion = async (region) => {
       console.log(`🌀 ${region.Id}: ${region.SiteUrl}`)
       try {
         const result = await readRegion(browser, region)
         if (!result.ok) {
           failures++
           console.log(`🟡 ${region.Id}: skipped, ${result.reason}`)
-          continue
+          return
         }
         console.log(
           result.popupText
             ? `ℹ️ ${region.Id}: popup found (${result.popupText.length} chars)`
             : `✅ ${region.Id}: no popup`
         )
-        if (result.addressDirectory && !region.YasnoRegionId) {
+        if (result.addressDirectory && !region.YasnoRegionId && !process.env.DTEK_COLLECTION_ID) {
           try {
             await ingestAddressDirectory(region, result.addressDirectory)
           } catch (error) {
@@ -233,6 +236,8 @@ async function run() {
         console.error(`⚠️ ${region.Id}: ${error.message}`)
       }
     }
+    if (process.env.DTEK_COLLECTION_ID) await Promise.all(loadRegions().map(checkRegion))
+    else for (const region of loadRegions()) await checkRegion(region)
   } finally {
     await browser.close()
   }

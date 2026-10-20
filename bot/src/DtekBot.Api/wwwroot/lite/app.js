@@ -537,7 +537,18 @@ function renderEditor(chat) {
     }
   }
 
-  regionSel.addEventListener('change', () => {
+  regionSel.addEventListener('change', async () => {
+    if (regionSel.value !== s.regionId && chat.settings.addresses?.length) {
+      const nextRegion = regionSel.value;
+      regionSel.value = s.regionId || '';
+      if (!await confirmSetting('Змінити регіон? Адреси й черги поточного регіону буде видалено.')) return;
+      const ctx = makeAddrCtx();
+      if (!await ctx.commit('PUT', '/addresses', { addresses: [] }, false)) {
+        setErr([ctx.msg.textContent]);
+        return;
+      }
+      regionSel.value = nextRegion;
+    }
     s.regionId = regionSel.value || null; s.partIds = []; dq = ''; dqIn.value = '';
     if (s.regionId && !s.isActive) { s.isActive = true; activeRow.cb.checked = true; }
     setErr([]); refreshAll();
@@ -717,7 +728,7 @@ function renderEditor(chat) {
     };
     const pickHouse = i => {
       list.replaceChildren();
-      commit('PUT', '/address', { regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}`, street: street.name, house: i.name }, true);
+      commit('PUT', '/address', { regionId, streetId: street.id, houseId: i.id, label: `${street.name}, ${i.name}`, street: street.name, house: i.name, groupId: i.groupId }, true);
     };
     input.addEventListener('input', () => { clearTimeout(stimer); stimer = setTimeout(search, 300); });
     return h('div', { class: 'fld' }, fieldLabel('Адреса', 'address', inId), input, list,
@@ -756,7 +767,7 @@ function renderEditor(chat) {
     const cityList = h('div', { class: 'picks', role: 'listbox', 'aria-label': 'Населені пункти' });
     const streetList = h('div', { class: 'picks', role: 'listbox', 'aria-label': 'Вулиці' });
     const houseList = h('div', { class: 'picks', role: 'listbox', 'aria-label': 'Будинки та черги' });
-    const cityInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Наприклад, Одеса', autocomplete: 'off', 'aria-label': 'Населений пункт', 'aria-controls': 'cityResults' });
+    const cityInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Наприклад, Одеса', autocomplete: 'off', 'aria-label': 'Населений пункт' });
     const streetInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Оберіть населений пункт спочатку', autocomplete: 'off', 'aria-label': 'Вулиця', disabled: true });
     const houseInput = h('input', { type: 'text', inputmode: 'search', placeholder: 'Оберіть вулицю спочатку', autocomplete: 'off', 'aria-label': 'Номер будинку', disabled: true });
     const stepper = h('ol', { class: 'address-steps', 'aria-label': 'Кроки вибору адреси' });
@@ -771,7 +782,8 @@ function renderEditor(chat) {
     cityInput.id = 'cityInput' + (++uid);
     streetInput.id = 'streetInput' + (++uid);
     houseInput.id = 'houseInput' + (++uid);
-    cityList.id = 'cityResults';
+    cityList.id = 'cityResults' + (++uid);
+    cityInput.setAttribute('aria-controls', cityList.id);
     const resultStatus = h('p', { class: 'address-status', role: 'status', 'aria-live': 'polite' });
     const setStep = current => steps.forEach((step, index) => {
       step.classList.toggle('done', index < current);
@@ -917,6 +929,32 @@ function renderEditor(chat) {
           input.addEventListener('input', () => { address[key] = input.value; });
           return h('div', { class: 'fld' }, h('label', { text: label }), input);
         });
+        const searchBox = h('div');
+        const searchContext = {
+          ...ctx,
+          commit: async (_method, _path, body) => {
+            address.city = body.city || '';
+            address.street = body.street;
+            address.house = body.house;
+            address.label = body.label || [address.city, address.street, address.house].filter(Boolean).join(', ');
+            const ids = body.groupIds?.length ? body.groupIds : body.groupId ? [body.groupId] : [];
+            address.groups = [...new Set(ids)].map(groupId => ({ groupId, label: '' }));
+            paint();
+            ctx.clear();
+            ctx.msg.textContent = 'Адресу обрано. Збережіть адреси.';
+            return true;
+          },
+        };
+        const search = h('button', { type: 'button', class: 'btn ghost sm', text: 'Знайти адресу', onclick: () => {
+          searchBox.replaceChildren(region.hasGroups
+            ? addressPicker(s.regionId, searchContext)
+            : dtekAddressPicker(s.regionId, searchContext));
+        } });
+        if (!address.street && region?.siteUrl) {
+          searchBox.append(region.hasGroups
+            ? addressPicker(s.regionId, searchContext)
+            : dtekAddressPicker(s.regionId, searchContext));
+        }
         const districts = h('select', { 'aria-label': 'Район адреси' }, h('option', { value: '', text: 'Райони з основних налаштувань' }),
           ...(region?.parts || []).map(part => h('option', { value: part.id, text: part.name })));
         districts.value = address.partIds || '';
@@ -936,7 +974,8 @@ function renderEditor(chat) {
           if (select.value && !address.groups.some(g => g.groupId === select.value)) address.groups.push({ groupId: select.value, label: '' });
           select.value = ''; paintGroups();
         });
-        return card(h('h3', { class: 'ct', text: `Адреса ${index + 1} · ${region?.name || ''}` }), ...inputs,
+        return card(h('h3', { class: 'ct', text: `Адреса ${index + 1} · ${region?.name || ''}` }),
+          region?.siteUrl ? search : null, searchBox, ...inputs,
           h('div', { class: 'fld' }, h('label', { text: 'Район' }), districts), groups, select,
           h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => { draft = draft.filter(a => a !== address); paint(); } }));
       }));
@@ -957,8 +996,8 @@ function renderEditor(chat) {
 
   function renderAddr() {
     const r = regionOf(s.regionId);
-    regionSel.disabled = !!chat.settings.addresses?.length;
-    regionSel.title = regionSel.disabled ? 'Щоб змінити регіон, спершу приберіть адреси.' : '';
+    regionSel.disabled = false;
+    regionSel.title = '';
     if (r && chat.settings.regionId === s.regionId && chat.settings.addresses?.length) {
       addressPanel.replaceChildren(addressCollection(), ...(isPriv ? [chkCard, chkOut] : []));
       return;
@@ -1515,7 +1554,7 @@ function renderEditor(chat) {
     h('nav', { class: 'tabs glass', role: 'tablist', 'aria-label': 'Розділи налаштувань' }, tabBtns),
     TABS.map(([id]) => panels[id]), versionFooter(), bar));
   refreshAll();
-  setTab('main');
+  setTab(tab);
   window.scrollTo(0, 0);
 }
 
@@ -1532,7 +1571,9 @@ async function load() {
     state.boot = boot; state.chats = chats;
     const saved = readEditorPosition();
     const previous = saved && chats.find(c => String(c.chatId) === saved.chatId);
-    if (previous) renderEditor(previous); else renderList();
+    if (previous) renderEditor(previous);
+    else if (chats.length === 1) renderEditor(chats[0]);
+    else renderList();
   } catch (e) { showFatal(e, load); }
 }
 
