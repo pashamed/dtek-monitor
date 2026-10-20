@@ -31,6 +31,7 @@ public sealed class Channel
     public AlertFilter Filter { get; set; } = AlertFilter.All;
     public bool NotifyOnEnd { get; set; } = true;
     public bool EditInPlace { get; set; } = true;
+    public bool DeletePreviousAlert { get; set; }
     public string? Template { get; set; }
 
     // Check the saved address when this chat gets a «Світло зникло» post (from a power-monitor app).

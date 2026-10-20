@@ -135,6 +135,40 @@ public sealed class AlertDispatcherTests : IDisposable
         Assert.False(updated.IsClosed);
     }
 
+    [Fact]
+    public async Task ChangedText_WithDeletePreviousEnabled_SendsReplacementBeforeDeletingOldAlert()
+    {
+        _f.AddChannel(ChatA, c =>
+        {
+            c.EditInPlace = true;
+            c.DeletePreviousAlert = true;
+        });
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var previous = Assert.Single(_f.Deliveries(ChatA));
+        var requestCount = _f.Bot.Requests.Count;
+
+        var summary = await _f.DispatchAsync(DispatcherFixture.EmergencyText + " Оновлення: діє до 23:00.");
+
+        Assert.Equal(new(1, 0, 0, 0), summary);
+        Assert.IsType<SendMessageRequest>(_f.Bot.Requests[requestCount]);
+        var deletion = Assert.IsType<DeleteMessageRequest>(_f.Bot.Requests[requestCount + 1]);
+        Assert.Equal(previous.TelegramMessageId, deletion.MessageId);
+        Assert.NotEqual(previous.TelegramMessageId, Assert.Single(_f.Deliveries(ChatA)).TelegramMessageId);
+    }
+
+    [Fact]
+    public async Task ChangedText_WithDeletePreviousEnabled_DoesNotDeleteAlertOlderThan48Hours()
+    {
+        _f.AddChannel(ChatA, c => c.DeletePreviousAlert = true);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        _f.Clock.Now = _f.Clock.Now.AddHours(49);
+
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText + " Оновлення: діє до 23:00.");
+
+        Assert.Empty(_f.Bot.Deletes);
+        Assert.Equal(2, _f.Bot.Sent.Count());
+    }
+
     [Theory]
     [InlineData(DispatcherFixture.StabilizationText)]
     [InlineData("")]

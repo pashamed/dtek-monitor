@@ -4,7 +4,7 @@ const app = document.getElementById('app');
 const initData = tg ? tg.initData : '';
 const UI_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
 
-const SLOT_GROUPS = [['emergency', 'Екстрені відключення'], ['regional', 'Аварія в регіоні'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
+const SLOT_GROUPS = [['alerts', 'Екстрені відключення та аварії'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
 const KIND_OF = { emergency: 'Emergency', regional: 'Accident', local: 'Emergency', ended: 'Ended' };
 const ALERT_SLOTS = ['emergency', 'regional', 'local', 'ended'];
 // How the «ended» notice is posted: [value, button label, one-line explanation].
@@ -28,6 +28,7 @@ const MODE_TEXT = {
   event: { New: 'Кожна подія — окреме повідомлення. Старі лишаються в каналі.', ReplaceDelete: 'Нова подія видаляє попереднє повідомлення. Потрібне право «Видаляти повідомлення», інакше воно лишиться.', Edit: 'Одне повідомлення оновлюється на місці, нові не зʼявляються.' },
 };
 const TABS = [['main', 'Основне'], ['sched', 'Графік'], ['msg', 'Повідомлення']];
+const EDITOR_POSITION_KEY = 'dtek-editor-position';
 const state = { boot: null, chats: [], editing: null };
 const groupsCache = new Map(); // regionId -> Promise of schedule groups
 const PRIVATE_LABEL = 'Цей чат із ботом';
@@ -55,11 +56,12 @@ const HELP = {
   quietHours: ['Тихі години', 'Автоматичні повідомлення надходитимуть одразу, але без звукового сповіщення протягом цього щоденного проміжку за київським часом. Ручні дії та тестові повідомлення не приглушуються.'],
   postMode: ['Як публікувати', 'Нове повідомлення — кожне оновлення графіка це новий пост, старі лишаються. Видалити старе й опублікувати нове — бот публікує новий пост і видаляє попередній (потрібне право «Видаляти повідомлення», інакше старий пост лишиться). Редагувати те саме — бот змінює один і той самий пост.'],
   slots: ['Шаблони повідомлень', 'Кожен вид повідомлень, які бот публікує, має свій шаблон. Оберіть вид, змініть текст і стиль та перегляньте, як це виглядатиме в Telegram. Змінені шаблони позначені фіолетовою цяткою.'],
+  alertCleanup: ['Видаляти попереднє аварійне сповіщення', 'Після надсилання нового повідомлення про зміну аварійного стану бот спробує видалити попереднє. Для каналів потрібне право видаляти повідомлення; Telegram дозволяє видаляти їх лише протягом 48 годин. Старі повідомлення не очищаються під час увімкнення опції. Графіки налаштовуються окремо.'],
   template: ['Шаблон повідомлення', 'Ваш текст для цього виду повідомлень. Параметри у {фігурних дужках} замінюються даними, теги Telegram дозволені: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Щоб вивести фігурні дужки, пишіть {{ і }}.'],
   cond: ['Умовні блоки', 'Фрагмент {#назва}…{/назва} лишається в тексті, лише якщо значення параметра «назва» не порожнє. Наприклад: {#світло_було}🕓 Воно було {світло_було}{/світло_було}. Блоки не можна вкладати.'],
   test: ['Тестове повідомлення', 'Бот надішле це повідомлення в канал (або в чат із ботом) зі зразковими чи вашими даними й позначкою 🧪 Тест, щоб ви побачили його справжній вигляд. Кількість тестів обмежена: якщо зʼявиться повідомлення про ліміт, зачекайте трохи й повторіть.'],
-  connect: ['Підключити канал', 'Додайте бота адміністратором у канал із правом публікувати повідомлення — канал зʼявиться тут автоматично (за потреби натисніть «Оновити список»). Запасний варіант для публічного каналу: вставте посилання на нього (https://t.me/імʼя) або @імʼя, бот сам перетворить його на імʼя каналу. Приватні посилання-запрошення (t.me/+…) не підходять.'],
-  svb: ['Світлобот', 'Введіть channel_key каналу Світлобота. Бот автоматично передаватиме туди актуальний тижневий графік для обраної черги, щойно дані стануть доступними або зміняться. Повідомлення «світло зникло / зʼявилося» та публікаціями у каналі керує сам Світлобот. Ключ зберігається на сервері в зашифрованому вигляді; нікому його не передавайте.'],
+  connect: ['Підключити канал', 'Додайте бота адміністратором у канал із правом публікувати повідомлення — канал зʼявиться тут автоматично (за потреби натисніть «Оновити список»). У звичайній групі не призначайте бота адміністратором: Telegram може перетворити її на супергрупу. Запасний варіант для публічного каналу: вставте посилання на нього (https://t.me/імʼя) або @імʼя, бот сам перетворить його на імʼя каналу. Приватні посилання-запрошення (t.me/+…) не підходять.'],
+  svb: ['Світлобот', 'Ключ каналу потрібен, щоб бот міг регулярно оновлювати тижневий графік Світлоботу для обраної черги. Коли дані графіка зʼявляються або змінюються, бот передає актуальний тижневий розклад автоматично. Повідомлення «світло зникло / зʼявилося» та публікаціями у каналі керує сам Світлобот. Ключ зберігається на сервері в зашифрованому вигляді; нікому його не передавайте.'],
   svbKey: ['Ключ каналу', 'Ключ channel_key потрібен, щоб передавати актуальний тижневий графік у Світлобот. Він доступний у налаштуваннях вашого каналу в чат-боті Світлобот. Бот перевірить ключ, збереже його зашифрованим і більше не покаже.'],
   svbCheck: ['Перевірити ключ', 'Показує, який саме ключ збережено, не розкриваючи його: вісім крапок і останні два символи, а також короткий «відбиток». Відбиток однаковий для того самого ключа, тож ним можна звірити ключ зі Світлобота. Сам ключ ніколи не повертається.'],
   svbForget: ['Забути ключ', 'Видаляє збережений ключ лише тут, у боті. Графік і пост у каналі лишаються як є. Щоб знову керувати Світлоботом, введіть ключ ще раз.'],
@@ -206,6 +208,36 @@ function showFatal(e, retry) {
       e.status === 401 ? null : h('button', { class: 'btn', text: 'Повторити', onclick: retry })));
 }
 
+function readEditorPosition() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EDITOR_POSITION_KEY) || 'null');
+    return saved && typeof saved.chatId === 'string' && typeof saved.tab === 'string' ? saved : null;
+  } catch (error) {
+    console.warn('Could not restore the last editor position.', error);
+    return null;
+  }
+}
+
+function saveEditorPosition(chatId, tab) {
+  try {
+    localStorage.setItem(EDITOR_POSITION_KEY, JSON.stringify({ chatId: String(chatId), tab }));
+  } catch (error) {
+    console.warn('Could not save the editor position.', error);
+  }
+}
+
+function confirmSetting(message) {
+  return new Promise(resolve => {
+    try {
+      if (tg && tg.showConfirm) tg.showConfirm(message, resolve);
+      else resolve(window.confirm(message));
+    } catch (error) {
+      console.warn('Could not show the setting confirmation.', error);
+      resolve(false);
+    }
+  });
+}
+
 // ---------- home: channel dashboard ----------
 let linkDraft = '';
 let lastRefresh = 0;
@@ -301,6 +333,7 @@ function renderEditor(chat) {
     ...chat.settings, partIds: [...(chat.settings.partIds || [])],
     scheduleImage: chat.settings.scheduleImage || 'None', schedulePostImage: chat.settings.schedulePostImage || 'Grid',
     schedulePostMode: chat.settings.schedulePostMode || 'New', scheduleEventMode: chat.settings.scheduleEventMode || 'Edit',
+    deletePreviousAlert: !!chat.settings.deletePreviousAlert,
     quietHoursEnabled: !!chat.settings.quietHoursEnabled,
     quietHoursStartMinute: Number.isInteger(chat.settings.quietHoursStartMinute) ? chat.settings.quietHoursStartMinute : 1320,
     quietHoursEndMinute: Number.isInteger(chat.settings.quietHoursEndMinute) ? chat.settings.quietHoursEndMinute : 480,
@@ -308,7 +341,10 @@ function renderEditor(chat) {
   };
   state.editing = chat;
   try { tg.BackButton.show(); } catch { /* optional */ }
-  let seq = 0, timer = 0, busy = false, tab = 'main', manualMainFor = null, manualMainNode = null, uid = 0, cs = slots.length ? slots[0].id : null;
+  const savedPosition = readEditorPosition();
+  let seq = 0, timer = 0, busy = false,
+    tab = savedPosition?.chatId === String(chat.chatId) && TABS.some(([id]) => id === savedPosition.tab) ? savedPosition.tab : 'main',
+    manualMainFor = null, manualMainNode = null, uid = 0, cs = slots.length ? slots[0].id : null;
   // Per-slot editor state: current text (the default text when not customised), errors from preview / from the server.
   const tpls = Object.fromEntries(slots.map(x => [x.id, (chat.settings.templates || {})[x.id] || x.defaultTemplate]));
   const perr = {}, serr = {};
@@ -334,6 +370,7 @@ function renderEditor(chat) {
       scheduleNotify: false, scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
       scheduleReminder: !!(src.scheduleReminder && ok), scheduleReminderMinutes: Number(src.scheduleReminderMinutes) || 15,
       schedulePost: !!(src.schedulePost && ok), schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
+      deletePreviousAlert: !!src.deletePreviousAlert,
       quietHoursEnabled: !!src.quietHoursEnabled,
       quietHoursStartMinute: Number(src.quietHoursStartMinute), quietHoursEndMinute: Number(src.quietHoursEndMinute),
     };
@@ -376,6 +413,7 @@ function renderEditor(chat) {
 
   function setTab(id) {
     tab = id;
+    saveEditorPosition(chat.chatId, id);
     TABS.forEach(([t], i) => {
       panels[t].hidden = t !== id;
       tabBtns[i].setAttribute('aria-selected', t === id);
@@ -392,7 +430,19 @@ function renderEditor(chat) {
     const id = 'sw' + (++uid);
     const cb = h('input', { type: 'checkbox', role: 'switch', id, disabled: !!opts.disabled });
     cb.checked = !!s[key] && !opts.disabled;
-    cb.addEventListener('change', () => { s[key] = cb.checked; touch(); });
+    cb.addEventListener('change', async () => {
+      const value = cb.checked;
+      if (value && opts.confirm) {
+        cb.checked = false;
+        cb.disabled = true;
+        const confirmed = await confirmSetting(opts.confirm);
+        cb.disabled = !!opts.disabled;
+        if (!confirmed) return;
+        cb.checked = true;
+      }
+      s[key] = value;
+      touch();
+    });
     const row = h('div', { class: 'row' }, fieldLabel(title, helpKey, id), h('label', { class: 'sw' }, cb, h('i', { class: 'trk' })));
     row.cb = cb;
     return row;
@@ -1037,7 +1087,7 @@ function renderEditor(chat) {
         h('div', { class: 'svb-key-entry' },
           h('div', { class: 'fld' }, fieldLabel('Ключ каналу', 'svbKey', 'svbKey'), keyIn),
           btn('key', 'primary', 'Зберегти ключ', svbConnect)),
-        h('p', { class: 'hint', text: 'Знайдіть channel_key у налаштуваннях вашого каналу в Світлоботі. Графік буде оновлюватися автоматично після вибору черги.' }),
+        h('p', { class: 'hint', text: 'Ключ потрібен, щоб бот регулярно перевіряв нові графіки та передавав тижневий розклад у Світлобот. Знайдіть channel_key у налаштуваннях потрібного каналу в Світлоботі.' }),
       ];
     } else {
       body = [
@@ -1058,7 +1108,7 @@ function renderEditor(chat) {
   }
 
   const goToAddress = () => {
-    setTab('main');
+    setTab(tab);
     window.setTimeout(() => addressPanel.scrollIntoView({ block: 'start', behavior: 'smooth' }), 0);
   };
 
@@ -1093,6 +1143,10 @@ function renderEditor(chat) {
   }
 
   function renderSched() {
+    if (svbNode) {
+      panels.main.append(svbNode);
+      svbPaint();
+    }
     const r = regionOf(s.regionId);
     if (!r || !r.hasSchedules) {
       pvSeq++; pv.key = '';
@@ -1112,9 +1166,7 @@ function renderEditor(chat) {
         card(
           h('p', { class: 'empty', text: 'Щоб побачити графік і налаштувати публікації, вкажіть свою адресу або чергу.' }),
           h('button', { type: 'button', class: 'btn', text: 'Вказати адресу або чергу', onclick: goToAddress })),
-        ...(svbNode ? [svbNode] : []),
         h('p', { class: 'hint credit', text: CREDIT }));
-      svbPaint();
       return;
     }
     panels.sched.replaceChildren(
@@ -1124,7 +1176,10 @@ function renderEditor(chat) {
         sendNow, scheduleSendStatus),
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Публікація графіка' }), help('schedulePost')),
-        toggle('Публікувати графік', 'schedulePost', null, { disabled: !has }), lock(),
+        toggle('Публікувати графік', 'schedulePost', null, {
+          disabled: !has,
+          confirm: 'Увімкнути автоматичне надсилання графіка в цей чат? Бот надсилатиме й оновлюватиме графік обраної черги.',
+        }), lock(),
         h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
         h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
         edit('schedule', 'Редагувати шаблон'),
@@ -1144,7 +1199,6 @@ function renderEditor(chat) {
           })()),
         edit('before-off', 'Редагувати шаблон попередження'),
         lock()),
-      ...(svbNode ? [svbNode] : []),
       h('p', { class: 'hint credit', text: CREDIT }));
     svbPaint();
     if (tab === 'sched') loadPv();
@@ -1182,6 +1236,10 @@ function renderEditor(chat) {
       h('label', { class: 'sw' }, quietToggle, h('i', { class: 'trk' }))),
     quietTimes,
     h('p', { class: 'hint', text: 'Щодня за київським часом. Повідомлення надходять одразу, але без звукового сповіщення. Діє на сповіщення та автоматичні повідомлення графіка.' }));
+  const alertCleanupCard = card(
+    h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Менше зайвих повідомлень' }), help('alertCleanup')),
+    toggle('Видаляти попереднє аварійне сповіщення', 'deletePreviousAlert', 'alertCleanup'),
+    h('p', { class: 'hint', text: 'Спершу надійде нове повідомлення, потім бот спробує видалити попереднє. Для каналів і груп налаштування вмикається окремо. Графіки налаштовуються окремо.' }));
   const slotBar = h('div', { class: 'slotbar', role: 'tablist', 'aria-label': 'Види повідомлень' });
   const studio = h('div', { class: 'studio' });
   // Editor widgets of the current slot (rebuilt whenever the slot changes).
@@ -1189,9 +1247,10 @@ function renderEditor(chat) {
   const previewCache = {};
 
   function renderPills() {
-    const groups = [...SLOT_GROUPS, ...[...new Set(slots.map(x => x.group))].filter(g => !SLOT_GROUPS.some(y => y[0] === g)).map(g => [g, g])];
+    const groupKey = group => group === 'emergency' || group === 'regional' ? 'alerts' : group;
+    const groups = [...SLOT_GROUPS, ...[...new Set(slots.map(x => groupKey(x.group)))].filter(g => !SLOT_GROUPS.some(y => y[0] === g)).map(g => [g, g])];
     slotBar.replaceChildren(...groups.map(([g, title]) => {
-      const list = slots.filter(x => x.group === g);
+      const list = slots.filter(x => groupKey(x.group) === g);
       if (!list.length) return null;
       return h('div', { class: 'sgrp', role: 'presentation' }, h('div', { class: 'sgh', text: title }),
         h('div', { class: 'sgp' }, list.map(x => h('button', {
@@ -1360,6 +1419,7 @@ function renderEditor(chat) {
   } });
 
   panels.msg.append(
+    alertCleanupCard,
     quietCard,
     card(h('div', { class: 'fl big sm' }, h('span', { text: 'Шаблони повідомлень' }), help('slots')),
       h('div', { class: 'slotwrap' }, slotBar)),
@@ -1411,7 +1471,9 @@ async function load() {
   try {
     const [boot, chats] = await Promise.all([state.boot || api('GET', '/api/bootstrap'), api('GET', '/api/chats')]);
     state.boot = boot; state.chats = chats;
-    renderList();
+    const saved = readEditorPosition();
+    const previous = saved && chats.find(c => String(c.chatId) === saved.chatId);
+    if (previous) renderEditor(previous); else renderList();
   } catch (e) { showFatal(e, load); }
 }
 

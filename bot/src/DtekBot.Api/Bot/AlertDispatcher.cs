@@ -20,6 +20,7 @@ public sealed class AlertDispatcher(
     ILogger<AlertDispatcher> logger)
 {
     private const int MaxRetryAfterSeconds = 10;
+    private static readonly TimeSpan TelegramDeleteWindow = TimeSpan.FromHours(48);
     private static readonly TimeSpan SendSpacing = TimeSpan.FromMilliseconds(50);
     private static readonly LinkPreviewOptions NoPreview = new() { IsDisabled = true };
 
@@ -224,7 +225,7 @@ public sealed class AlertDispatcher(
             return Outcome.Unchanged;
         }
 
-        if (delivery is not null && channel.SlotEditInPlace(slot))
+        if (delivery is not null && !channel.DeletePreviousAlert && channel.SlotEditInPlace(slot))
         {
             await WithMarkupFallback(
                 text,
@@ -252,6 +253,11 @@ public sealed class AlertDispatcher(
                 cancellationToken: ct),
             channel);
 
+        if (delivery is not null && channel.DeletePreviousAlert)
+        {
+            await DeletePreviousAlertAsync(channel, delivery, now, ct);
+        }
+
         if (delivery is null)
         {
             db.Deliveries.Add(new Delivery
@@ -270,6 +276,43 @@ public sealed class AlertDispatcher(
         delivery.ContentHash = hash;
         delivery.UpdatedAt = now;
         return Outcome.Sent;
+    }
+
+    private async Task DeletePreviousAlertAsync(Channel channel, Delivery delivery, DateTimeOffset now, CancellationToken ct)
+    {
+        var age = now - delivery.UpdatedAt;
+        if (age > TelegramDeleteWindow)
+        {
+            logger.LogWarning(
+                "Could not delete previous alert {MessageId} in chat {ChatId}: Telegram's 48-hour deletion window has passed",
+                delivery.TelegramMessageId, channel.ChatId);
+            return;
+        }
+
+        try
+        {
+            await bot.DeleteMessage(channel.ChatId, delivery.TelegramMessageId, ct);
+        }
+        catch (ApiRequestException ex)
+        {
+            logger.LogWarning(
+                "Could not delete previous alert {MessageId} in chat {ChatId}: {Error}",
+                delivery.TelegramMessageId, channel.ChatId, ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not delete previous alert {MessageId} in chat {ChatId} due to a Telegram API connection error",
+                delivery.TelegramMessageId, channel.ChatId);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not delete previous alert {MessageId} in chat {ChatId} because the Telegram API request timed out",
+                delivery.TelegramMessageId, channel.ChatId);
+        }
     }
 
     private async Task<Outcome> SendEndAsync(

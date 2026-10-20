@@ -1,0 +1,33 @@
+name: Refresh power schedules
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      INGEST_URL: ${{ secrets.INGEST_URL }}
+      INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+
+    steps:
+      - name: Update schedule posts and Svitlobot weekly schedules
+        run: |
+          if [ -z "$INGEST_URL" ] || [ -z "$INGEST_SECRET" ]; then
+            echo "INGEST_URL and INGEST_SECRET must be configured."
+            exit 1
+          fi
+
+          curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
+            -H "x-ingest-secret: $INGEST_SECRET" \
+            "${INGEST_URL%/}/schedules/tick"

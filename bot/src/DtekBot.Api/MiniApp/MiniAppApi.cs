@@ -323,6 +323,7 @@ public static class MiniAppApi
             channel.IsActive = dto.IsActive;
             channel.IsPaused = dto.IsPaused;
             channel.Filter = dto.Filter;
+            channel.DeletePreviousAlert = dto.DeletePreviousAlert ?? channel.DeletePreviousAlert;
             if (slotSettings is not null)
             {
                 // Mirrored into the older columns so clients that do not know the per-slot map still read sensible values.
@@ -769,9 +770,8 @@ public static class MiniAppApi
                 return Error("Пошуковий запит задовгий.");
             }
 
-            var house = query.Trim();
-            var groupId = await FindStreetGroupAsync(db, region.Id, city.Trim(), street.Trim(), ct);
-            return Json(new[] { new DtekAddressHouseDto(house, groupId) });
+            var knownGroupId = await FindStreetGroupAsync(db, region.Id, city.Trim(), street.Trim(), ct);
+            return Json(new[] { new DtekAddressHouseDto(query.Trim(), knownGroupId) });
         });
 
         api.MapPut("/chats/{chatId:long}/address/dtek", async (
@@ -825,28 +825,40 @@ public static class MiniAppApi
             var groupId = string.IsNullOrWhiteSpace(request.GroupId)
                 ? await FindStreetGroupAsync(db, region.Id, city, street, ct)
                 : request.GroupId.Trim();
+            var manuallySelectedGroup = !string.IsNullOrWhiteSpace(request.GroupId);
 
             if (groupId is not null)
             {
                 if (!region.HasSchedules)
                 {
-                    return Error("Графіки для цього регіону недоступні.");
-                }
-
-                var snapshot = await schedules.GetAsync(region.Id, ct);
-                if (snapshot is null)
-                {
-                    return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
-                }
-
-                if (snapshot.Find(groupId) is null)
-                {
-                    if (!string.IsNullOrWhiteSpace(request.GroupId))
+                    if (manuallySelectedGroup)
                     {
-                        return Error("У вибраній черзі немає даних графіка. Оберіть її вручну.");
+                        return Error("Графіки для цього регіону недоступні.");
                     }
 
                     groupId = null;
+                }
+                else
+                {
+                    var snapshot = await schedules.GetAsync(region.Id, ct);
+                    if (snapshot is null)
+                    {
+                        if (manuallySelectedGroup)
+                        {
+                            return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
+                        }
+
+                        groupId = null;
+                    }
+                    else if (snapshot.Find(groupId) is null)
+                    {
+                        if (manuallySelectedGroup)
+                        {
+                            return Error("У вибраній черзі немає даних графіка. Оберіть її вручну.");
+                        }
+
+                        groupId = null;
+                    }
                 }
             }
 
@@ -1212,11 +1224,7 @@ public static class MiniAppApi
         settings.Regions.FirstOrDefault(r => r.HasGroups && string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
 
     private static async Task<string?> FindStreetGroupAsync(
-        BotDbContext db,
-        string regionId,
-        string city,
-        string street,
-        CancellationToken ct)
+        BotDbContext db, string regionId, string city, string street, CancellationToken ct)
     {
         var groupIds = await db.Channels.AsNoTracking()
             .Where(channel => channel.RegionId == regionId
@@ -1270,7 +1278,8 @@ public static class MiniAppApi
             c.ScheduleReminderMinutes,
             c.QuietHoursEnabled,
             c.QuietHoursStartMinute,
-            c.QuietHoursEndMinute);
+            c.QuietHoursEndMinute,
+            c.DeletePreviousAlert);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 
