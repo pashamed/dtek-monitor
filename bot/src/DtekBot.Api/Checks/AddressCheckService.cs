@@ -32,7 +32,8 @@ public sealed record HouseResultEntry(
     [property: JsonPropertyName("subType")] string? SubType,
     [property: JsonPropertyName("startDate")] string? StartDate,
     [property: JsonPropertyName("endDate")] string? EndDate,
-    [property: JsonPropertyName("type")] string? Type);
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("groupIds")] IReadOnlyList<string>? GroupIds = null);
 
 public sealed record StreetResult(
     [property: JsonPropertyName("regionId")] string RegionId,
@@ -53,6 +54,7 @@ public sealed class AddressCheckService(
 {
     public const string WorkflowEvent = "check-addresses";
     private const string LastDispatchKey = "last-dispatch";
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, SemaphoreSlim> BatchGates = new();
 
     private AddressCheckSettings Limits => options.CurrentValue.AddressChecks;
 
@@ -107,7 +109,7 @@ public sealed class AddressCheckService(
         }
 
         var day = now - TimeSpan.FromHours(24);
-        if (await db.AddressChecks.CountAsync(c => c.ChatId == channel.ChatId && c.RequestedAt >= day, ct) >= Limits.DailyLimitPerChat)
+        if (await db.AddressChecks.CountAsync(c => c.ChatId == channel.ChatId && c.BudgetCharged && c.RequestedAt >= day, ct) >= Limits.DailyLimitPerChat)
         {
             return new(RequestOutcome.DailyLimit, "Досягнуто добового ліміту перевірок. Спробуйте завтра.");
         }
@@ -115,6 +117,7 @@ public sealed class AddressCheckService(
         db.AddressChecks.Add(new AddressCheck
         {
             ChatId = channel.ChatId,
+            AddressId = channel.Addresses.Count == 1 ? channel.Addresses[0].Id : null,
             RegionId = channel.RegionId,
             City = city,
             Street = channel.AddressStreet,
@@ -127,7 +130,69 @@ public sealed class AddressCheckService(
 
         var dispatched = await MaybeDispatchAsync(now, ct);
         logger.LogInformation("Address check queued for chat {ChatId} (dispatched={Dispatched})", channel.ChatId, dispatched);
-        return new(RequestOutcome.Queued, "⏳ Перевіряю адресу на сайті ДТЕК. Це може тривати кілька хвилин, я напишу результат.");
+        return new(RequestOutcome.Queued, "⏳ Відключення поза графіком. Перевіряю локальну аварію за адресою, результат — за кілька хвилин.");
+    }
+
+    public static string ShortResult(AddressResult result) => !result.Found ? "Адресу не знайдено."
+        : result.IsEmergency ? "Позапланове відключення за даними ДТЕК."
+        : result.HasOutage ? "Планове відключення за даними ДТЕК." : "ДТЕК не повідомляє про відключення.";
+
+    public async Task<IReadOnlyDictionary<long, string>> RequestBatchAsync(Channel channel,
+        IReadOnlyList<ChatAddress> addresses, CancellationToken ct)
+    {
+        var gate = BatchGates.GetOrAdd(channel.ChatId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try { return await RequestBatchCoreAsync(channel, addresses, ct); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<IReadOnlyDictionary<long, string>> RequestBatchCoreAsync(Channel channel,
+        IReadOnlyList<ChatAddress> addresses, CancellationToken ct)
+    {
+        var now = time.GetUtcNow();
+        await ExpireStaleAsync(now, ct);
+        var replies = new Dictionary<long, string>();
+        var needed = new List<ChatAddress>();
+        foreach (var address in addresses)
+        {
+            if (string.IsNullOrWhiteSpace(address.Street) || string.IsNullOrWhiteSpace(address.House))
+            { replies[address.Id] = "Уточніть вулицю й будинок у редакторі."; continue; }
+            var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
+            if (region is null || string.IsNullOrEmpty(region.SiteUrl) || (!region.HasGroups && string.IsNullOrWhiteSpace(address.City)))
+            { replies[address.Id] = "Уточніть населений пункт у редакторі."; continue; }
+            var city = address.City ?? "";
+            var cutoff = now.AddMinutes(-Limits.ResultCacheMinutes);
+            var cached = await db.AddressResults.FirstOrDefaultAsync(r => r.RegionId == channel.RegionId
+                && r.City == city && r.Street == address.Street && r.House == address.House && r.CheckedAt >= cutoff, ct);
+            if (cached is not null) replies[address.Id] = ShortResult(cached);
+            else needed.Add(address);
+        }
+        if (needed.Count == 0) return replies;
+        var pending = await db.AddressChecks.AnyAsync(c => c.ChatId == channel.ChatId && c.Status == AddressCheckStatus.Pending, ct);
+        var recent = await db.AddressChecks.AnyAsync(c => c.ChatId == channel.ChatId && c.RequestedAt > now.AddMinutes(-Limits.ChatCooldownMinutes), ct);
+        var daily = await db.AddressChecks.CountAsync(c => c.ChatId == channel.ChatId && c.BudgetCharged && c.RequestedAt >= now.AddHours(-24), ct);
+        var denied = pending ? "Перевірка вже триває." : recent ? "Повторіть перевірку пізніше."
+            : daily >= Limits.DailyLimitPerChat ? "Добовий ліміт перевірок вичерпано." : null;
+        if (denied is not null)
+        {
+            foreach (var address in needed) replies[address.Id] = denied;
+            return replies;
+        }
+        var batchId = Guid.NewGuid().ToString("N");
+        for (var i = 0; i < needed.Count; i++)
+        {
+            var address = needed[i];
+            db.AddressChecks.Add(new AddressCheck
+            {
+                ChatId = channel.ChatId, AddressId = address.Id, RegionId = channel.RegionId,
+                City = address.City ?? "", Street = address.Street!, House = address.House!, Label = address.Name,
+                BatchId = batchId, BudgetCharged = i == 0, Status = AddressCheckStatus.Pending, RequestedAt = now,
+            });
+            replies[address.Id] = "Перевіряю адресу в ДТЕК. Результат надішлю згодом.";
+        }
+        await db.SaveChangesAsync(ct);
+        await MaybeDispatchAsync(now, ct);
+        return replies;
     }
 
     // Many users share one workflow run: a dispatch is skipped while a recent one is still in flight.
@@ -198,6 +263,19 @@ public sealed class AddressCheckService(
                 result.EndDate = Clip(entry.EndDate, 64);
                 result.Type = Clip(entry.Type, 256);
                 result.CheckedAt = now;
+                if (entry.GroupIds is { Count: > 0 } && options.CurrentValue.Regions.Any(r => r.Id == street.RegionId && r.HasSchedules))
+                {
+                    var groups = entry.GroupIds.Where(id => System.Text.RegularExpressions.Regex.IsMatch(id ?? "", @"^\d{1,2}\.\d{1,2}$"))
+                        .Distinct(StringComparer.Ordinal).Take(12).ToArray();
+                    var chats = await db.Channels.Where(c => c.RegionId == street.RegionId && c.Addresses.Any(a =>
+                        (a.City ?? "") == city && a.Street == street.Street && a.House == house)).ToListAsync(ct);
+                    foreach (var chat in chats)
+                    {
+                        foreach (var address in chat.Addresses.Where(a => (a.City ?? "") == city && a.Street == street.Street && a.House == house && a.Groups.Count == 0))
+                            address.Groups.AddRange(groups.Select(id => new ChatAddressGroup { GroupId = id }));
+                        chat.MirrorPrimary();
+                    }
+                }
             }
 
             await db.SaveChangesAsync(ct);
@@ -208,6 +286,16 @@ public sealed class AddressCheckService(
                 .ToListAsync(ct);
             foreach (var check in waiting)
             {
+                if (check.BatchId is not null) continue;
+                if (check.AddressId is not null)
+                {
+                    var saved = await db.ChatAddresses.FirstOrDefaultAsync(a => a.Id == check.AddressId && a.ChatId == check.ChatId, ct);
+                    if (saved is null || (saved.City ?? "") != check.City || saved.Street != check.Street || saved.House != check.House)
+                    {
+                        check.Status = AddressCheckStatus.Expired; check.CompletedAt = now;
+                        continue;
+                    }
+                }
                 if (street.Houses is null || !street.Houses.ContainsKey(check.House))
                 {
                     continue;
@@ -225,6 +313,27 @@ public sealed class AddressCheckService(
             await db.SaveChangesAsync(ct);
         }
 
+        var batches = (await db.AddressChecks.Where(c => c.Status == AddressCheckStatus.Pending && c.BatchId != null)
+            .ToListAsync(ct)).GroupBy(c => c.BatchId);
+        foreach (var batch in batches)
+        {
+            var lines = new List<string>();
+            var complete = true;
+            foreach (var check in batch)
+            {
+                var address = await db.ChatAddresses.FirstOrDefaultAsync(a => a.Id == check.AddressId && a.ChatId == check.ChatId, ct);
+                if (address is null || (address.City ?? "") != check.City
+                    || address.Street != check.Street || address.House != check.House) continue;
+                var result = await db.AddressResults.FirstOrDefaultAsync(r => r.RegionId == check.RegionId && r.City == check.City
+                    && r.Street == check.Street && r.House == check.House && r.CheckedAt >= check.RequestedAt, ct);
+                if (result is null) { complete = false; break; }
+                lines.Add($"📍 {check.Label}: {ShortResult(result)}");
+            }
+            if (!complete) continue;
+            if (lines.Count > 0) await TrySendAsync(batch.First().ChatId, string.Join("\n", lines), ct);
+            foreach (var check in batch) { check.Status = AddressCheckStatus.Done; check.CompletedAt = now; answered++; }
+        }
+        await db.SaveChangesAsync(ct);
         return answered;
     }
 
@@ -234,11 +343,13 @@ public sealed class AddressCheckService(
         var stale = await db.AddressChecks
             .Where(c => c.Status == AddressCheckStatus.Pending && c.RequestedAt < cutoff)
             .ToListAsync(ct);
+        var notifiedBatches = new HashSet<string>();
         foreach (var check in stale)
         {
             check.Status = AddressCheckStatus.Expired;
             check.CompletedAt = now;
-            await TrySendAsync(check.ChatId, "Не вдалося перевірити адресу вчасно. Спробуйте пізніше.", ct);
+            if (check.BatchId is null || notifiedBatches.Add(check.BatchId))
+                await TrySendAsync(check.ChatId, "Не вдалося перевірити адресу вчасно. Спробуйте пізніше.", ct);
         }
 
         if (stale.Count > 0)

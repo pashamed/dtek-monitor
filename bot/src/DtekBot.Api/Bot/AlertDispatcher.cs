@@ -81,10 +81,10 @@ public sealed class AlertDispatcher(
             Outcome outcome;
             if (eligible)
             {
-                var text = Render(channel, region, kind, PartNames(region, result), popupText, now, source: source);
+                var text = Render(channel, region, kind, PartNames(region, result), popupText, now, source: source, affectedPartIds: result.PartIds);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, slot, region.Id, delivery, text, result.Hash, now, ct),
+                    () => SendOrEditAsync(channel, slot, region.Id, delivery, text, RenderHash(channel, result.Hash, text), now, ct),
                     ct);
             }
             else if (delivery is not null && result.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
@@ -147,7 +147,7 @@ public sealed class AlertDispatcher(
         var hash = $"group:{groupId}:{(isEmergency ? "emergency" : "ok")}";
 
         var channels = await db.Channels
-            .Where(c => c.RegionId == region.Id && c.GroupId == groupId && c.IsActive)
+            .Where(c => c.RegionId == region.Id && c.IsActive && (c.Addresses.Any(a => a.Groups.Any(g => g.GroupId == groupId)) || (!c.Addresses.Any() && c.GroupId == groupId)))
             .ToListAsync(ct);
         var openDeliveries = await db.Deliveries
             .Where(d => d.RegionId == key && !d.IsClosed)
@@ -168,10 +168,10 @@ public sealed class AlertDispatcher(
             Outcome outcome;
             if (isEmergency && !channel.IsPaused && channel.SlotEnabled(MessageSlots.Local))
             {
-                var text = Render(channel, region, AlertKind.Emergency, partNames, null, now, isGroup: true);
+                var text = Render(channel, region, AlertKind.Emergency, partNames, null, now, isGroup: true, groupId: groupId);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, MessageSlots.Local, key, delivery, text, hash, now, ct),
+                    () => SendOrEditAsync(channel, MessageSlots.Local, key, delivery, text, RenderHash(channel, hash, text), now, ct),
                     ct);
             }
             else if (delivery is not null)
@@ -181,7 +181,7 @@ public sealed class AlertDispatcher(
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
-                        () => SendEndAsync(channel, region, delivery, partNames, null, now, ct, isGroup: true),
+                        () => SendEndAsync(channel, region, delivery, partNames, null, now, ct, isGroup: true, groupId: groupId),
                         ct)
                     : Outcome.Closed;
                 delivery.IsClosed = true;
@@ -323,9 +323,9 @@ public sealed class AlertDispatcher(
         string? popupText,
         DateTimeOffset now,
         CancellationToken ct,
-        bool isGroup = false)
+        bool isGroup = false, string? groupId = null)
     {
-        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup);
+        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup, groupId: groupId);
         var style = channel.SlotEndStyle(MessageSlots.Ended);
 
         if (style == EndStyle.Edit)
@@ -392,18 +392,31 @@ public sealed class AlertDispatcher(
         string? popupText,
         DateTimeOffset now,
         bool isGroup = false,
-        AlertSource source = AlertSource.None)
+        AlertSource source = AlertSource.None, string? groupId = null, IReadOnlyList<string>? affectedPartIds = null)
     {
         var slot = SlotFor(kind, isGroup);
         var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText).ToDictionary(p => p.Key, p => p.Value);
         values["message"] = AlertSourceText.Tag(values["message"], source, kind);
         if (isGroup)
         {
-            values["group"] = channel.GroupId ?? "";
-            values["address"] = channel.AddressLabel ?? "";
+            values["group"] = groupId ?? channel.GroupId ?? "";
+            values["address"] = channel.IsCombined() ? channel.GroupNames(groupId ?? channel.GroupId ?? "") : channel.AddressLabel ?? "";
         }
 
-        return MessageTemplate.Render(channel.TemplateFor(slot), values, MessageSlots.Find(slot)!.DefaultTemplate);
+        var rendered = MessageTemplate.Render(channel.TemplateFor(slot), values, MessageSlots.Find(slot)!.DefaultTemplate);
+        if (!isGroup && channel.IsCombined() && partNames.Count > 0)
+        {
+            var matching = channel.Addresses.Where(a =>
+            {
+                IReadOnlyList<string> scope = a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? channel.PartIdList;
+                return scope.Count == 0 || (affectedPartIds is { Count: > 0 }
+                    ? scope.Any(id => affectedPartIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                    : region.DisplayNames(scope).Any(partNames.Contains));
+            });
+            var names = matching.Select(a => a.Name).Where(n => n != "").Distinct().ToArray();
+            if (names.Length > 0) rendered += "\n📍 " + System.Net.WebUtility.HtmlEncode(string.Join(", ", names));
+        }
+        return rendered;
     }
 
     // Names only the districts the alert itself mentions: parts that are merely implied by another one
@@ -450,11 +463,22 @@ public sealed class AlertDispatcher(
     // No chosen districts, or an alert that names none, reaches everybody in the region; otherwise any overlap counts.
     private static bool Matches(Channel channel, PopupClassification result)
     {
-        var wanted = channel.PartIdList;
-        return wanted.Count == 0
-            || result.PartIds.Count == 0
-            || result.PartIds.Any(id => wanted.Contains(id, StringComparer.OrdinalIgnoreCase));
+        if (channel.Addresses.Count > 0)
+        {
+            return result.PartIds.Count == 0 || channel.Addresses.Any(address =>
+            {
+                IReadOnlyList<string> wanted = address.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    ?? channel.PartIdList;
+                return wanted.Count == 0 || result.PartIds.Any(id => wanted.Contains(id, StringComparer.OrdinalIgnoreCase));
+            });
+        }
+        var parts = channel.PartIdList;
+        return parts.Count == 0 || result.PartIds.Count == 0
+            || result.PartIds.Any(id => parts.Contains(id, StringComparer.OrdinalIgnoreCase));
     }
+
+    private static string RenderHash(Channel channel, string sourceHash, string text) => !channel.IsCombined() ? sourceHash
+        : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sourceHash + text)));
 
     // Deactivates chats that blocked the bot or no longer exist.
     private async Task<Outcome> TrySendAsync(Channel channel, Func<Task<Outcome>> action, CancellationToken ct)

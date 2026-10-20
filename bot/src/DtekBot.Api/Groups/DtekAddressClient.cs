@@ -131,7 +131,7 @@ public sealed partial class DtekAddressClient(
             }
             else
             {
-                houses.AddRange(groups.Select(group => new DtekAddressHouseDto(property.Name, group)));
+                houses.AddRange(groups.Select(group => new DtekAddressHouseDto(property.Name, group, groups.Length > 1 ? groups : null)));
             }
         }
 

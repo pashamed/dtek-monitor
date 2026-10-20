@@ -119,6 +119,10 @@ function buildStreetResult(pending, houses) {
           startDate: house.start_date ?? "",
           endDate: house.end_date ?? "",
           type: house.type ?? "",
+          groupIds: [...new Set((Array.isArray(house.sub_type_reason) ? house.sub_type_reason : [])
+            .filter((reason) => typeof reason === "string")
+            .map((reason) => /^GPV\s*(\d{1,2}\.\d{1,2})$/i.exec(reason)?.[1])
+            .filter(Boolean))],
         }
       : { found: false }
   }

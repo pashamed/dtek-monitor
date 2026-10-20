@@ -84,7 +84,7 @@ public sealed partial class ScheduleNotifier(
         foreach (var post in posts.Values.ToList())
         {
             if (!byChat.TryGetValue(post.ChatId, out var channel) || !channel.SchedulePost
-                || channel.GroupId != post.GroupId || channel.RegionId != post.RegionId)
+                || (post.MessageIds is null && channel.GroupId != post.GroupId) || channel.RegionId != post.RegionId)
             {
                 db.SchedulePostThreads.Remove(post);
                 posts.Remove(post.ChatId);
@@ -177,7 +177,7 @@ public sealed partial class ScheduleNotifier(
             return new(false, false, "Графіки тимчасово недоступні. Спробуйте пізніше.");
         }
 
-        if (snapshot.Find(channel.GroupId) is null)
+        if (!channel.GroupIds().Any(id => snapshot.Find(id) is not null))
         {
             return new(false, false, "Для обраної черги графік недоступний.");
         }
@@ -206,31 +206,31 @@ public sealed partial class ScheduleNotifier(
         CancellationToken ct,
         bool disableNotification)
     {
-        var group = snapshot.Find(channel.GroupId!);
-        if (group is null)
-        {
-            return Outcome.Skipped;
-        }
-
+        var groupIds = channel.GroupIds();
         var lead = TimeSpan.FromMinutes(channel.ScheduleReminderMinutes);
-        foreach (var outage in group.Outages)
+        foreach (var startGroup in groupIds.SelectMany(id => snapshot.Find(id)?.Outages ?? [])
+            .GroupBy(o => o.Start).OrderBy(g => g.Key))
         {
+            var outage = startGroup.First();
             if (outage.Start <= now || now < outage.Start - lead)
             {
                 continue;
             }
 
             var key = (channel.ChatId, region.Id, channel.GroupId!, outage.Start);
-            if (delivered.Contains(key))
+            if (delivered.Any(d => d.ChatId == channel.ChatId && d.RegionId == region.Id && d.OutageStart == outage.Start))
             {
                 continue;
             }
 
-            var values = ScheduleText.BeforeOffValues(region.Name, channel.GroupId!, outage.Start, channel.ScheduleReminderMinutes);
+            var affected = groupIds.Where(id => snapshot.Find(id)?.Outages.Any(o => o.Start == outage.Start) == true).ToArray();
+            var values = ScheduleText.BeforeOffValues(region.Name, string.Join(", ", affected), outage.Start, channel.ScheduleReminderMinutes);
             var text = MessageTemplate.Render(
                 channel.TemplateFor(MessageSlots.BeforeOff),
                 values,
                 MessageSlots.Find(MessageSlots.BeforeOff)!.DefaultTemplate);
+            if (channel.IsCombined())
+                text += "\n" + string.Join("; ", affected.Select(id => System.Net.WebUtility.HtmlEncode(channel.GroupNames(id)) + " ? " + id));
             try
             {
                 await WithRetry(() => WithMarkupFallback(
@@ -424,6 +424,15 @@ public sealed partial class ScheduleNotifier(
         bool force = false,
         bool disableNotification = false)
     {
+        if (channel.IsCombined())
+            return await ApplyCombinedPostAsync(channel, region, snapshot, post, posts, now, ct, force, disableNotification);
+        if (post?.MessageIds is not null)
+        {
+            if (channel.SchedulePostMode != PostMode.New)
+                foreach (var id in (System.Text.Json.JsonSerializer.Deserialize<List<int>>(post.MessageIds) ?? []).Skip(1))
+                    await DeleteQuietlyAsync(channel.ChatId, id, ct);
+            post.MessageIds = null;
+        }
         var groupId = channel.GroupId!;
         if (snapshot.Find(groupId) is null || now < snapshot.CoverageStart || now >= snapshot.CoverageEnd)
         {
@@ -505,6 +514,70 @@ public sealed partial class ScheduleNotifier(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Schedule post for chat {ChatId} failed", channel.ChatId);
+            return Outcome.Failed;
+        }
+    }
+
+    public async Task<string?> PreviewCombinedAsync(Channel channel, CancellationToken ct, string? template = null)
+    {
+        var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId && r.HasSchedules);
+        if (region is null) return null;
+        var snapshot = await schedules.GetAsync(region.Id, ct);
+        if (snapshot is null) return null;
+        var target = channel;
+        if (template is not null)
+        {
+            target = new Channel { RegionId = channel.RegionId, GroupId = channel.GroupId, Addresses = channel.Addresses };
+            target.TemplateMap = new Dictionary<string, string> { [MessageSlots.Schedule] = template };
+        }
+        return CombinedSchedule.Render(target, snapshot, region.Name, time.GetUtcNow(), false);
+    }
+
+    private async Task<Outcome> ApplyCombinedPostAsync(Channel channel, RegionSettings region,
+        ScheduleSnapshot snapshot, SchedulePostThread? post, Dictionary<long, SchedulePostThread> posts,
+        DateTimeOffset now, CancellationToken ct, bool force, bool disableNotification)
+    {
+        if (now < snapshot.CoverageStart || now >= snapshot.CoverageEnd) return Outcome.Skipped;
+        var date = ScheduleText.DateKey(now);
+        var sameDay = post?.DateKey == date;
+        var stable = CombinedSchedule.Render(channel, snapshot, region.Name, now, false);
+        var fingerprint = Hash(stable);
+        if (!force && sameDay && post!.ContentHash == fingerprint) return Outcome.Skipped;
+        var text = CombinedSchedule.Render(channel, snapshot, region.Name, now, sameDay);
+        var parts = CombinedSchedule.Parts(text);
+        var oldIds = post is null ? [] : post.MessageIds is null ? new List<int> { post.MessageId }
+            : System.Text.Json.JsonSerializer.Deserialize<List<int>>(post.MessageIds) ?? [];
+        var ids = new List<int>();
+        var edit = sameDay && channel.SchedulePostMode == PostMode.Edit && post is { IsPhoto: false };
+        try
+        {
+            for (var i = 0; i < parts.Count; i++)
+            {
+                var desired = new Desired(SchedulePhase.Off, 0, parts[i], "", null, ScheduleImage.None);
+                if (edit && i < oldIds.Count && await EditAsync(channel.ChatId, oldIds[i], false, "", ScheduleImage.None, desired, ct))
+                    ids.Add(oldIds[i]);
+                else
+                    ids.Add((await SendNewAsync(channel.ChatId, parts[i], null, ct, disableNotification)).MessageId);
+            }
+            if (channel.SchedulePostMode == PostMode.ReplaceDelete || (sameDay && channel.SchedulePostMode == PostMode.Edit))
+                foreach (var id in oldIds.Except(ids)) await DeleteQuietlyAsync(channel.ChatId, id, ct);
+            if (post is null)
+            {
+                post = new SchedulePostThread { ChatId = channel.ChatId };
+                db.SchedulePostThreads.Add(post); posts[channel.ChatId] = post;
+            }
+            post.MessageId = ids[0]; post.MessageIds = System.Text.Json.JsonSerializer.Serialize(ids);
+            post.IsPhoto = false; post.RegionId = region.Id; post.GroupId = channel.GroupId!;
+            post.DateKey = date; post.ContentHash = fingerprint; post.ImageKind = ScheduleImage.None;
+            post.ImageVersion = ""; post.UpdatedAt = now;
+            return edit ? Outcome.Edited : Outcome.Sent;
+        }
+        catch (ApiRequestException ex) when (IsChatGone(ex)) { Deactivate(channel, ex); return Outcome.Failed; }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Remove only newly sent fragments on a partial failure; retries can safely rebuild the digest.
+            foreach (var id in ids.Except(oldIds)) await DeleteQuietlyAsync(channel.ChatId, id, ct);
+            logger.LogWarning(ex, "Combined schedule for chat {ChatId} failed", channel.ChatId);
             return Outcome.Failed;
         }
     }

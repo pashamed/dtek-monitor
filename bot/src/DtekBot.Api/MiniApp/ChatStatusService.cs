@@ -33,7 +33,7 @@ public sealed class ChatStatusService(
 
         var settingsMatch = channel is not null
             && string.Equals(channel.RegionId, region.Id, StringComparison.OrdinalIgnoreCase);
-        var groupId = settingsMatch ? channel!.GroupId : null;
+        var groupIds = settingsMatch ? channel!.GroupIds() : [];
         var partIds = requestedPartIds ?? (settingsMatch ? channel!.PartIdList : []);
         var lines = new List<string>();
 
@@ -58,7 +58,7 @@ public sealed class ChatStatusService(
             lines.Add($"Перевірено: {KyivTime.Format(state.ObservedAt)} (час Києва · {region.Name})");
         }
 
-        if (groupId is not null)
+        foreach (var groupId in groupIds)
         {
             var group = await db.GroupStates.FirstOrDefaultAsync(g => g.RegionId == region.Id && g.GroupId == groupId, ct);
             if (group?.IsEmergency == true)

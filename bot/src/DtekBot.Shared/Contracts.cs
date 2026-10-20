@@ -55,7 +55,8 @@ public sealed record ChatSettingsDto(
     bool QuietHoursEnabled = false,
     int QuietHoursStartMinute = 1320,
     int QuietHoursEndMinute = 480,
-    bool? DeletePreviousAlert = null);
+    bool? DeletePreviousAlert = null,
+    IReadOnlyList<ChatAddressDto>? Addresses = null);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
 // EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.
@@ -95,9 +96,9 @@ public sealed record AddressItemDto(int Id, string Name, string? GroupId = null)
 
 public sealed record AddressNameDto(string Name);
 
-public sealed record DtekAddressHouseDto(string House, string? GroupId);
+public sealed record DtekAddressHouseDto(string House, string? GroupId, IReadOnlyList<string>? GroupIds = null);
 
-public sealed record SetDtekAddressRequest(string RegionId, string City, string Street, string House, string? GroupId);
+public sealed record SetDtekAddressRequest(string RegionId, string City, string Street, string House, string? GroupId, IReadOnlyList<string>? GroupIds = null);
 
 public sealed record SetAddressRequest(
     string RegionId,
@@ -173,7 +174,8 @@ public sealed record PreviewRequest(
     IReadOnlyList<string>? PartIds = null,
     string? Slot = null,
     string? GroupId = null,
-    ScheduleImage? ImageKind = null);
+    ScheduleImage? ImageKind = null,
+    IReadOnlyList<ChatAddressDto>? Addresses = null);
 
 // ImageUrl is set for slots that come with a picture (the schedule post).
 public sealed record PreviewResponse(string Html, IReadOnlyList<string> Errors, string? ImageUrl = null);
@@ -182,3 +184,9 @@ public sealed record PreviewResponse(string Html, IReadOnlyList<string> Errors, 
 public sealed record SendTestRequest(string? Template, ScheduleImage? ImageKind = null);
 
 public sealed record ApiError(string Error, IReadOnlyList<string>? Details = null);
+
+public sealed record ChatAddressGroupDto(string GroupId, string? Label = null);
+public sealed record ChatAddressDto(
+    long Id, string RegionId, string Name, string? City, string? Street, string? House,
+    IReadOnlyList<ChatAddressGroupDto> Groups, string? PartIds = null, string? Label = null);
+public sealed record SaveAddressesRequest(IReadOnlyList<ChatAddressDto> Addresses);

@@ -72,7 +72,7 @@ public sealed class SvitlobotScheduleSyncService(
                     continue;
                 }
 
-                var timetable = snapshot.WeeklyTimetable(channel.GroupId!, includeMaybe: true);
+                var timetable = WeeklyPreset.Union(snapshot, channel.GroupIds(), includeMaybe: true);
                 if (timetable is null)
                 {
                     logger.LogInformation(
@@ -82,7 +82,7 @@ public sealed class SvitlobotScheduleSyncService(
                 }
 
                 var stateKey = StateKey(channel.ChatId);
-                var signature = Signature(region.Id, channel.GroupId!, timetable);
+                var signature = Signature(region.Id, string.Join(",", channel.GroupIds()), timetable);
                 var refreshKey = WeeklyRefreshStateKey(channel.ChatId);
                 var refreshDue = weeklyRefreshDate is not null
                     && (!states.TryGetValue(refreshKey, out var previousRefresh) || previousRefresh.Value != weeklyRefreshDate);

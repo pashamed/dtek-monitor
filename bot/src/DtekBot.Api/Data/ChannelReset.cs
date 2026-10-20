@@ -8,6 +8,7 @@ public static class ChannelReset
     // the bot posted for it: schedule threads and still-open alert deliveries. Does not save.
     public static async Task ResetAsync(BotDbContext db, Channel channel, CancellationToken ct)
     {
+        channel.Addresses.Clear();
         var fresh = new Channel
         {
             ChatId = channel.ChatId,

@@ -16,6 +16,7 @@ namespace DtekBot.Api.MiniApp;
 // Every /api call carries "Authorization: tma <initData>" from the Mini App.
 public static class MiniAppApi
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, SemaphoreSlim> AddressGates = new();
     private const string UserIdKey = "tg.userId";
     private static readonly TimeSpan MaxInitDataAge = TimeSpan.FromHours(24);
 
@@ -40,6 +41,91 @@ public static class MiniAppApi
         });
 
         api.MapSvitlobotApi();
+
+        api.MapPut("/chats/{chatId:long}/addresses", async (
+            long chatId, HttpContext http, BotDbContext db, ChatAccessService access,
+            IOptionsMonitor<DtekSettings> settings, IScheduleProvider schedules,
+            AlertCatchUp catchUp, TimeProvider time, CancellationToken ct) =>
+        {
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+                return Results.Json(new ApiError("Немає доступу до цього чату."), ApiJson.Options, statusCode: 403);
+            var request = await http.Request.ReadFromJsonAsync<SaveAddressesRequest>(ApiJson.Options, ct);
+            if (request?.Addresses is null || request.Addresses.Count > 3)
+                return Error("Можна зберегти до 3 адрес.");
+            var gate = AddressGates.GetOrAdd(chatId, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(ct);
+            try
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+                var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+                if (channel is null) return Error("Спершу збережіть регіон.");
+                var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
+                if (region is null) return Error("Оберіть регіон.");
+                var snapshot = region.HasSchedules ? await schedules.GetAsync(region.Id, ct) : null;
+                var ids = new HashSet<long>();
+                foreach (var item in request.Addresses)
+                {
+                    if (item is null || item.RegionId != channel.RegionId)
+                        return Error("Усі адреси мають бути в одному регіоні.");
+                    if (item.Id != 0 && (!ids.Add(item.Id) || !channel.Addresses.Any(a => a.Id == item.Id)))
+                        return Error("Адресу не знайдено.");
+                    if (string.IsNullOrWhiteSpace(item.Name) || item.Name.Length > 64 || item.Name.Any(char.IsControl)
+                        || item.City?.Length > 128 || item.Street?.Length > 256 || item.House?.Length > 64 || item.Label?.Length > 256
+                        || new[] { item.City, item.Street, item.House, item.Label }.Any(t => t?.Any(char.IsControl) == true)
+                        || item.Groups is null || item.Groups.Count > 12)
+                        return Error("Перевірте назву, адресу та черги.");
+                    if (item.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Any(id => !region.Parts.Any(p => p.Id == id)) == true)
+                        return Error("Невідомий район.");
+                    foreach (var group in item.Groups)
+                    {
+                        if (group is null || !System.Text.RegularExpressions.Regex.IsMatch(group.GroupId ?? "", @"^\d{1,2}\.\d{1,2}$")
+                            || group.Label?.Length > 64 || group.Label?.Any(char.IsControl) == true
+                            || !region.HasSchedules || (snapshot is not null && snapshot.Find(group.GroupId!) is null))
+                            return Error("Перевірте черги обраного регіону.");
+                    }
+                }
+                var removedIds = channel.Addresses.Where(a => !ids.Contains(a.Id)).Select(a => a.Id).ToArray();
+                foreach (var removed in channel.Addresses.Where(a => removedIds.Contains(a.Id)).ToArray())
+                    channel.Addresses.Remove(removed);
+                foreach (var item in request.Addresses)
+                {
+                    var address = item.Id == 0 ? new ChatAddress { ChatId = chatId } : channel.Addresses.First(a => a.Id == item.Id);
+                    if (item.Id == 0) channel.Addresses.Add(address);
+                    address.RegionId = channel.RegionId; address.Name = item.Name.Trim();
+                    address.City = item.City?.Trim(); address.Street = item.Street?.Trim(); address.House = item.House?.Trim();
+                    address.Label = item.Label ?? string.Join(", ", new[] { address.City, address.Street, address.House }.Where(v => !string.IsNullOrEmpty(v)));
+                    address.PartIds = item.PartIds;
+                    var wanted = item.Groups.DistinctBy(g => g.GroupId).ToDictionary(g => g.GroupId);
+                    foreach (var old in address.Groups.Where(g => !wanted.ContainsKey(g.GroupId)).ToArray()) address.Groups.Remove(old);
+                    foreach (var group in wanted.Values)
+                    {
+                        var saved = address.Groups.FirstOrDefault(g => g.GroupId == group.GroupId);
+                        if (saved is null) { saved = new ChatAddressGroup { GroupId = group.GroupId }; address.Groups.Add(saved); }
+                        saved.Label = group.Label?.Trim();
+                    }
+                }
+                channel.MirrorPrimary();
+                var groupKeys = channel.GroupIds().Select(id => AlertDispatcher.GroupDeliveryKey(channel.RegionId, id)).ToArray();
+                var groupPrefix = channel.RegionId + ":group:";
+                foreach (var delivery in await db.Deliveries.Where(d => d.ChatId == chatId && !d.IsClosed
+                    && d.RegionId.StartsWith(groupPrefix) && !groupKeys.Contains(d.RegionId)).ToListAsync(ct))
+                    delivery.IsClosed = true;
+                if (channel.GroupId is null) { channel.SchedulePost = false; channel.ScheduleNotify = false; channel.ScheduleReminder = false; }
+                foreach (var check in await db.AddressChecks.Where(c => c.ChatId == chatId && c.Status == AddressCheckStatus.Pending).ToListAsync(ct))
+                {
+                    if (channel.Addresses.Any(a => (check.AddressId is null || a.Id == check.AddressId)
+                        && (a.City ?? "") == check.City && a.Street == check.Street && a.House == check.House)) continue;
+                    check.Status = AddressCheckStatus.Expired;
+                    check.CompletedAt = time.GetUtcNow();
+                }
+                await db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+                await catchUp.RunAsync(channel, ct);
+                return Json(ToSummary(channel, UserId(http)));
+            }
+            finally { gate.Release(); }
+        });
 
         api.MapGet("/bootstrap", (HttpContext http, IOptionsMonitor<DtekSettings> settings) =>
         {
@@ -286,6 +372,11 @@ public static class MiniAppApi
                 return Error("Оберіть коректний проміжок тихих годин.");
             }
 
+            if (channel.Addresses.Count > 0 && region is not null && channel.RegionId != region.Id)
+            {
+                return Error("Спершу приберіть адреси поточного регіону.");
+            }
+
             var before = (WasActive: !isNew && channel.IsActive, channel.IsPaused, channel.RegionId, channel.PartIds, channel.SlotSettings, channel.GroupId);
 
             if (region is not null)
@@ -310,6 +401,7 @@ public static class MiniAppApi
             // Switching the subscription off also removes the saved address and everything that depends on it.
             if (channel.IsActive && !dto.IsActive)
             {
+                channel.Addresses.Clear();
                 channel.GroupId = null;
                 channel.AddressLabel = null;
                 channel.AddressCity = null;
@@ -391,6 +483,8 @@ public static class MiniAppApi
             HttpContext http,
             IOptionsMonitor<DtekSettings> settings,
             TemplatePreviewService previews,
+            IScheduleProvider schedules,
+            TimeProvider time,
             CancellationToken ct) =>
         {
             var request = await http.Request.ReadFromJsonAsync<PreviewRequest>(ApiJson.Options, ct);
@@ -417,6 +511,26 @@ public static class MiniAppApi
             if (errors.Count > 0)
             {
                 return Json(new PreviewResponse("", errors));
+            }
+
+            if (slot == MessageSlots.Schedule && request.Addresses is { Count: > 0 })
+            {
+                if (request.Addresses.Count > 3 || request.Addresses.Any(a => a is null || a.RegionId != region.Id || a.Groups is null))
+                    return Error("Перевірте адреси та регіон.");
+                var channel = new Channel { RegionId = region.Id };
+                foreach (var a in request.Addresses)
+                    channel.Addresses.Add(new ChatAddress { Name = a.Name, RegionId = region.Id, Label = a.Label,
+                        Groups = a.Groups.Where(g => g is not null).DistinctBy(g => g.GroupId)
+                            .Select(g => new ChatAddressGroup { GroupId = g.GroupId, Label = g.Label }).ToList() });
+                if (channel.IsCombined())
+                {
+                    channel.TemplateMap = string.IsNullOrWhiteSpace(previewTemplate) ? new Dictionary<string, string>()
+                        : new Dictionary<string, string> { [MessageSlots.Schedule] = previewTemplate };
+                    var snapshot = await schedules.GetAsync(region.Id, ct);
+                    if (snapshot is null) return Error("Графіки тимчасово недоступні.");
+                    var html = CombinedSchedule.Render(channel, snapshot, region.Name, time.GetUtcNow(), false);
+                    return Json(new PreviewResponse(html, [], null));
+                }
             }
 
             // The legacy single-template call has no slot: its Kind picks the sample.
@@ -520,6 +634,8 @@ public static class MiniAppApi
                 return Error("Оберіть регіон.");
             }
 
+            var combined = slot == MessageSlots.Schedule && channel.IsCombined()
+                ? await notifier.PreviewCombinedAsync(channel, ct, template) : null;
             var rendered = await previews.RenderAsync(
                 slot,
                 template,
@@ -862,12 +978,28 @@ public static class MiniAppApi
                 }
             }
 
+            if (channel.IsCombined()) return Error("Змініть адресу у списку адрес.");
+            var selected = request.GroupIds?.Distinct(StringComparer.Ordinal).ToArray();
+            if (selected is { Length: > 0 })
+            {
+                var snapshot = region.HasSchedules ? await schedules.GetAsync(region.Id, ct) : null;
+                if (selected.Length > 12 || snapshot is null || selected.Any(id => string.IsNullOrWhiteSpace(id) || snapshot.Find(id) is null))
+                    return Error("Перевірте черги обраного регіону.");
+                groupId = selected.Order(StringComparer.Ordinal).First();
+            }
             channel.GroupId = groupId;
             channel.AddressCity = city;
             channel.AddressStreet = street;
             channel.AddressHouse = house;
             var label = $"{city}, {street}, {house}";
             channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            channel.UpdateLegacyPrimary();
+            if (selected is { Length: > 1 })
+            {
+                var address = channel.Addresses.First();
+                address.Groups.Clear();
+                address.Groups.AddRange(selected.Select(id => new ChatAddressGroup { GroupId = id }));
+            }
             await db.SaveChangesAsync(ct);
             await catchUp.RunAsync(channel, ct);
             return Json(ToSummary(channel, userId));
@@ -933,11 +1065,13 @@ public static class MiniAppApi
             }
 
             var label = request.Label?.Trim() ?? "";
+            if (channel.IsCombined()) return Error("Змініть адресу у списку адрес.");
             channel.GroupId = group.Id;
             channel.AddressLabel = label.Length > 256 ? label[..256] : label;
             channel.AddressCity = null;
             channel.AddressStreet = CleanPart(request.Street, 256);
             channel.AddressHouse = CleanPart(request.House, 64);
+            channel.UpdateLegacyPrimary();
             await db.SaveChangesAsync(ct);
             await catchUp.RunAsync(channel, ct);
             return Json(ToSummary(channel, userId));
@@ -962,6 +1096,8 @@ public static class MiniAppApi
                 return Error("Чат не знайдено.");
             }
 
+            if (channel.IsCombined()) return Error("Приберіть адресу зі списку адрес.");
+            channel.Addresses.Clear();
             channel.GroupId = null;
             channel.AddressLabel = null;
             channel.AddressCity = null;
@@ -1028,12 +1164,14 @@ public static class MiniAppApi
                 return Error(problem);
             }
 
+            if (channel.IsCombined()) return Error("Змініть адресу у списку адрес.");
             var (city, street, house) = (parts[0].Value!, parts[1].Value!, parts[2].Value!);
             var label = $"{city}, {street}, {house}";
             channel.AddressCity = city;
             channel.AddressStreet = street;
             channel.AddressHouse = house;
             channel.AddressLabel = label.Length > 256 ? label[..256] : label;
+            channel.UpdateLegacyPrimary();
             await db.SaveChangesAsync(ct);
             return Json(ToSummary(channel, userId));
         });
@@ -1059,10 +1197,13 @@ public static class MiniAppApi
                 return Error("Чат не знайдено.");
             }
 
+            if (channel.IsCombined()) return Error("Приберіть адресу зі списку адрес.");
             channel.AddressLabel = null;
             channel.AddressCity = null;
             channel.AddressStreet = null;
             channel.AddressHouse = null;
+
+            channel.UpdateLegacyPrimary();
 
             // A queued check is about the address that was just removed.
             var pending = await db.AddressChecks
@@ -1145,7 +1286,9 @@ public static class MiniAppApi
             }
 
             // A hand-picked group only replaces the detected one: the saved address stays for the DTEK check.
+            if (channel.IsCombined()) return Error("Змініть черги у списку адрес.");
             channel.GroupId = request.GroupId;
+            channel.UpdateLegacyPrimary();
             await db.SaveChangesAsync(ct);
             await catchUp.RunAsync(channel, ct);
             return Json(ToSummary(channel, userId));
@@ -1279,7 +1422,11 @@ public static class MiniAppApi
             c.QuietHoursEnabled,
             c.QuietHoursStartMinute,
             c.QuietHoursEndMinute,
-            c.DeletePreviousAlert);
+            c.DeletePreviousAlert,
+            c.Addresses.Count > 0 ? c.Addresses.OrderBy(a => a.Id).Select(a => a.ToDto()).ToArray()
+                : c.GroupId is not null || c.AddressLabel is not null || c.AddressStreet is not null
+                    ? [new ChatAddressDto(0, c.RegionId, "Дім", c.AddressCity, c.AddressStreet, c.AddressHouse,
+                        c.GroupId is null ? [] : [new ChatAddressGroupDto(c.GroupId)], c.PartIds, c.AddressLabel)] : []);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 
