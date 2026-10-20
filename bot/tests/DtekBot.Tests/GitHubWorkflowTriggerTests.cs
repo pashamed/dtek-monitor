@@ -106,6 +106,17 @@ public class GitHubWorkflowTriggerTests
     }
 
     [Fact]
+    public async Task Trigger_ForwardsBrowserCyclePayload()
+    {
+        var (trigger, handler, _) = Create(() => new HttpResponseMessage(HttpStatusCode.NoContent));
+        Assert.True(await trigger.TriggerAsync("check-regions", CancellationToken.None,
+            new { collectionId = "cycle-1", regionIds = new[] { "kyiv" } }));
+        using var doc = System.Text.Json.JsonDocument.Parse(Assert.Single(handler.Requests).Body!);
+        Assert.Equal("check-regions", doc.RootElement.GetProperty("event_type").GetString());
+        Assert.Equal("cycle-1", doc.RootElement.GetProperty("client_payload").GetProperty("collectionId").GetString());
+    }
+
+    [Fact]
     public async Task Trigger_UsesTheGivenEventType()
     {
         var (trigger, handler, _) = Create(() => new HttpResponseMessage(HttpStatusCode.NoContent));

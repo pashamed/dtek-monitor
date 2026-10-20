@@ -98,6 +98,20 @@ public sealed class ScheduleProviderTests : IDisposable
     // ---- basic fetching ----
 
     [Fact]
+    public async Task RuntimeRefresh_BypassesCache_ButKeepsConditionalGet()
+    {
+        _handler.Enqueue(() => Ok());
+        _handler.Enqueue(() => Status(HttpStatusCode.NotModified));
+        var first = await _provider.GetAsync("kyiv", CancellationToken.None);
+        var refreshed = await _provider.RefreshAsync("kyiv", CancellationToken.None);
+        Assert.Equal(2, _handler.Requests.Count);
+        Assert.Equal("\"etag-1\"", _handler.Requests[1].IfNoneMatch);
+        Assert.Equal(first!.Version, refreshed!.Version);
+        await _provider.GetAsync("kyiv", CancellationToken.None);
+        Assert.Equal(2, _handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task FirstCall_FetchesTheDataFile_AndParsesIt()
     {
         _handler.Enqueue(() => Ok());

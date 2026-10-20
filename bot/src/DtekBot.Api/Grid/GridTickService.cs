@@ -22,8 +22,13 @@ public sealed class GridTickService(
 {
     public async Task<GridTickSummary> TickAsync(CancellationToken ct)
     {
-        var settings = options.CurrentValue;
         var feed = await provider.GetAsync(ct);
+        return await ApplyAsync(feed, true, ct);
+    }
+
+    public async Task<GridTickSummary> ApplyAsync(GridFeed? feed, bool dispatchAlerts, CancellationToken ct)
+    {
+        var settings = options.CurrentValue;
         if (feed is null)
         {
             return new GridTickSummary("unavailable", null, []);
@@ -63,7 +68,7 @@ public sealed class GridTickService(
             // so a send that failed earlier is retried.
             var changed = previousKind != row.Kind;
             DispatchSummary? dispatch = null;
-            if (changed || row.IsAlert)
+            if (dispatchAlerts && (changed || row.IsAlert))
             {
                 dispatch = await coordinator.RecomputeAsync(region.Id, ct);
             }

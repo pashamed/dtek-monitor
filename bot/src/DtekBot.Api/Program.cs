@@ -68,6 +68,16 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddHostedService<BotMenuInitializer>();
 builder.Services.AddHostedService<TickLoop>();
+builder.Services.AddScoped<MonitoringCycle>();
+builder.Services.AddScoped<RegionObservationStore>();
+builder.Services.AddSingleton<DtekPopupCollector>();
+builder.Services.AddSingleton<IDtekPopupCollector>(sp => sp.GetRequiredService<DtekPopupCollector>());
+builder.Services.AddHttpClient(DtekPopupCollector.ClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(25);
+    client.MaxResponseContentBufferSize = 4 * 1024 * 1024;
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; dtek-monitor-bot/1.0)");
+});
 builder.Services.AddScoped<AlertDispatcher>();
 builder.Services.AddScoped<RegionAlertCoordinator>();
 builder.Services.AddScoped<DtekBot.Api.Grid.GridTickService>();
@@ -206,9 +216,9 @@ app.MapPost("/webhook", async (
 app.MapPost("/ingest", async (
     IngestRequest body,
     HttpRequest request,
-    BotDbContext db,
-    PopupClassifier classifier,
     RegionAlertCoordinator coordinator,
+    RegionObservationStore observations,
+    DtekPopupCollector collector,
     IOptionsMonitor<DtekSettings> settings,
     TimeProvider time,
     IConfiguration config,
@@ -230,44 +240,33 @@ app.MapPost("/ingest", async (
         return Results.BadRequest(new { error = "unknown region" });
     }
 
-    var result = classifier.Classify(region.Id, body.PopupText, body.Structured);
-    logger.LogInformation(
-        "Ingest {Region}: kind={Kind} parts=[{Parts}] textLength={Length} structured={Structured}",
-        region.Id, result.Kind, string.Join(",", result.PartIds), result.NormalizedText.Length, body.Structured?.Scope ?? "none");
-    var now = time.GetUtcNow();
+    var observation = new DtekPopupObservation(region.Id, body.PopupText, body.ObservedAt ?? time.GetUtcNow(), body.Structured);
+    if (collector.Accept(body.CollectionId, observation))
+        return Results.Ok(new { regionId = region.Id, collected = true });
 
-    var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
-    var changed = state is null || state.Hash != result.Hash;
-    if (state is null)
+    await TickGate.Grid.WaitAsync(ct);
+    try
     {
-        state = new RegionState { RegionId = region.Id };
-        db.RegionStates.Add(state);
+        var (changed, result) = await observations.SaveAsync(observation, ct);
+        logger.LogInformation(
+            "Ingest {Region}: kind={Kind} parts=[{Parts}] textLength={Length} structured={Structured}",
+            region.Id, result.Kind, string.Join(",", result.PartIds), result.NormalizedText.Length, body.Structured?.Scope ?? "none");
+        var dispatch = changed ? await coordinator.RecomputeAsync(region.Id, ct) : null;
+        logger.LogInformation("Ingest {Region}: changed={Changed} dispatch={@Dispatch}", region.Id, changed, dispatch);
+
+        return Results.Ok(new
+        {
+            regionId = region.Id,
+            changed,
+            kind = result.Kind.ToString(),
+            parts = result.PartIds,
+            dispatch,
+        });
     }
-
-    state.ObservedAt = body.ObservedAt ?? now;
-    if (changed)
+    finally
     {
-        state.Kind = result.Kind;
-        state.NormalizedText = result.NormalizedText;
-        state.PopupText = body.PopupText?.Trim() is { Length: > 4000 } longText ? longText[..4000] : body.PopupText?.Trim();
-        state.Hash = result.Hash;
-        state.PartIdList = result.PartIds;
-        state.UpdatedAt = now;
+        TickGate.Grid.Release();
     }
-
-    await db.SaveChangesAsync(ct);
-
-    var dispatch = changed ? await coordinator.RecomputeAsync(region.Id, ct) : null;
-    logger.LogInformation("Ingest {Region}: changed={Changed} dispatch={@Dispatch}", region.Id, changed, dispatch);
-
-    return Results.Ok(new
-    {
-        regionId = region.Id,
-        changed,
-        kind = result.Kind.ToString(),
-        parts = result.PartIds,
-        dispatch,
-    });
 });
 
 app.Run();
@@ -276,6 +275,7 @@ public sealed record IngestRequest(
     [property: JsonPropertyName("regionId")] string RegionId,
     [property: JsonPropertyName("popupText")] string? PopupText,
     [property: JsonPropertyName("observedAt")] DateTimeOffset? ObservedAt,
-    [property: JsonPropertyName("structured")] StructuredPopup? Structured = null);
+    [property: JsonPropertyName("structured")] StructuredPopup? Structured = null,
+    [property: JsonPropertyName("collectionId")] string? CollectionId = null);
 
 public partial class Program;

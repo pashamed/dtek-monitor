@@ -5,10 +5,10 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
   repository_dispatch:
-    types: [check-dtek, check-emergency, check-addresses]
+    types: [check-dtek, check-emergency, check-addresses, check-regions]
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.action == 'check-regions' && 'regions' || 'monitor' }}
   cancel-in-progress: false
 
 permissions:
@@ -22,12 +22,15 @@ jobs:
     env:
       INGEST_URL: ${{ secrets.INGEST_URL }}
       INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+      DTEK_COLLECTION_ID: ${{ github.event.client_payload.collectionId }}
+      DTEK_REGION_IDS: ${{ toJSON(github.event.client_payload.regionIds) }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
       - name: Checkout artifacts
+        if: github.event.action != 'check-regions'
         run: |
           REMOTE_BRANCH=$(git ls-remote --heads origin artifacts)
 
@@ -71,7 +74,7 @@ jobs:
           fi
 
       - name: Run monitoring script
-        if: github.event.action != 'check-addresses'
+        if: github.event.action != 'check-addresses' && github.event.action != 'check-regions'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -97,14 +100,14 @@ jobs:
 
       # Cheap when nothing is queued (one HTTP request); any run also drains requests whose dispatch failed.
       - name: Check pending addresses for the shared bot
-        if: always() && env.INGEST_URL != ''
+        if: always() && env.INGEST_URL != '' && github.event.action != 'check-regions'
         continue-on-error: true
         timeout-minutes: 5
         run: node ./src/check-addresses.js
 
       # Ukrenergo status feed: a region-wide emergency is posted at once, before the DTEK popup shows it.
       - name: Check the Ukrenergo status for the shared bot
-        if: always() && env.INGEST_URL != ''
+        if: always() && env.INGEST_URL != '' && github.event.action != 'check-regions'
         continue-on-error: true
         timeout-minutes: 2
         run: |
@@ -115,7 +118,7 @@ jobs:
 
       # Posts and edits the schedule messages. Safe to run often: it only compares stored state with the cached schedule.
       - name: Update schedule messages for the shared bot
-        if: always() && env.INGEST_URL != ''
+        if: always() && env.INGEST_URL != '' && github.event.action != 'check-regions'
         continue-on-error: true
         timeout-minutes: 2
         run: |
@@ -124,6 +127,7 @@ jobs:
             "${INGEST_URL%/}/schedules/tick"
 
       - name: Commit updated artifacts
+        if: github.event.action != 'check-regions'
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"

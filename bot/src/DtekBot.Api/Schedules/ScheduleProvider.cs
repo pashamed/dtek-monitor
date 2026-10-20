@@ -9,6 +9,7 @@ public interface IScheduleProvider
 {
     // Null when the region has no schedule data or nothing usable could be fetched.
     Task<ScheduleSnapshot?> GetAsync(string regionId, CancellationToken ct);
+    Task<ScheduleSnapshot?> RefreshAsync(string regionId, CancellationToken ct) => GetAsync(regionId, ct);
 }
 
 // One shared copy per region: requests inside the cache window cost nothing, and a refresh is a conditional GET
@@ -31,7 +32,11 @@ public sealed class ScheduleProvider(
 
     private readonly ConcurrentDictionary<string, Entry> _entries = new();
 
-    public async Task<ScheduleSnapshot?> GetAsync(string regionId, CancellationToken ct)
+    public Task<ScheduleSnapshot?> GetAsync(string regionId, CancellationToken ct) => GetCoreAsync(regionId, false, ct);
+
+    public Task<ScheduleSnapshot?> RefreshAsync(string regionId, CancellationToken ct) => GetCoreAsync(regionId, true, ct);
+
+    private async Task<ScheduleSnapshot?> GetCoreAsync(string regionId, bool force, CancellationToken ct)
     {
         var settings = options.CurrentValue;
         var region = settings.Regions.FirstOrDefault(r => r.Id == regionId);
@@ -46,7 +51,7 @@ public sealed class ScheduleProvider(
         var maxStale = TimeSpan.FromMinutes(settings.Schedules.MaxStaleMinutes);
 
         // A recent attempt counts even when it failed, so a broken source is not hammered by every caller.
-        if (WithinWindow(entry, now, ttl))
+        if (!force && WithinWindow(entry, now, ttl))
         {
             return Usable(entry, now, maxStale);
         }
@@ -55,7 +60,7 @@ public sealed class ScheduleProvider(
         try
         {
             now = time.GetUtcNow();
-            if (WithinWindow(entry, now, ttl))
+            if (!force && WithinWindow(entry, now, ttl))
             {
                 return Usable(entry, now, maxStale);
             }

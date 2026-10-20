@@ -72,6 +72,26 @@ public sealed class GridStatusProviderTests
     // ---- parsing ----
 
     [Fact]
+    public async Task RuntimeRefresh_BypassesCache_AndKeepsEtag()
+    {
+        var calls = 0;
+        var handler = new Handler(request =>
+        {
+            calls++;
+            if (calls == 1) return Ok("\"grid-v1\"");
+            Assert.Equal("\"grid-v1\"", Assert.Single(request.Headers.IfNoneMatch).Tag);
+            return new HttpResponseMessage(HttpStatusCode.NotModified);
+        });
+        var provider = Provider(handler);
+        var first = await provider.GetAsync(CancellationToken.None);
+        var refreshed = await provider.RefreshAsync(CancellationToken.None);
+        Assert.Same(first, refreshed);
+        Assert.Equal(2, calls);
+        await provider.GetAsync(CancellationToken.None);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
     public void Parser_ReadsTheRealShape()
     {
         var feed = GridFeedParser.Parse(Json)!;
