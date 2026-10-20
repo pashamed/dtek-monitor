@@ -18,6 +18,7 @@ public sealed class OutageAssessmentService(
 {
     public async Task<string> AssessAsync(Channel channel, CancellationToken ct)
     {
+        if (channel.IsCombined()) return await AssessAllAsync(channel, ct);
         var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
         region?.UpgradeRetiredParts(channel);
 
@@ -55,6 +56,35 @@ public sealed class OutageAssessmentService(
         }
 
         return answer;
+    }
+
+    private async Task<string> AssessAllAsync(Channel channel, CancellationToken ct)
+    {
+        var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == channel.RegionId, ct);
+        var grid = await db.GridStates.AsNoTracking().FirstOrDefaultAsync(g => g.RegionId == channel.RegionId, ct);
+        var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
+        var snapshot = region is { HasSchedules: true } ? await schedules.GetAsync(channel.RegionId, ct) : null;
+        var emergencies = await db.GroupStates.Where(g => g.RegionId == channel.RegionId).ToListAsync(ct);
+        var answers = new Dictionary<long, string>();
+        var needed = new List<ChatAddress>();
+        foreach (var address in channel.Addresses.OrderBy(a => a.Id))
+        {
+            var parts = address.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? channel.PartIdList;
+            var dtek = state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
+            var named = state?.PartIdList ?? [];
+            var district = dtek && named.Count > 0 && named.Any(parts.Contains);
+            var general = dtek && named.Count == 0 || grid?.IsAlert == true;
+            var off = address.Groups.Where(g => snapshot?.StatusAt(g.GroupId, time.GetUtcNow())?.IsOff == true).Select(g => g.GroupId).ToArray();
+            var emergency = address.Groups.Where(g => emergencies.Any(e => e.GroupId == g.GroupId && e.IsEmergency)).Select(g => g.GroupId).ToArray();
+            if (district) answers[address.Id] = "Екстрені відключення в районі. Графік не діє.";
+            else if (general) answers[address.Id] = "Екстрені відключення в регіоні. Графік може не діяти.";
+            else if (off.Length > 0) answers[address.Id] = $"Відключення за графіком: {string.Join(", ", off)}.";
+            else if (emergency.Length > 0) answers[address.Id] = $"Екстрені відключення черги {string.Join(", ", emergency)}.";
+            else needed.Add(address);
+        }
+        var queued = await checks.RequestBatchAsync(channel, needed, ct);
+        foreach (var (id, message) in queued) answers[id] = message;
+        return string.Join("\n", channel.Addresses.OrderBy(a => a.Id).Select(a => $"📍 {a.Name}: {answers.GetValueOrDefault(a.Id, "Немає даних.")}"));
     }
 
     private async Task<string> AssessOutsideEmergencyDistrictsAsync(Channel channel, bool regionalEmergency, bool gridEmergency, CancellationToken ct)

@@ -74,11 +74,8 @@ public static class GroupApi
             await db.SaveChangesAsync(ct);
 
             // Only groups somebody follows are dispatched; delivery hashes make repeats no-ops.
-            var followed = await db.Channels
-                .Where(c => c.RegionId == region.Id && c.IsActive && c.GroupId != null)
-                .Select(c => c.GroupId!)
-                .Distinct()
-                .ToListAsync(ct);
+            var subscribers = await db.Channels.Where(c => c.RegionId == region.Id && c.IsActive).ToListAsync(ct);
+            var followed = subscribers.SelectMany(c => c.GroupIds()).Distinct(StringComparer.Ordinal).ToList();
 
             int sent = 0, edited = 0, closed = 0, failed = 0;
             foreach (var groupId in followed)

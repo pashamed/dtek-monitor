@@ -28,13 +28,16 @@ public sealed class AlertCatchUp(
             await coordinator.RecomputeAsync(channel.RegionId, ct);
 
             var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
-            if (region is not null && channel.GroupId is not null)
+            if (region is not null)
             {
-                var group = await db.GroupStates.AsNoTracking()
-                    .FirstOrDefaultAsync(g => g.RegionId == region.Id && g.GroupId == channel.GroupId, ct);
-                if (group?.IsEmergency == true)
+                foreach (var groupId in channel.GroupIds())
                 {
-                    await dispatcher.DispatchGroupAsync(region, channel.GroupId, true, ct);
+                    var group = await db.GroupStates.AsNoTracking()
+                        .FirstOrDefaultAsync(g => g.RegionId == region.Id && g.GroupId == groupId, ct);
+                    if (group?.IsEmergency == true)
+                    {
+                        await dispatcher.DispatchGroupAsync(region, groupId, true, ct);
+                    }
                 }
             }
         }

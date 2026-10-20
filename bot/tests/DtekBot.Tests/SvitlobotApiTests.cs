@@ -698,4 +698,29 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         Assert.Equal("Світлобот не налаштований на сервері. Адміністратор має задати Svitlobot:KeyEncryptionKey (32 випадкові байти в base64) і перезапустити застосунок.", await ErrorAsync(responses[0]));
         Assert.Empty(_factory.Svitlobot.Requests);
     }
+    [Fact]
+    public async Task MultipleGroups_ManualAndAutomaticPushUseOneHalfHourUnionAndMembershipSignature()
+    {
+        _factory.WithDb(db => { foreach (var channel in db.Channels) channel.SvitlobotKey = null; });
+        var (chatId, client) = UserWithKey(c => {
+            c.GroupId = "45.1";
+            c.Addresses = [new ChatAddress { Name = "Дім", RegionId = "kyiv", Groups = [
+                new ChatAddressGroup { GroupId = "45.1" }, new ChatAddressGroup { GroupId = "2.2" }] }];
+        });
+        var first = string.Join(';', Enumerable.Repeat(new string('2', 24), 7));
+        var second = string.Join(';', Enumerable.Repeat(new string('3', 24), 7));
+        var expected = string.Join(';', Enumerable.Repeat(new string('1', 24), 7));
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with {
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = first, ["2.2"] = second, ["2.1"] = expected } };
+        (await client.PostAsync($"/api/chats/{chatId}/svitlobot/push", null)).EnsureSuccessStatusCode();
+        Assert.Contains(Uri.EscapeDataString(expected), Assert.Single(_factory.Svitlobot.Requests).PathAndQuery);
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+        Assert.Equal(0, await service.TickAsync(default));
+        _factory.WithDb(db => db.Channels.Single(c => c.ChatId == chatId).Addresses.Single().Groups.Add(new ChatAddressGroup { GroupId = "2.1" }));
+        scope.ServiceProvider.GetRequiredService<BotDbContext>().ChangeTracker.Clear();
+        Assert.Equal(1, await service.TickAsync(default));
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+    }
+
 }

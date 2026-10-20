@@ -313,7 +313,7 @@ public static class SvitlobotApi
                 }
             }
 
-            var timetable = snapshot.WeeklyTimetable(channel.GroupId, includeMaybe);
+            var timetable = WeeklyPreset.Union(snapshot, channel.GroupIds(), includeMaybe);
             if (timetable is null)
             {
                 return Json(new ApiError($"У джерелі даних немає тижневого графіка для черги {channel.GroupId}."), 400);
@@ -336,10 +336,11 @@ public static class SvitlobotApi
                 return Failed(result);
             }
 
-            await scheduleSync.MarkSyncedAsync(chatId, region.Id, channel.GroupId, timetable, ct);
+            await scheduleSync.MarkSyncedAsync(chatId, region.Id, string.Join(",", channel.GroupIds()), timetable, ct);
             await db.SaveChangesAsync(ct);
             return Json(new SvitlobotResultDto(
-                $"Тижневі планові відключення черги {channel.GroupId} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
+                channel.IsCombined() ? "Спільний тижневий графік збережено у Світлоботі."
+                    : $"Тижневі планові відключення черги {channel.GroupId} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
                 true), 200);
         });
 

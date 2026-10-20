@@ -7,6 +7,7 @@ namespace DtekBot.Api.Data;
 
 public sealed class Channel
 {
+    public List<ChatAddress> Addresses { get; set; } = [];
     public long ChatId { get; set; }
     public string RegionId { get; set; } = "";
     public string? PartId { get; set; }
@@ -152,6 +153,27 @@ public sealed class Channel
     public string? SvitlobotKey { get; set; }
 }
 
+public sealed class ChatAddress
+{
+    public long Id { get; set; }
+    public long ChatId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string? City { get; set; }
+    public string? Street { get; set; }
+    public string? House { get; set; }
+    public string? Label { get; set; }
+    public string? PartIds { get; set; }
+    public List<ChatAddressGroup> Groups { get; set; } = [];
+}
+
+public sealed class ChatAddressGroup
+{
+    public long AddressId { get; set; }
+    public string GroupId { get; set; } = "";
+    public string? Label { get; set; }
+}
+
 public enum SchedulePhase
 {
     Off,
@@ -181,6 +203,7 @@ public sealed class ScheduleThread
 // The latest schedule post of a chat for a given day, so the next update can edit or replace it.
 public sealed class SchedulePostThread
 {
+    public string? MessageIds { get; set; }
     public long ChatId { get; set; }
     public string RegionId { get; set; } = "";
     public string GroupId { get; set; } = "";
@@ -216,6 +239,9 @@ public enum AddressCheckStatus
 // A user's "the power is off, is it local?" request, waiting for the workflow to check the DTEK site.
 public sealed class AddressCheck
 {
+    public long? AddressId { get; set; }
+    public string? BatchId { get; set; }
+    public bool BudgetCharged { get; set; } = true;
     public long Id { get; set; }
     public long ChatId { get; set; }
     public string RegionId { get; set; } = "";
@@ -325,6 +351,8 @@ public sealed class Delivery
 public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbContext(options)
 {
     public DbSet<Channel> Channels => Set<Channel>();
+    public DbSet<ChatAddress> ChatAddresses => Set<ChatAddress>();
+    public DbSet<ChatAddressGroup> ChatAddressGroups => Set<ChatAddressGroup>();
     public DbSet<RegionState> RegionStates => Set<RegionState>();
     public DbSet<Delivery> Deliveries => Set<Delivery>();
     public DbSet<ChannelAdmin> ChannelAdmins => Set<ChannelAdmin>();
@@ -340,6 +368,27 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<ChatAddress>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.RegionId).HasMaxLength(64);
+            e.Property(x => x.Name).HasMaxLength(64);
+            e.Property(x => x.City).HasMaxLength(128);
+            e.Property(x => x.Street).HasMaxLength(256);
+            e.Property(x => x.House).HasMaxLength(64);
+            e.Property(x => x.Label).HasMaxLength(256);
+            e.Property(x => x.PartIds).HasMaxLength(512);
+            e.HasMany(x => x.Groups).WithOne().HasForeignKey(x => x.AddressId).OnDelete(DeleteBehavior.Cascade);
+            e.Navigation(x => x.Groups).AutoInclude();
+        });
+        modelBuilder.Entity<ChatAddressGroup>(e =>
+        {
+            e.HasKey(x => new { x.AddressId, x.GroupId });
+            e.Property(x => x.GroupId).HasMaxLength(16);
+            e.Property(x => x.Label).HasMaxLength(64);
+        });
+        modelBuilder.Entity<Channel>().HasMany(x => x.Addresses).WithOne().HasForeignKey(x => x.ChatId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<Channel>().Navigation(x => x.Addresses).AutoInclude();
         modelBuilder.Entity<SchedulePostThread>(e =>
         {
             e.HasKey(x => x.ChatId);
@@ -380,6 +429,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.Street).HasMaxLength(256);
             e.Property(x => x.House).HasMaxLength(64);
             e.Property(x => x.Label).HasMaxLength(256);
+            e.Property(x => x.BatchId).HasMaxLength(32);
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
             e.HasIndex(x => new { x.Status, x.RegionId });
             e.HasIndex(x => new { x.ChatId, x.RequestedAt });

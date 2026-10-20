@@ -238,4 +238,16 @@ public sealed class DtekAddressClientTests
 
         Assert.Contains("тимчасово недоступний", error.Message);
     }
+    [Fact]
+    public async Task HouseWithMultipleGpvReasonsPreservesAllDistinctGroups()
+    {
+        var handler = new FakeHandler((request, _) => Task.FromResult(request.Method == HttpMethod.Get ? Page()
+            : Json("""{"result":true,"data":{"7":{"sub_type_reason":["GPV3.2","GPV4.1","GPV3.2","other"]}}}""")));
+        using var database = new TestDatabase();
+        var client = Create(handler, database.Context);
+        var houses = await client.SearchHousesAsync(Region(), "місто", "вулиця", "7", default);
+        Assert.Equal(2, houses.Count);
+        Assert.All(houses, house => Assert.Equal(new[] { "3.2", "4.1" }, house.GroupIds));
+    }
+
 }

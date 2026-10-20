@@ -853,7 +853,7 @@ function renderEditor(chat) {
             const saved = await ctx.commit(
               'PUT',
               '/address/dtek',
-              { regionId, city, street, house: item.house, groupId: item.groupId },
+              { regionId, city, street, house: item.house, groupId: item.groupId, groupIds: item.groupIds || null },
               true);
             if (!saved) houseInput.disabled = false;
           });
@@ -902,8 +902,67 @@ function renderEditor(chat) {
       manual);
   }
 
+  function addressCollection() {
+    const region = regionOf(s.regionId), ctx = makeAddrCtx();
+    let draft = JSON.parse(JSON.stringify(chat.settings.addresses || []));
+    const list = h('div'), info = h('p', { class: 'hint', text: 'До 3 адрес одного регіону. Спільні черги показуємо один раз.' });
+    const add = h('button', { type: 'button', class: 'btn ghost sm', text: '+ Додати адресу' });
+    const save = h('button', { type: 'button', class: 'btn', text: 'Зберегти адреси' });
+    const paint = () => {
+      add.disabled = draft.length >= 3;
+      list.replaceChildren(...draft.map((address, index) => {
+        const fields = [['Назва', 'name', 64], ['Населений пункт', 'city', 128], ['Вулиця', 'street', 256], ['Будинок', 'house', 64]];
+        const inputs = fields.map(([label, key, max]) => {
+          const input = h('input', { type: 'text', value: address[key] || '', maxlength: String(max), 'aria-label': label });
+          input.addEventListener('input', () => { address[key] = input.value; });
+          return h('div', { class: 'fld' }, h('label', { text: label }), input);
+        });
+        const districts = h('select', { 'aria-label': 'Район адреси' }, h('option', { value: '', text: 'Райони з основних налаштувань' }),
+          ...(region?.parts || []).map(part => h('option', { value: part.id, text: part.name })));
+        districts.value = address.partIds || '';
+        districts.addEventListener('change', () => { address.partIds = districts.value || null; });
+        const groups = h('div');
+        const paintGroups = () => groups.replaceChildren(...address.groups.map(group => {
+          const label = h('input', { type: 'text', value: group.label || '', maxlength: '64', placeholder: "Наприклад, Під'їзд 1", 'aria-label': 'Підпис черги ' + group.groupId });
+          label.addEventListener('input', () => { group.label = label.value; });
+          return h('div', { class: 'fld' }, h('span', { class: 'chip purple', text: 'Черга ' + group.groupId }), label,
+            h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати чергу', onclick: () => { address.groups = address.groups.filter(g => g !== group); paintGroups(); } }));
+        }));
+        paintGroups();
+        const select = h('select', { 'aria-label': 'Додати чергу' }, h('option', { value: '', text: '+ Додати чергу' }));
+        if (region?.hasSchedules) loadGroups(s.regionId).then(items => select.append(...items.map(g => h('option', { value: g.id, text: g.name }))), ctx.fail);
+        else select.disabled = true;
+        select.addEventListener('change', () => {
+          if (select.value && !address.groups.some(g => g.groupId === select.value)) address.groups.push({ groupId: select.value, label: '' });
+          select.value = ''; paintGroups();
+        });
+        return card(h('h3', { class: 'ct', text: `Адреса ${index + 1} · ${region?.name || ''}` }), ...inputs,
+          h('div', { class: 'fld' }, h('label', { text: 'Район' }), districts), groups, select,
+          h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => { draft = draft.filter(a => a !== address); paint(); } }));
+      }));
+    };
+    add.addEventListener('click', () => {
+      if (draft.length >= 3) return;
+      draft.push({ id: 0, regionId: s.regionId, name: draft.length ? 'Адреса ' + (draft.length + 1) : 'Дім', city: '', street: '', house: '', groups: [] }); paint();
+    });
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      for (const address of draft) address.label = [address.city, address.street, address.house].filter(Boolean).join(', ') || address.label;
+      await ctx.commit('PUT', '/addresses', { addresses: draft }, true);
+      save.disabled = false;
+    });
+    paint();
+    return card(h('h3', { class: 'ct', text: 'Адреси та черги' }), info, list, add, save, ctx.msg);
+  }
+
   function renderAddr() {
     const r = regionOf(s.regionId);
+    regionSel.disabled = !!chat.settings.addresses?.length;
+    regionSel.title = regionSel.disabled ? 'Щоб змінити регіон, спершу приберіть адреси.' : '';
+    if (r && chat.settings.regionId === s.regionId && chat.settings.addresses?.length) {
+      addressPanel.replaceChildren(addressCollection(), ...(isPriv ? [chkCard, chkOut] : []));
+      return;
+    }
     const nodes = [];
     if (!r) nodes.push(empty('Оберіть регіон, щоб указати адресу та чергу.'));
     else if (!r.siteUrl && !r.hasSchedules) nodes.push(empty('Для цього регіону вибір адреси й черги недоступний.'));
@@ -955,7 +1014,7 @@ function renderEditor(chat) {
           h('p', { class: 'hint', text: 'Якщо чергу не визначено або вона неправильна, оберіть її вручну. Адреса залишається для перевірки на сайті ДТЕК.' })),
           grp && !addr ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути чергу', onclick: () => commit('DELETE', '/address') }) : null));
       }
-      nodes.push(msg);
+      nodes.push(msg, addressCollection());
       if (isPriv && (addrOf() || (!r.hasGroups && manualOf()))) nodes.push(chkCard, chkOut);
     }
     addressPanel.replaceChildren(...nodes);
@@ -991,7 +1050,7 @@ function renderEditor(chat) {
   const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : 'None';
   const previewBody = id => ({
     slot: id, template: customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
-    groupId: groupOf(), kind: KIND_OF[id] || 'Emergency', imageKind: imageKindOf(id),
+    addresses: chat.settings.addresses || null, groupId: groupOf(), kind: KIND_OF[id] || 'Emergency', imageKind: imageKindOf(id),
   });
 
   // ----- tab: Графік -----
@@ -1057,7 +1116,7 @@ function renderEditor(chat) {
       return {
         ...d,
         message: groupOf()
-          ? 'Ключ збережено. Тижневий графік обраної черги автоматично передаватиметься Світлоботу під час оновлення даних.'
+          ? 'Ключ збережено. Спільний тижневий графік усіх черг оновлюватиметься автоматично.'
           : 'Ключ збережено. Оберіть адресу або чергу — тоді бот зможе передавати графік Світлоботу.',
       };
     });
@@ -1093,7 +1152,7 @@ function renderEditor(chat) {
       body = [
         h('div', { class: 'svb-key-status' }, h('span', { class: 'chip green', text: 'Ключ каналу підключено' })),
         h('p', { class: 'hint', text: groupOf()
-          ? `Плановий графік черги ${groupOf()} надсилається Світлоботу автоматично, коли оновлюються дані. Світлобот сам керує повідомленнями у каналі.`
+          ? 'Спільний тижневий графік усіх черг надсилається Світлоботу автоматично.'
           : 'Оберіть адресу або чергу на вкладці «Основне», щоб увімкнути автоматичне оновлення графіка.' }),
         h('div', { class: 'svb-key-actions' },
           btn('check', 'ghost sm', 'Перевірити ключ', svbCheck),
@@ -1157,7 +1216,7 @@ function renderEditor(chat) {
     const lock = () => has ? null : h('div', { class: 'lockhint' }, h('span', { class: 'hint', text: 'Спершу оберіть адресу або чергу на вкладці «Основне».' }),
       h('button', { type: 'button', class: 'btn ghost sm', text: 'Перейти до адреси й черги', onclick: goToAddress }));
     const edit = (id, label) => slotOf(id) ? h('button', { type: 'button', class: 'btn ghost sm', text: label, onclick: () => openSlot(id) }) : null;
-    const sendNow = h('button', { type: 'button', class: 'btn primary', text: 'Надіслати графік цієї черги у канал зараз', disabled: !has || scheduleSendBusy });
+    const sendNow = h('button', { type: 'button', class: 'btn primary', text: 'Надіслати графік у канал зараз', disabled: !has || scheduleSendBusy });
     sendNow.addEventListener('click', () => sendScheduleNow(sendNow));
     if (!has) {
       // Without a group there is no schedule to preview: one clear step instead of two locked sections.
@@ -1172,16 +1231,16 @@ function renderEditor(chat) {
     panels.sched.replaceChildren(
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Графік у Telegram-каналі' }), help('schedulePost')),
-        h('p', { class: 'hint', text: 'Опублікуйте візуальне зображення графіка зараз. Плановий розклад Світлобота синхронізується окремо автоматично.' }),
+        h('p', { class: 'hint', text: 'Усі черги — в одному дописі. Світлобот отримує спільний тижневий графік.' }),
         sendNow, scheduleSendStatus),
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Публікація графіка' }), help('schedulePost')),
         toggle('Публікувати графік', 'schedulePost', null, {
           disabled: !has,
-          confirm: 'Увімкнути автоматичне надсилання графіка в цей чат? Бот надсилатиме й оновлюватиме графік обраної черги.',
+          confirm: 'Надсилати й оновлювати спільний графік усіх черг у цьому чаті?',
         }), lock(),
         h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
-        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
+        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), (chat.settings.addresses?.length > 1 || (chat.settings.addresses?.[0]?.groups?.length || 0) > 1) ? h('p', { class: 'hint', text: 'Об’єднаний графік надсилаємо текстом.' }) : imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
         edit('schedule', 'Редагувати шаблон'),
         pvx.node),
       card(

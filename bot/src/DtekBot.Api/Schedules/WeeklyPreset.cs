@@ -77,5 +77,25 @@ public static class WeeklyPreset
         return result;
     }
 
+    public static string? Union(ScheduleSnapshot snapshot, IEnumerable<string> groupIds, bool includeMaybe = false)
+    {
+        var weeks = groupIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(id => snapshot.WeeklyTimetable(id, includeMaybe)).ToArray();
+        if (weeks.Length == 0 || weeks.Any(w => w is null)) return null;
+        var result = weeks[0]!.ToCharArray();
+        for (var i = 0; i < result.Length; i++)
+        {
+            if (result[i] == ';') continue;
+            var mask = 0;
+            foreach (var week in weeks)
+            {
+                if (week!.Length != result.Length) return null;
+                mask |= week[i] switch { '1' => 3, '2' => 1, '3' => 2, _ => 0 };
+            }
+            result[i] = mask switch { 3 => '1', 1 => '2', 2 => '3', _ => '0' };
+        }
+        return new string(result);
+    }
+
     public static bool HasOutages(string timetable) => timetable.Any(c => c is '1' or '2' or '3');
 }
