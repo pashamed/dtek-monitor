@@ -30,7 +30,8 @@ public sealed class TemplatePreviewService(
         string? address,
         ScheduleImage imageKind,
         AlertKind? kindOverride,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? scheduleLineTemplate = null)
     {
         var definition = MessageSlots.Find(slot)!;
         var now = time.GetUtcNow();
@@ -66,7 +67,7 @@ public sealed class TemplatePreviewService(
         {
             if (slot == MessageSlots.Schedule)
             {
-                foreach (var pair in ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: true))
+                foreach (var pair in ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: true, lineTemplate: scheduleLineTemplate))
                 {
                     values[pair.Key] = pair.Value;
                 }

@@ -8,6 +8,22 @@ namespace DtekBot.Tests;
 
 public class ScheduleTextTests
 {
+    [Fact]
+    public void CustomOutageRow_UsesClippedTimesDateDurationAndDaypart()
+    {
+        var snapshot = ScheduleParser.Parse(Json("test", "15.10.2026 00:00",
+            (Day1, "1.1", Hours("no", 3, 9, 15, 21))), "kyiv", Kyiv(15, 0))!;
+        var values = ScheduleText.PostValues("Київ", "1.1", snapshot, Kyiv(15, 12), false,
+            "⚡ {date} · {weekday} · {daypart}: {start} → {end} · {duration}");
+        Assert.Contains("⚡ 15.10.2026 · Четвер · Ніч: 02:00 → 03:00 · ~1 год", values["night"]);
+        Assert.Contains("Ранок: 08:00 → 09:00", values["morning"]);
+        Assert.Contains("День: 14:00 → 15:00", values["afternoon"]);
+        Assert.Contains("Вечір: 20:00 → 21:00", values["evening"]);
+        Assert.Equal(4, values["outages"].Split('\n').Length);
+        Assert.Equal("16.10.2026", values["tomorrowDate"]);
+        Assert.DoesNotContain("🔴", values["outages"]);
+    }
+
     private static readonly Regex PowerOutPattern =
         new(@"світло\s+зникло", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 

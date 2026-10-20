@@ -52,6 +52,9 @@ public static class AlertText
             ["site"] = siteUrl,
             ["time"] = KyivTime.Format(now),
             ["popup"] = popupText,
+            ["date"] = KyivTime.FromUtc(now).ToString("dd.MM.yyyy", System.Globalization.CultureInfo.InvariantCulture),
+            ["weekday"] = new[] { "Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "Пʼятниця", "Субота" }[(int)KyivTime.FromUtc(now).DayOfWeek],
+            ["daypart"] = new[] { "Ніч", "Ранок", "День", "Вечір" }[KyivTime.FromUtc(now).Hour / 6],
         };
     }
 }

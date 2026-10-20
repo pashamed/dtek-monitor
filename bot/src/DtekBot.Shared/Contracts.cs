@@ -175,7 +175,8 @@ public sealed record PreviewRequest(
     string? Slot = null,
     string? GroupId = null,
     ScheduleImage? ImageKind = null,
-    IReadOnlyList<ChatAddressDto>? Addresses = null);
+    IReadOnlyList<ChatAddressDto>? Addresses = null,
+    string? ScheduleLineTemplate = null);
 
 // ImageUrl is set for slots that come with a picture (the schedule post).
 public sealed record PreviewResponse(string Html, IReadOnlyList<string> Errors, string? ImageUrl = null);

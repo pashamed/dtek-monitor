@@ -25,16 +25,16 @@ public class MessageSlotsTests
     // ---- the registry ----
 
     [Fact]
-    public void All_HasTheEightSlots_InOrder()
+    public void All_HasTheSlots_InOrder()
     {
-        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
+        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "schedule-line", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
     }
 
     [Fact]
     public void All_GroupsTheSlots()
     {
         Assert.Equal(
-            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization"],
+            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization"],
             MessageSlots.All.Select(s => s.Group));
     }
 
@@ -88,7 +88,8 @@ public class MessageSlotsTests
     [InlineData("emergency", "message,popup")]
     [InlineData("regional", "message,popup")]
     [InlineData("local", "message,popup")]
-    [InlineData("schedule", "outages")]
+    [InlineData("schedule", "outages,morning,afternoon,evening,night")]
+    [InlineData("schedule-line", "start,end")]
     [InlineData("ended", "")]
     [InlineData("off", "")]
     [InlineData("on", "")]
@@ -124,7 +125,7 @@ public class MessageSlotsTests
         Assert.Equal(shared, MessageSlots.Find("regional")!.Placeholders.Select(p => p.Name));
         Assert.Equal(shared.Concat(new[] { "group", "address" }), MessageSlots.Find("local")!.Placeholders.Select(p => p.Name));
         Assert.Equal(
-            new[] { "emoji", "title", "message", "region", "part", "where", "popup", "time", "site" }.Order(),
+            new[] { "emoji", "title", "message", "region", "part", "where", "popup", "time", "date", "weekday", "daypart", "site" }.Order(),
             shared.Order());
     }
 
@@ -349,9 +350,7 @@ public class MessageSlotsTests
     [InlineData("{#outages}x{/outages}")]
     public void Validate_Schedule_NeedsOutages(string template)
     {
-        Assert.Contains(
-            "Додайте {outages}, інакше повідомлення не матиме змісту.",
-            MessageTemplate.Validate(template, "schedule"));
+        Assert.Contains(MessageTemplate.Validate(template, "schedule"), error => error.StartsWith("Додайте {outages}"));
     }
 
     [Fact]
@@ -425,7 +424,10 @@ public class MessageSlotsTests
             Assert.NotEmpty(MessageTemplate.Validate("<script>" + body, slot.Id));
             Assert.NotEmpty(MessageTemplate.Validate("<b>" + body, slot.Id));
             Assert.NotEmpty(MessageTemplate.Validate(body + " a & b", slot.Id));
-            Assert.Empty(MessageTemplate.Validate("<b>" + body + "</b>", slot.Id));
+            if (slot.Id == MessageSlots.ScheduleLine)
+                Assert.NotEmpty(MessageTemplate.Validate("<b>" + body + "</b>", slot.Id));
+            else
+                Assert.Empty(MessageTemplate.Validate("<b>" + body + "</b>", slot.Id));
         }
     }
 

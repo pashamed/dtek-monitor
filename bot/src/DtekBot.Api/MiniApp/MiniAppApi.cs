@@ -505,6 +505,12 @@ public static class MiniAppApi
             var wantedParts = request.PartIds ?? (string.IsNullOrEmpty(request.PartId) ? [] : [request.PartId]);
 
             var previewTemplate = PlaceholderNames.ToCanonical(request.Template);
+            var lineTemplate = PlaceholderNames.ToCanonical(request.ScheduleLineTemplate);
+            if (!string.IsNullOrWhiteSpace(lineTemplate))
+            {
+                var lineErrors = MessageTemplate.Validate(lineTemplate, MessageSlots.ScheduleLine);
+                if (lineErrors.Count > 0) return Json(new PreviewResponse("", lineErrors));
+            }
             var errors = string.IsNullOrWhiteSpace(previewTemplate)
                 ? new List<string>()
                 : MessageTemplate.Validate(previewTemplate, slot).Select(e => PlaceholderNames.ToDisplay(e)).ToList();
@@ -526,6 +532,9 @@ public static class MiniAppApi
                 {
                     channel.TemplateMap = string.IsNullOrWhiteSpace(previewTemplate) ? new Dictionary<string, string>()
                         : new Dictionary<string, string> { [MessageSlots.Schedule] = previewTemplate };
+                    if (!string.IsNullOrWhiteSpace(lineTemplate))
+                        channel.TemplateMap = channel.TemplateMap.Append(new KeyValuePair<string, string>(MessageSlots.ScheduleLine, lineTemplate))
+                            .ToDictionary(p => p.Key, p => p.Value);
                     var snapshot = await schedules.GetAsync(region.Id, ct);
                     if (snapshot is null) return Error("Графіки тимчасово недоступні.");
                     var html = CombinedSchedule.Render(channel, snapshot, region.Name, time.GetUtcNow(), false);
@@ -544,7 +553,8 @@ public static class MiniAppApi
                 null,
                 request.ImageKind ?? ScheduleImage.Grid,
                 kind,
-                ct);
+                ct,
+                lineTemplate);
             return Json(new PreviewResponse(rendered.Html, errors, rendered.ImageUrl));
         });
 
@@ -645,11 +655,13 @@ public static class MiniAppApi
                 channel.AddressLabel,
                 request?.ImageKind ?? (slot == MessageSlots.Schedule ? channel.SchedulePostImage : ScheduleImage.None),
                 null,
-                ct);
+                ct,
+                channel.TemplateFor(MessageSlots.ScheduleLine));
 
             try
             {
-                await notifier.SendNewAsync(chatId, "🧪 <b>Тест</b>\n\n" + rendered.Html, rendered.ImageUrl, ct);
+                await notifier.SendNewAsync(chatId, "🧪 <b>Тест</b>\n\n" + (combined ?? rendered.Html),
+                    combined is null ? rendered.ImageUrl : null, ct);
             }
             catch (Telegram.Bot.Exceptions.ApiRequestException ex) when (ex.ErrorCode == 403)
             {

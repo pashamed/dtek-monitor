@@ -73,7 +73,8 @@ public static class ScheduleText
     public static string DateKey(DateTimeOffset now) => KyivTime.FromUtc(now).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     // One line per outage inside the day: "🔴 14:00 - 18:00 (~4 год)"; a midnight end reads "24:00".
-    public static IReadOnlyList<string> OutageLines(GroupSchedule? group, DateTimeOffset dayStart, DateTimeOffset dayEnd)
+    public static IReadOnlyList<string> OutageLines(GroupSchedule? group, DateTimeOffset dayStart, DateTimeOffset dayEnd,
+        string? lineTemplate = null, int? part = null)
     {
         var lines = new List<string>();
         foreach (var outage in group?.Outages ?? [])
@@ -84,9 +85,22 @@ public static class ScheduleText
             {
                 continue;
             }
+            var local = KyivTime.FromUtc(start);
+            var daypart = local.Hour / 6;
+            if (part is not null && daypart != part) continue;
 
             var endLabel = end == dayEnd ? "24:00" : Clock(end);
-            lines.Add($"🔴 {Clock(start)} - {endLabel} ({Approx(end - start)})");
+            if (string.IsNullOrWhiteSpace(lineTemplate))
+                lines.Add($"🔴 {Clock(start)} - {endLabel} ({Approx(end - start)})");
+            else
+                lines.Add(System.Net.WebUtility.HtmlDecode(MessageTemplate.Render(lineTemplate,
+                    new Dictionary<string, string>
+                    {
+                        ["start"] = Clock(start), ["end"] = endLabel, ["duration"] = Approx(end - start),
+                        ["date"] = local.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
+                        ["weekday"] = Weekdays[(int)local.DayOfWeek],
+                        ["daypart"] = new[] { "Ніч", "Ранок", "День", "Вечір" }[daypart],
+                    })));
         }
 
         return lines;
@@ -114,7 +128,8 @@ public static class ScheduleText
         string groupId,
         ScheduleSnapshot snapshot,
         DateTimeOffset now,
-        bool updated)
+        bool updated,
+        string? lineTemplate = null)
     {
         var local = KyivTime.FromUtc(now);
         var dayStart = KyivDayStart(local.Date);
@@ -122,8 +137,8 @@ public static class ScheduleText
         var nextEnd = KyivDayStart(local.Date.AddDays(2));
         var group = snapshot.Find(groupId);
 
-        var today = OutageLines(group, dayStart, dayEnd);
-        var tomorrowLines = snapshot.CoverageEnd >= nextEnd ? OutageLines(group, dayEnd, nextEnd) : null;
+        var today = OutageLines(group, dayStart, dayEnd, lineTemplate);
+        var tomorrowLines = snapshot.CoverageEnd >= nextEnd ? OutageLines(group, dayEnd, nextEnd, lineTemplate) : null;
         var total = OutageTotal(group, dayStart, dayEnd);
 
         return new Dictionary<string, string>
@@ -137,6 +152,11 @@ public static class ScheduleText
             ["updated"] = snapshot.SourceUpdatedText ?? "",
             ["region"] = regionName,
             ["group"] = groupId,
+            ["night"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 0)),
+            ["morning"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 1)),
+            ["afternoon"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 2)),
+            ["evening"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 3)),
+            ["tomorrowDate"] = local.AddDays(1).ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
         };
     }
 

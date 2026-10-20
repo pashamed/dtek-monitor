@@ -4,7 +4,7 @@ const app = document.getElementById('app');
 const initData = tg ? tg.initData : '';
 const UI_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
 
-const SLOT_GROUPS = [['alerts', 'Екстрені відключення та аварії'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
+const SLOT_GROUPS = [['alerts', 'Екстрені відключення'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
 const KIND_OF = { emergency: 'Emergency', regional: 'Accident', local: 'Emergency', ended: 'Ended' };
 const ALERT_SLOTS = ['emergency', 'regional', 'local', 'ended'];
 // How the «ended» notice is posted: [value, button label, one-line explanation].
@@ -1090,6 +1090,7 @@ function renderEditor(chat) {
   const previewBody = id => ({
     slot: id, template: customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
     addresses: chat.settings.addresses || null, groupId: groupOf(), kind: KIND_OF[id] || 'Emergency', imageKind: imageKindOf(id),
+    scheduleLineTemplate: tpls['schedule-line'] || null,
   });
 
   // ----- tab: Графік -----
@@ -1348,11 +1349,11 @@ function renderEditor(chat) {
     const groupKey = group => group === 'emergency' || group === 'regional' ? 'alerts' : group;
     const groups = [...SLOT_GROUPS, ...[...new Set(slots.map(x => groupKey(x.group)))].filter(g => !SLOT_GROUPS.some(y => y[0] === g)).map(g => [g, g])];
     slotBar.replaceChildren(...groups.map(([g, title]) => {
-      const list = slots.filter(x => groupKey(x.group) === g);
+      const list = slots.filter(x => groupKey(x.group) === g && !['regional', 'ended'].includes(x.id));
       if (!list.length) return null;
       return h('div', { class: 'sgrp', role: 'presentation' }, h('div', { class: 'sgh', text: title }),
         h('div', { class: 'sgp' }, list.map(x => h('button', {
-          type: 'button', role: 'tab', class: 'spill' + (x.id === cs ? ' on' : ''), id: 'slot-' + x.id, 'aria-selected': String(x.id === cs),
+          type: 'button', role: 'tab', class: 'spill' + (x.id === cs || x.id === 'emergency' && ['regional', 'ended'].includes(cs) ? ' on' : ''), id: 'slot-' + x.id, 'aria-selected': String(x.id === cs || x.id === 'emergency' && ['regional', 'ended'].includes(cs)),
           onclick: () => openSlot(x.id, true),
         }, h('span', { text: x.title }), isCustom(x.id) ? h('i', { class: 'pd', title: 'Змінений шаблон' }) : null,
           slotErrs(x.id).length ? h('i', { class: 'rd2', title: 'Є помилки' }) : null))));
@@ -1444,11 +1445,22 @@ function renderEditor(chat) {
     }
 
     studio.replaceChildren(
+      ['emergency', 'regional', 'ended'].includes(cs) ? card(
+        h('h3', { class: 'ct', text: 'Екстрені відключення' }),
+        h('p', { class: 'hint', text: 'Один тип сповіщення: початок, районна аварія та зняття. Райони підставляє бот.' }),
+        seg([['emergency', 'Початок'], ['regional', 'Аварія / район'], ['ended', 'Знято']],
+          () => cs, value => openSlot(value, true), 'Стан сповіщення')) : null,
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: x.title }), help('template')),
         h('p', { class: 'hint', text: x.description }),
         slotOpts,
         slotOpts ? slotOpts.wrap : h('div', { class: 'tawrap' }, tpl, counter), errBox,
+        h('div', { class: 'chips' }, ['🔴', '🟢', '⚠️', '📅', '🕒', '📍', '→', '–'].map(text =>
+          h('button', { type: 'button', class: 'chip', text, onmousedown: keep, onclick: () => put(text) })),
+          cs === 'schedule-line' ? null : h('button', { type: 'button', class: 'chip', text: 'Жирний', onmousedown: keep,
+            onclick: () => { const selected = tpl.value.slice(tpl.selectionStart, tpl.selectionEnd); put('<b>' + selected + '</b>', 3 + selected.length); } })),
+        cs === 'schedule' ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Налаштувати рядок: значок, час, дата, тривалість',
+          onclick: () => openSlot('schedule-line') }) : null,
         h('div', { class: 'fl sm' }, h('span', { text: 'Параметри' }), help('cond')), chips, paramNote,
         prevx.node,
         h('div', { class: 'testrow' }, testBtn, help('test')), testOut),
