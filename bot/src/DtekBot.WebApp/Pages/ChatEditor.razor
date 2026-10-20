@@ -48,6 +48,11 @@
     </div>
 
     <label class="switch-row">
+        <span>Видаляти попереднє аварійне сповіщення після надсилання нового</span>
+        <input type="checkbox" class="switch" @bind="_deletePreviousAlert" />
+    </label>
+
+    <label class="switch-row">
         <span>Писати про завершення</span>
         <input type="checkbox" class="switch" @bind="_notifyOnEnd" />
     </label>
@@ -106,6 +111,7 @@
     private bool _isActive;
     private bool _isPaused;
     private AlertFilter _filter;
+    private bool _deletePreviousAlert;
     private bool _notifyOnEnd;
     private bool _editInPlace;
     private string _template = "";
@@ -160,6 +166,7 @@
         _isActive = s.IsActive;
         _isPaused = s.IsPaused;
         _filter = s.Filter;
+        _deletePreviousAlert = s.DeletePreviousAlert ?? false;
         _notifyOnEnd = s.NotifyOnEnd;
         _editInPlace = s.EditInPlace;
         _template = string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template;
@@ -186,7 +193,9 @@
         _serverDetails = [];
 
         var template = string.IsNullOrWhiteSpace(_template) || _template == Bootstrap.DefaultTemplate ? null : _template;
-        var settings = new ChatSettingsDto(_regionId, _partId, _isActive, _isPaused, _filter, _notifyOnEnd, _editInPlace, template);
+        var settings = new ChatSettingsDto(
+            _regionId, _partId, _isActive, _isPaused, _filter, _notifyOnEnd, _editInPlace, template,
+            DeletePreviousAlert: _deletePreviousAlert);
         var result = await Api.SaveChatAsync(Chat.ChatId, settings);
 
         _saving = false;

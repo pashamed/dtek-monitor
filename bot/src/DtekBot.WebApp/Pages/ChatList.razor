@@ -18,7 +18,7 @@
 
 <section class="card">
     <h2>Підключити канал або групу</h2>
-    <p class="hint">Додайте бота до чату (для каналу — як адміністратора) і самі будьте адміністратором цього чату. Потім введіть @@username або числовий id.</p>
+    <p class="hint">Додайте бота до чату (для каналу — як адміністратора) і самі будьте адміністратором цього чату. У звичайній групі не призначайте бота адміністратором: Telegram може перетворити її на супергрупу. Потім введіть @@username або числовий id.</p>
     <div class="field">
         <input type="text" inputmode="text" autocapitalize="off" autocomplete="off" placeholder="@@channelusername або -100…"
                @bind="_link" @bind:event="oninput" @onkeydown="OnKeyDown" />

@@ -8,10 +8,9 @@ using Microsoft.Extensions.Options;
 
 namespace DtekBot.Api.Bot;
 
-// The one place that decides what a region's alert is. Two sources report emergencies, and the bot believes
-// whichever speaks first: the DTEK site popup (RegionState, can name districts) and the Ukrenergo status
-// (GridState, region-wide). Both /ingest and the grid tick call RecomputeAsync, so neither can close the
-// other's alert: "ended" is only announced once both are clear.
+// The one place that decides what a region's alert is. DTEK popup text and districts take priority;
+// Ukrenergo is the region-wide fallback and can keep an alert open after the popup clears.
+// Both /ingest and the grid tick call RecomputeAsync, so an alert ends only after both sources clear.
 public sealed class RegionAlertCoordinator(
     BotDbContext db,
     AlertDispatcher dispatcher,
@@ -47,8 +46,8 @@ public sealed class RegionAlertCoordinator(
             if (dtek.IsAlert)
             {
                 // Narrowing to districts must not end a region-wide Ukrenergo alert for chats outside them.
-                var source = grid is null ? AlertSource.None : AlertSource.Dtek;
-                return await dispatcher.DispatchAsync(region, dtek, state?.PopupText, ct, source, regionWideActive: gridActive);
+                return await dispatcher.DispatchAsync(
+                    region, dtek, state?.PopupText, ct, AlertSource.Dtek, regionWideActive: gridActive);
             }
 
             if (gridActive)

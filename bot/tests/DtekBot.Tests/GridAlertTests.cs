@@ -271,7 +271,7 @@ public sealed class GridAlertTests : IDisposable
     }
 
     [Fact]
-    public async Task DtekPopupFirst_IsPostedAsBefore_AndNotTagged_WhenNoUkrenergoStateIsKnown()
+    public async Task DtekPopupFirst_IsTaggedAsDtek_WhenNoUkrenergoStateIsKnown()
     {
         AddChannel(All);
 
@@ -280,8 +280,7 @@ public sealed class GridAlertTests : IDisposable
         Assert.True(result.GetProperty("changed").GetBoolean());
         Assert.Equal("Emergency", result.GetProperty("kind").GetString());
         Assert.Equal(1, result.GetProperty("dispatch").GetProperty("sent").GetInt32());
-        var message = Assert.Single(Sent(All));
-        Assert.DoesNotContain("за даними", message.Text);
+        Assert.Contains(DtekTag, Assert.Single(Sent(All)).Text);
     }
 
     [Fact]

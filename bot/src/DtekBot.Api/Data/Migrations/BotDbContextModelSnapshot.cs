@@ -80,6 +80,24 @@ namespace DtekBot.Api.Data.Migrations
                     b.ToTable("AddressChecks");
                 });
 
+            modelBuilder.Entity("DtekBot.Api.Data.AddressDirectoryState", b =>
+                {
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Data")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("RegionId");
+
+                    b.ToTable("AddressDirectories");
+                });
+
             modelBuilder.Entity("DtekBot.Api.Data.AddressResult", b =>
                 {
                     b.Property<string>("RegionId")
@@ -129,24 +147,6 @@ namespace DtekBot.Api.Data.Migrations
                     b.ToTable("AddressResults");
                 });
 
-            modelBuilder.Entity("DtekBot.Api.Data.AddressDirectoryState", b =>
-                {
-                    b.Property<string>("RegionId")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<string>("Data")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("RegionId");
-
-                    b.ToTable("AddressDirectories");
-                });
-
             modelBuilder.Entity("DtekBot.Api.Data.Channel", b =>
                 {
                     b.Property<long>("ChatId")
@@ -170,6 +170,9 @@ namespace DtekBot.Api.Data.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<bool>("DeletePreviousAlert")
+                        .HasColumnType("bit");
 
                     b.Property<bool>("EditInPlace")
                         .HasColumnType("bit");
@@ -207,11 +210,11 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
 
-                    b.Property<int>("QuietHoursEndMinute")
-                        .HasColumnType("int");
-
                     b.Property<bool>("QuietHoursEnabled")
                         .HasColumnType("bit");
+
+                    b.Property<int>("QuietHoursEndMinute")
+                        .HasColumnType("int");
 
                     b.Property<int>("QuietHoursStartMinute")
                         .HasColumnType("int");

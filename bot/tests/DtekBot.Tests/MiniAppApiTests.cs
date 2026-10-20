@@ -59,7 +59,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         IReadOnlyDictionary<string, SlotSettingDto>? slotSettings = null,
         bool quietHoursEnabled = false,
         int quietHoursStartMinute = 1320,
-        int quietHoursEndMinute = 480) =>
+        int quietHoursEndMinute = 480,
+        bool deletePreviousAlert = false) =>
         new(
             regionId,
             partId,
@@ -86,7 +87,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             ScheduleReminderMinutes: scheduleReminderMinutes,
             QuietHoursEnabled: quietHoursEnabled,
             QuietHoursStartMinute: quietHoursStartMinute,
-            QuietHoursEndMinute: quietHoursEndMinute);
+            QuietHoursEndMinute: quietHoursEndMinute,
+            DeletePreviousAlert: deletePreviousAlert);
 
     private static Dictionary<string, string> Map(params (string Slot, string Text)[] items) =>
         items.ToDictionary(i => i.Slot, i => i.Text);
@@ -108,6 +110,14 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             configure?.Invoke(channel);
             db.Channels.Add(channel);
         });
+    }
+
+    private void ClearOdesaAddressFixtures()
+    {
+        _factory.WithDb(db => db.Channels.RemoveRange(db.Channels.Where(channel =>
+            channel.RegionId == "odesa"
+            && channel.AddressCity == "м. Одеса"
+            && channel.AddressStreet == "вул. Дерибасівська")));
     }
 
     // ================= authorization =================
@@ -676,6 +686,20 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Put_DeletePreviousAlert_PersistsPerChatSetting()
+    {
+        var (userId, client) = NewUser();
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings(deletePreviousAlert: true));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(LoadChannel(userId)!.DeletePreviousAlert);
+        Assert.True((await response.ReadAsync<ChatSummaryDto>())!.Settings.DeletePreviousAlert);
+    }
+
+    [Fact]
     public async Task Put_QuietHours_RejectsEqualOrOutOfRangeTimesWhenEnabled()
     {
         var (userId, client) = NewUser();
@@ -782,8 +806,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task DtekAddressLookup_UsesSelectedRegionCityAndStreet()
+    public async Task DtekAddressLookup_IncludesUniqueSavedStreetGroupWithoutRequestingDtekHouseLookup()
     {
+        ClearOdesaAddressFixtures();
         var (userId, client) = NewUser();
         SeedChannel(userId, channel =>
         {
@@ -806,8 +831,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task DtekAddressLookup_AllowsFreeHouseAndDoesNotGuessWhenStreetHasMultipleGroups()
+    public async Task DtekAddressLookup_DoesNotInferWhenSavedStreetGroupsConflict()
     {
+        ClearOdesaAddressFixtures();
         var (userId, client) = NewUser();
         SeedChannel(userId, channel =>
         {
@@ -816,10 +842,6 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             channel.AddressCity = "м. Одеса";
             channel.AddressStreet = "вул. Дерибасівська";
         });
-
-        var unique = await client.GetAsync("/api/address/houses?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&street=%D0%B2%D1%83%D0%BB.%20%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81%D1%96%D0%B2%D1%81%D1%8C%D0%BA%D0%B0&query=999");
-        Assert.Equal(new DtekAddressHouseDto("999", "6.2"), Assert.Single((await unique.ReadAsync<DtekAddressHouseDto[]>())!));
-
         SeedChannel(_factory.NextId(), channel =>
         {
             channel.RegionId = "odesa";
@@ -828,8 +850,11 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             channel.AddressStreet = "вул. Дерибасівська";
         });
 
-        var ambiguous = await client.GetAsync("/api/address/houses?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&street=%D0%B2%D1%83%D0%BB.%20%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81%D1%96%D0%B2%D1%81%D1%8C%D0%BA%D0%B0&query=1000");
-        Assert.Equal(new DtekAddressHouseDto("1000", null), Assert.Single((await ambiguous.ReadAsync<DtekAddressHouseDto[]>())!));
+        var response = await client.GetAsync(
+            "/api/address/houses?regionId=odesa&city=%D0%BC.%20%D0%9E%D0%B4%D0%B5%D1%81%D0%B0&street=%D0%B2%D1%83%D0%BB.%20%D0%94%D0%B5%D1%80%D0%B8%D0%B1%D0%B0%D1%81%D1%96%D0%B2%D1%81%D1%8C%D0%BA%D0%B0&query=12");
+
+        Assert.Equal(new DtekAddressHouseDto("12", null), Assert.Single((await response.ReadAsync<DtekAddressHouseDto[]>())!));
+        Assert.Null(_factory.DtekAddresses.LastHouseSearch);
     }
 
     [Fact]
@@ -855,7 +880,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task DtekAddressSave_ValidatesTheScheduleGroupWithoutCallingDtek()
+    public async Task DtekAddressSave_AcceptsManuallySelectedGroupWithoutCallingDtekHouseLookup()
     {
         var (userId, client) = NewUser();
         SeedChannel(userId, channel => channel.RegionId = "odesa");
@@ -878,6 +903,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task DtekAddressSave_AllowsFreeHouseAndInfersUniqueStreetGroup()
     {
+        ClearOdesaAddressFixtures();
         var (userId, client) = NewUser();
         SeedChannel(userId, channel => channel.RegionId = "odesa");
         SeedChannel(_factory.NextId(), channel =>
@@ -903,10 +929,38 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task DtekAddressSave_AllowsFreeHouseWhenNoStreetGroupIsKnown()
+    public async Task DtekAddressSave_AllowsFreeHouseWithManuallySelectedGroup()
     {
         var (userId, client) = NewUser();
         SeedChannel(userId, channel => channel.RegionId = "odesa");
+        _factory.Schedules.Snapshots["odesa"] = new ScheduleSnapshot(
+            "odesa", "version", _factory.Clock.Now, null,
+            _factory.Clock.Now.AddDays(-1), _factory.Clock.Now.AddDays(1),
+            new Dictionary<string, GroupSchedule> { ["6.2"] = new("6.2", []) });
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}/address/dtek",
+            new SetDtekAddressRequest("odesa", "м. Одеса", "вул. Дерибасівська", "999", "6.2"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal(("999", "6.2"), (saved.AddressHouse, saved.GroupId));
+        Assert.Null(_factory.DtekAddresses.LastHouseSearch);
+    }
+
+    [Fact]
+    public async Task DtekAddressSave_DoesNotBlockAddressWhenInferredGroupCannotBeValidated()
+    {
+        ClearOdesaAddressFixtures();
+        var (userId, client) = NewUser();
+        SeedChannel(userId, channel => channel.RegionId = "odesa");
+        SeedChannel(_factory.NextId(), channel =>
+        {
+            channel.RegionId = "odesa";
+            channel.GroupId = "6.2";
+            channel.AddressCity = "м. Одеса";
+            channel.AddressStreet = "вул. Дерибасівська";
+        });
 
         var response = await client.PutJsonAsync(
             $"/api/chats/{userId}/address/dtek",
