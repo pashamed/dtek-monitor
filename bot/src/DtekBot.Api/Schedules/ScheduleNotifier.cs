@@ -441,7 +441,8 @@ public sealed partial class ScheduleNotifier(
 
         var dateKey = ScheduleText.DateKey(now);
         var sameDay = post is not null && post.DateKey == dateKey;
-        var values = ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: sameDay);
+        var values = ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: sameDay,
+            lineTemplate: channel.TemplateFor(MessageSlots.ScheduleLine));
         var fingerprint = Hash(ScheduleText.PostFingerprint(values) + "|" + channel.SchedulePostImage);
 
         if (!force && (sameDay ? post!.ContentHash == fingerprint : values["outages"] == ScheduleText.NoOutages))

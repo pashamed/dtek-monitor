@@ -169,7 +169,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(userId, bootstrap.UserId);
         Assert.Equal(MessageTemplate.MaxLength, bootstrap.MaxTemplateLength);
         Assert.Equal(
-            ["emergency", "ended", "regional", "local", "schedule", "before-off", "off", "on"],
+            ["emergency", "ended", "regional", "local", "schedule", "schedule-line", "before-off", "off", "on"],
             bootstrap.TemplateSlots!.Select(s => s.Id));
         Assert.Equal(MessageSlots.All.Count, bootstrap.TemplateSlots!.Count);
         foreach (var (expected, actual) in MessageSlots.All.Zip(bootstrap.TemplateSlots!))
@@ -1231,6 +1231,32 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     // ================= POST /api/preview =================
+
+    [Fact]
+    public async Task Preview_ScheduleRowCustomization_ReachesWholeSchedule()
+    {
+        var request = Preview("schedule", groupId: "45.1") with
+        {
+            ScheduleLineTemplate = "⚡ {початок} → {кінець} · {частина_доби} · {дата}",
+        };
+        var result = await PreviewAsync(request);
+        Assert.Empty(result.Errors);
+        Assert.Contains("⚡", result.Html);
+        Assert.Contains("→", result.Html);
+        Assert.DoesNotContain("{початок}", result.Html);
+        Assert.DoesNotContain("🔴", result.Html);
+    }
+
+    [Fact]
+    public async Task Preview_InvalidScheduleRow_IsReported()
+    {
+        var result = await PreviewAsync(Preview("schedule", groupId: "45.1") with
+        {
+            ScheduleLineTemplate = "{невідоме}",
+        });
+        Assert.NotEmpty(result.Errors);
+        Assert.Empty(result.Html);
+    }
 
     private static PreviewRequest Preview(
         string? slot = null,

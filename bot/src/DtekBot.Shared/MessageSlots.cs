@@ -8,6 +8,7 @@ public static class MessageSlots
     public const string Local = "local";
     public const string Ended = "ended";
     public const string Schedule = "schedule";
+    public const string ScheduleLine = "schedule-line";
     public const string BeforeOff = "before-off";
     public const string Off = "off";
     public const string On = "on";
@@ -23,7 +24,12 @@ public static class MessageSlots
         new("header", "Заголовок: «Графік…» уперше за день, «Оновлений графік…» при зміні", "Оновлений графік відключень на сьогодні"),
         new("weekday", "День тижня", "Четвер"),
         new("date", "Дата", "15.10.2026"),
-        new("outages", "Список відключень на сьогодні, по рядку на кожне", "🔴 14:00 - 18:00 (~4 год)"),
+        new("outages", "Усі інтервали на сьогодні. Вигляд рядка — у «Рядок графіка»", "🔴 14:00 - 18:00 (~4 год)"),
+        new("morning", "Інтервали, що починаються з 06:00 до 12:00", "🔴 08:00 - 10:00 (~2 год)"),
+        new("afternoon", "Інтервали, що починаються з 12:00 до 18:00", "🔴 14:00 - 18:00 (~4 год)"),
+        new("evening", "Інтервали, що починаються з 18:00 до 24:00", "🔴 20:00 - 22:00 (~2 год)"),
+        new("night", "Інтервали, що починаються з 00:00 до 06:00", "🔴 02:00 - 04:00 (~2 год)"),
+        new("tomorrowDate", "Дата завтрашнього графіка", "16.10.2026"),
         new("total", "Загальна тривалість відключень на сьогодні", "~4 год"),
         new("tomorrow", "Відключення на завтра (порожнє, поки графіка на завтра немає)", "🔴 02:00 - 06:00 (~4 год)"),
         new("updated", "Коли джерело оновило графік", "15.10.2026 01:02"),
@@ -97,6 +103,20 @@ public static class MessageSlots
             "❗️ {header}\n📅 {weekday} {date}\n\n{outages}",
             SchedulePlaceholders),
         new(
+            ScheduleLine,
+            "stabilization",
+            "Рядок графіка",
+            "Вигляд кожного інтервалу в {відключення} та {завтра}: значки, час, дата й тривалість.",
+            "🔴 {start} - {end} ({duration})",
+            [
+                new("start", "Початок інтервалу", "14:00"),
+                new("end", "Кінець інтервалу (24:00 опівночі)", "18:00"),
+                new("duration", "Тривалість інтервалу", "~4 год"),
+                new("date", "Дата інтервалу", "15.10.2026"),
+                new("weekday", "День тижня", "Четвер"),
+                new("daypart", "Частина доби за початком інтервалу", "День"),
+            ]),
+        new(
             BeforeOff,
             "stabilization",
             "Попередження про відключення",
@@ -129,7 +149,8 @@ public static class MessageSlots
     public static IReadOnlyList<string> RequiredAny(string slot) => slot switch
     {
         Emergency or Regional or Local => ["message", "popup"],
-        Schedule => ["outages"],
+        Schedule => ["outages", "morning", "afternoon", "evening", "night"],
+        ScheduleLine => ["start", "end"],
         _ => [],
     };
 

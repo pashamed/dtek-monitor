@@ -32,7 +32,16 @@ test('address search, region changes and editor restoration', async () => {
       if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
       if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
       let data;
-      if (path === '/api/bootstrap') data = { regions, templateSlots: [] };
+      if (path === '/api/bootstrap') data = {
+        regions, maxTemplateLength: 1000,
+        templateSlots: [
+          ['emergency', 'emergency', 'Екстрені відключення'],
+          ['regional', 'regional', 'Аварія в регіоні'],
+          ['ended', 'emergency', 'Запис про відключення знято'],
+          ['schedule', 'stabilization', 'Графік відключень'],
+          ['schedule-line', 'stabilization', 'Рядок графіка'],
+        ].map(([id, group, title]) => ({ id, group, title, description: '', defaultTemplate: '{текст}', placeholders: [] })),
+      };
       else if (path === '/api/chats') data = [chat];
       else if (path === '/api/schedules/groups') data = [{ id: '3.2', name: '3.2' }, { id: '4.1', name: '4.1' }];
       else if (path === '/api/address/cities') data = [{ name: 'м. Ірпінь' }];
@@ -61,6 +70,17 @@ test('address search, region changes and editor restoration', async () => {
     await page.getByRole('button', { name: 'Знайти адресу', exact: true }).waitFor();
     assert.equal(chat.settings.addresses[0].street, 'вул. Західна');
     assert.equal(chat.settings.addresses[0].groups.length, 2);
+    await page.getByRole('tab', { name: 'Повідомлення', exact: true }).click();
+    assert.equal(await page.getByRole('tab', { name: 'Екстрені відключення', exact: true }).count(), 1);
+    assert.equal(await page.getByRole('tab', { name: 'Аварія в регіоні', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('tab', { name: 'Запис про відключення знято', exact: true }).count(), 0);
+    await page.getByRole('button', { name: 'Знято', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Шаблон: Запис про відключення знято', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Аварія / район', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Шаблон: Аварія в регіоні', exact: true }).waitFor();
+    await page.getByRole('tab', { name: 'Графік відключень', exact: true }).click();
+    await page.getByRole('button', { name: 'Налаштувати рядок: значок, час, дата, тривалість', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Шаблон: Рядок графіка', exact: true }).waitFor();
     await page.getByRole('tab', { name: 'Графік', exact: true }).click();
     await page.reload();
     await page.getByRole('tab', { name: 'Графік', exact: true }).waitFor();

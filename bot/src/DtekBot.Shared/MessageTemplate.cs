@@ -20,6 +20,9 @@ public static partial class MessageTemplate
         new("where", "Регіон разом із частиною", "м. Київ (Правий берег)"),
         new("popup", "Оригінальний текст повідомлення з сайту ДТЕК", "Шановні клієнти! Через аварію в мережі…"),
         new("time", "Час сповіщення (київський)", "14.10 19:48"),
+        new("date", "Дата сповіщення (Київ)", "15.10.2026"),
+        new("weekday", "День тижня", "Четвер"),
+        new("daypart", "Частина доби", "Вечір"),
         new("site", "Посилання на сайт ДТЕК", "https://www.dtek-kem.com.ua/ua/shutdowns"),
     ];
 
@@ -119,6 +122,10 @@ public static partial class MessageTemplate
         if (template.Length > MaxLength)
         {
             errors.Add($"Шаблон задовгий: максимум {MaxLength} символів.");
+        }
+        if (slot == MessageSlots.ScheduleLine && (template.Contains('<') || template.Contains('>')))
+        {
+            errors.Add("Рядок графіка підтримує текст, значки й параметри, без HTML-тегів.");
         }
 
         var known = definition.Placeholders.Select(p => p.Name).ToHashSet();

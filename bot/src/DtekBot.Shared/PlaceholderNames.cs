@@ -33,6 +33,15 @@ public static class PlaceholderNames
         ["until"] = "очікуємо_до",
         ["next"] = "наступне",
         ["planned"] = "тривалість",
+        ["start"] = "початок",
+        ["end"] = "кінець",
+        ["duration"] = "тривалість_інтервалу",
+        ["daypart"] = "частина_доби",
+        ["morning"] = "ранок",
+        ["afternoon"] = "день",
+        ["evening"] = "вечір",
+        ["night"] = "ніч",
+        ["tomorrowDate"] = "дата_завтра",
     };
 
     private static readonly Dictionary<string, string> ToKey =

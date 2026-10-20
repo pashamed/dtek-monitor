@@ -18,7 +18,7 @@ public static class CombinedSchedule
                 sections.Add(channel.Heading(groupId) + "\nГрафік тимчасово недоступний.");
                 continue;
             }
-            var values = ScheduleText.PostValues(regionName, groupId, snapshot, now, updated);
+            var values = ScheduleText.PostValues(regionName, groupId, snapshot, now, updated, channel.TemplateFor(MessageSlots.ScheduleLine));
             var text = MessageTemplate.Render(template, values, MessageSlots.Find(MessageSlots.Schedule)!.DefaultTemplate);
             if (channel.IsCombined())
             {
@@ -31,7 +31,7 @@ public static class CombinedSchedule
         var body = string.Join("\n\n", sections);
         if (channel.IsCombined() && string.IsNullOrWhiteSpace(template) && channel.GroupIds().Count > 0)
         {
-            var values = ScheduleText.PostValues(regionName, channel.GroupIds()[0], snapshot, now, updated).ToDictionary(p => p.Key, p => p.Value);
+            var values = ScheduleText.PostValues(regionName, channel.GroupIds()[0], snapshot, now, updated, channel.TemplateFor(MessageSlots.ScheduleLine)).ToDictionary(p => p.Key, p => p.Value);
             values["outages"] = body;
             // Sections already contain escaped heading labels; rendering {outages} would escape them a second time.
             var marker = "COMBINED_SECTIONS";
