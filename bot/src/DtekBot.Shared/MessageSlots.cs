@@ -9,6 +9,7 @@ public static class MessageSlots
     public const string Ended = "ended";
     public const string Schedule = "schedule";
     public const string ScheduleLine = "schedule-line";
+    public const string ScheduleHeading = "schedule-heading";
     public const string BeforeOff = "before-off";
     public const string Off = "off";
     public const string On = "on";
@@ -16,7 +17,6 @@ public static class MessageSlots
     private static readonly IReadOnlyList<PlaceholderDto> LocalExtra =
     [
         new("group", "Номер черги", "45.1"),
-        new("address", "Збережена адреса (порожня, якщо не вказана)", "вул. Крушельницької, 13"),
     ];
 
     private static readonly IReadOnlyList<PlaceholderDto> SchedulePlaceholders =
@@ -99,9 +99,24 @@ public static class MessageSlots
             Schedule,
             "stabilization",
             "Графік відключень",
-            "Окрема публікація зі стабілізаційним графіком вашої черги на сьогодні, зазвичай разом із картинкою.",
+            "Графік на сьогодні й завтра. Вигляд задають «Заголовок графіка» та «Рядок графіка»; старий загальний шаблон більше не використовується.",
             "❗️ {header}\n📅 {weekday} {date}\n\n{outages}",
             SchedulePlaceholders),
+        new(
+            ScheduleHeading,
+            "stabilization",
+            "Заголовок графіка",
+            "Один заголовок на день. Черги та інтервали бот додає нижче автоматично. У власному шаблоні додайте {changes} для підсумку змін плану. Типовий заголовок показує підсумок автоматично.",
+            "❗️ {header}\n📅 {weekday} {date}",
+            [
+                new("header", "Графік відключень на сьогодні / завтра", "Графік відключень на сьогодні"),
+                new("weekday", "День тижня відповідного дня", "Середа"),
+                new("date", "Дата відповідного дня", "21.10.2026"),
+                new("region", "Збережений регіон", "Київська область"),
+                new("part", "Збережені райони (якщо є)", "Бучанський район"),
+                new("address", "Збережені адреси (якщо є)", "м. Ірпінь, вул. Західна, 14"),
+                new("changes", "Планові інтервали, додані або прибрані відносно попереднього графіка (порожньо, якщо змін немає)", "Зміни: додано 14:00–16:00; прибрано 18:00–20:00"),
+            ]),
         new(
             ScheduleLine,
             "stabilization",

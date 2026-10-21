@@ -1,4 +1,5 @@
 using DtekBot.Api.Schedules;
+using DtekBot.Api.Data;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
 using Microsoft.Extensions.Options;
@@ -31,7 +32,8 @@ public sealed class TemplatePreviewService(
         ScheduleImage imageKind,
         AlertKind? kindOverride,
         CancellationToken ct,
-        string? scheduleLineTemplate = null)
+        string? scheduleLineTemplate = null,
+        string? scheduleHeadingTemplate = null)
     {
         var definition = MessageSlots.Find(slot)!;
         var now = time.GetUtcNow();
@@ -50,11 +52,11 @@ public sealed class TemplatePreviewService(
             {
                 values[pair.Key] = pair.Value;
             }
+            values["address"] = address ?? "";
 
             if (slot == MessageSlots.Local)
             {
                 values["group"] = string.IsNullOrEmpty(groupId) ? values["group"] : groupId;
-                values["address"] = string.IsNullOrEmpty(address) ? values["address"] : address;
             }
 
             if (values["popup"].Length == 0)
@@ -62,34 +64,43 @@ public sealed class TemplatePreviewService(
                 values["popup"] = "Шановні клієнти! Через аварію в мережі знеструмлено частину правого берега столиці.";
             }
         }
+        else if (slot == MessageSlots.Schedule)
+        {
+            var snapshot = region.HasSchedules ? await schedules.GetAsync(region.Id, ct) : null;
+            var sample = string.IsNullOrEmpty(groupId) || snapshot?.Find(groupId) is null;
+            var imageGroup = sample ? snapshot?.GroupIds.FirstOrDefault() : groupId;
+            if (snapshot is not null && imageGroup is not null)
+            {
+                imageUrl = ScheduleText.ImageUrl(options.CurrentValue.Schedules, snapshot.DataFile, imageGroup, snapshot.Version, imageKind);
+            }
+            if (snapshot is null || sample)
+            {
+                var date = KyivTime.FromUtc(now).Date;
+                var today = ScheduleText.KyivDayStart(date);
+                var tomorrow = ScheduleText.KyivDayStart(date.AddDays(1));
+                groupId = "sample";
+                snapshot = new ScheduleSnapshot("", "", now, null, today, ScheduleText.KyivDayStart(date.AddDays(2)),
+                    new Dictionary<string, GroupSchedule>
+                    {
+                        [groupId] = new(groupId, [
+                            new OutageInterval(today.AddHours(14), today.AddHours(18)),
+                            new OutageInterval(tomorrow.AddHours(14), tomorrow.AddHours(18)),
+                        ]),
+                    });
+            }
+            var target = new Channel { RegionId = region.Id, GroupId = groupId, AddressLabel = address, PartIdList = partIds.ToList() };
+            var templates = new Dictionary<string, string>();
+            if (!string.IsNullOrWhiteSpace(scheduleLineTemplate)) templates[MessageSlots.ScheduleLine] = scheduleLineTemplate;
+            if (!string.IsNullOrWhiteSpace(scheduleHeadingTemplate)) templates[MessageSlots.ScheduleHeading] = scheduleHeadingTemplate;
+            target.TemplateMap = templates;
+            var scheduleHtml = CombinedSchedule.Render(target, snapshot, region.Name, now, false, region.DisplayNames(partIds));
+            return new RenderedTemplate((sample ? "<b>Зразок</b>\n\n" : "") + scheduleHtml, imageUrl);
+        }
         else if (region.HasSchedules && !string.IsNullOrEmpty(groupId) && await schedules.GetAsync(region.Id, ct) is { } snapshot
             && snapshot.Find(groupId) is not null)
         {
-            if (slot == MessageSlots.Schedule)
-            {
-                foreach (var pair in ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: true, lineTemplate: scheduleLineTemplate))
-                {
-                    values[pair.Key] = pair.Value;
-                }
-
-                imageUrl = ScheduleText.ImageUrl(options.CurrentValue.Schedules, snapshot.DataFile, groupId, snapshot.Version, imageKind);
-            }
-            else
-            {
-                values["region"] = region.Name;
-                values["group"] = groupId;
-            }
-        }
-        else if (slot == MessageSlots.Schedule)
-        {
-            // No group yet: the picture of a sample group still shows what the post looks like.
-            var sample = region.HasSchedules && await schedules.GetAsync(region.Id, ct) is { } any
-                ? (any.GroupIds.FirstOrDefault() is { } first ? (any, first) : default)
-                : default;
-            if (sample.any is not null)
-            {
-                imageUrl = ScheduleText.ImageUrl(options.CurrentValue.Schedules, sample.any.DataFile, sample.first, sample.any.Version, imageKind);
-            }
+            values["region"] = region.Name;
+            values["group"] = groupId;
         }
 
         var html = MessageTemplate.Render(template, values, definition.DefaultTemplate);

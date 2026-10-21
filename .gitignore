@@ -1,4 +1,6 @@
 node_modules
 .env
+.env.telegram-test
+.env.llm-test
 artifacts
 .vscode/launch.json

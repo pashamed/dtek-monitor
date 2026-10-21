@@ -146,8 +146,9 @@ function loadGroups(regionId) {
 let sheet = null;
 function closeSheet(silent) {
   if (!sheet) return;
-  const { back, btn } = sheet;
+  const { back, btn, dispose } = sheet;
   sheet = null;
+  if (dispose) dispose();
   back.remove();
   btn.setAttribute('aria-expanded', 'false');
   if (!silent) btn.focus();
@@ -176,6 +177,120 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet()
 
 const card = (...kids) => h('section', { class: 'card glass' }, ...kids);
 const fieldLabel = (title, key, forId) => h('div', { class: 'fl' }, h('label', { for: forId, text: title }), key && help(key));
+
+// The viewer has no subscription state or write actions; closing it preserves the editor draft.
+function scheduleViewerButton(regionId, groupId) {
+  const btn = h('button', { type: 'button', class: 'btn', text: 'Переглянути графік', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' });
+  btn.addEventListener('click', () => openScheduleViewer(btn, regionId, groupId));
+  return btn;
+}
+
+function openScheduleViewer(btn, initialRegion, initialGroup) {
+  closeSheet(true);
+  let request = 0, tick = 0, disposed = false;
+  const regions = state.boot.regions.filter(r => r.hasSchedules);
+  const region = h('select', { id: 'viewer-region', 'aria-label': 'Регіон для перегляду' },
+    regions.map(r => h('option', { value: r.id, text: r.name })));
+  region.value = regions.some(r => r.id === initialRegion) ? initialRegion : regions[0]?.id || '';
+  const group = h('select', { id: 'viewer-group', 'aria-label': 'Черга для перегляду', disabled: true });
+  const output = h('div', { class: 'stlines', role: 'status', 'aria-live': 'polite' });
+  const retry = h('button', { type: 'button', class: 'btn ghost sm', text: 'Оновити графік' });
+  const close = h('button', { type: 'button', class: 'btn', text: 'Закрити перегляд', onclick: () => closeSheet() });
+  const content = h('div', { class: 'sheet glass', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'viewer-title' },
+    h('h2', { id: 'viewer-title', text: 'Переглянути графік' }),
+    h('p', { class: 'hint', text: 'Лише перегляд плану на сьогодні й завтра. Без збереження підписки та без публікацій. Графік не підтверджує фактичну наявність світла.' }),
+    h('div', { class: 'fld' }, h('label', { for: region.id, text: 'Регіон' }), region),
+    h('div', { class: 'fld' }, h('label', { for: group.id, text: 'Черга' }), group),
+    output, retry, h('p', { class: 'hint credit', text: CREDIT }), close);
+  const back = h('div', { class: 'backdrop', onclick: e => { if (e.target === back) closeSheet(); } }, content);
+  sheet = { back, btn, dispose: () => { disposed = true; request++; clearInterval(tick); } };
+  btn.setAttribute('aria-expanded', 'true');
+  document.body.append(back);
+  const valid = my => !disposed && my === request;
+  const time = value => new Date(value).toLocaleTimeString('uk-UA', { timeZone: 'Europe/Kyiv', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const date = value => new Date(value).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+  const dayKey = value => {
+    const parts = new Intl.DateTimeFormat('en', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+    const get = key => parts.find(p => p.type === key).value;
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  };
+  async function loadPlan() {
+    const my = ++request;
+    clearInterval(tick);
+    if (!region.value || !group.value) return;
+    retry.disabled = true;
+    output.replaceChildren(h('p', { text: 'Завантажую графік…' }));
+    try {
+      const d = await api('GET', '/api/schedules/view?regionId=' + encodeURIComponent(region.value) + '&groupId=' + encodeURIComponent(group.value));
+      if (!valid(my)) return;
+      const countdown = h('p', { class: 'hint' });
+      const today = dayKey(d.serverNow);
+      output.replaceChildren(
+        h('h3', { text: `${d.regionName} · черга ${d.groupId}` }),
+        ...(d.warnings || []).map(text => h('p', { class: 'note warn', role: 'alert', text })),
+        d.warnings?.length ? h('p', { class: 'note warn', text: 'Під час аварійних або екстрених відключень план може не діяти. Відлік нижче — лише за планом, не прогноз фактичного світла.' }) : h('p', { class: 'hint', text: 'Час наведено за Києвом.' }),
+        h('p', { class: 'hint', text: 'Перевірено джерело: ' + date(d.checkedAt) + ' (час Києва).' }),
+        ...(d.isCached ? [h('p', { class: 'note warn', text: 'Кешовані дані: джерело зараз недоступне або ще не оновилося. План може змінитися.' })] : []),
+        ...(d.days || []).map(day => h('section', {},
+          h('h3', { text: `${day.date === today ? 'Сьогодні' : 'Завтра'} · ${day.date}` }),
+          !day.available ? h('p', { class: 'note warn', text: 'Повного графіка на цей день ще немає. Це не означає відсутність відключень.' })
+            : day.intervals.length ? h('ul', {}, day.intervals.map(i => h('li', { text: 'Планове відключення: ' + time(i.start) + '–' + (dayKey(i.end) > day.date ? '24:00' : time(i.end)) })))
+              : h('p', { text: 'За опублікованим планом відключень немає.' }))),
+        countdown);
+      const received = performance.now(), serverNow = Date.parse(d.serverNow), next = Date.parse(d.nextChangeAt);
+      const paintCountdown = () => {
+        if (!d.nextChangeAt || !Number.isFinite(next) || !Number.isFinite(serverNow) || d.nextChangeIsOff == null) {
+          countdown.textContent = 'Наступну планову зміну не визначено.';
+          return;
+        }
+        const seconds = Math.ceil((next - serverNow - (performance.now() - received)) / 1000);
+        countdown.textContent = seconds <= 0 ? 'Час планової зміни настав. Оновіть графік; фактичний стан невідомий.'
+          : `До планового ${d.nextChangeIsOff ? 'відключення' : 'завершення відключення'}: ${Math.floor(seconds / 3600)} год ${Math.floor(seconds % 3600 / 60)} хв ${seconds % 60} с.`;
+        if (seconds <= 0) clearInterval(tick);
+      };
+      paintCountdown();
+      if (d.nextChangeAt && next > serverNow) tick = setInterval(paintCountdown, 1000);
+    } catch (e) {
+      if (valid(my)) output.replaceChildren(h('p', { class: 'msg err', role: 'alert', text: errorText(e).join(' ') }));
+    } finally {
+      if (valid(my)) retry.disabled = false;
+    }
+  }
+  async function loadViewerGroups(preferred) {
+    const my = ++request;
+    clearInterval(tick);
+    group.replaceChildren(); group.disabled = true; retry.disabled = true;
+    if (!region.value) {
+      output.replaceChildren(h('p', { text: 'Підтримуваних регіонів поки немає.' }));
+      return;
+    }
+    output.replaceChildren(h('p', { text: 'Завантажую черги…' }));
+    try {
+      const groups = await loadGroups(region.value);
+      if (!valid(my)) return;
+      group.replaceChildren(...groups.map(g => h('option', { value: g.id, text: g.name || g.id })));
+      if (groups.some(g => g.id === preferred)) group.value = preferred;
+      group.disabled = !groups.length;
+      if (groups.length) await loadPlan();
+      else output.replaceChildren(h('p', { text: 'Для цього регіону черг поки немає.' }));
+    } catch (e) {
+      if (valid(my)) output.replaceChildren(h('p', { class: 'msg err', role: 'alert', text: errorText(e).join(' ') }));
+    } finally {
+      if (valid(my)) retry.disabled = false;
+    }
+  }
+  region.addEventListener('change', () => loadViewerGroups());
+  group.addEventListener('change', loadPlan);
+  retry.addEventListener('click', () => group.value ? loadPlan() : loadViewerGroups());
+  content.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const controls = [...content.querySelectorAll('button, select')].filter(el => !el.disabled);
+    if (e.shiftKey && document.activeElement === controls[0]) { e.preventDefault(); controls.at(-1).focus(); }
+    else if (!e.shiftKey && document.activeElement === controls.at(-1)) { e.preventDefault(); controls[0].focus(); }
+  });
+  close.focus();
+  loadViewerGroups(initialGroup);
+}
 
 // ---------- helpers ----------
 function regionOf(id) { return state.boot.regions.find(x => x.id === id) || null; }
@@ -307,6 +422,7 @@ function renderList(note, errNote) {
       h('p', { class: 'lead', text: 'Керуйте каналами зі сповіщеннями про відключення світла. Усі налаштування — тут, у редакторі.' })),
     note ? h('div', { class: 'toast ok', role: 'status', text: note }) : null,
     errNote ? h('div', { class: 'toast err', role: 'alert', text: errNote }) : null,
+    card(scheduleViewerButton(), h('p', { class: 'hint', text: 'Графік будь-якої підтримуваної черги без підключення каналу.' })),
     h('div', { class: 'sechead' }, h('h2', { text: 'Ваші канали' }), refresh),
     state.chats.length ? state.chats.map(chatCard) : card(h('p', { class: 'hint', text: 'Каналів поки немає. Підключіть перший за інструкцією нижче.' })),
     card(
@@ -497,8 +613,12 @@ function renderEditor(chat) {
 
   // Current state card (what DTEK and the schedules say right now).
   const stLines = h('div', { class: 'stlines', 'aria-live': 'polite' });
+  const diagnosticNote = h('p', { class: 'hint' });
+  const diagnosticLines = h('div', { class: 'stlines' });
+  const diagnostics = h('div', { hidden: true },
+    h('h3', { class: 'ct', text: 'Діагностика доставки' }), diagnosticNote, diagnosticLines);
   const stBtn = h('button', { type: 'button', class: 'btn ghost sm', text: 'Оновити', onclick: () => loadStatus() });
-  const stCard = card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Поточний стан' }), help('status')), stLines, stBtn);
+  const stCard = card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Поточний стан' }), help('status')), stLines, diagnostics, stBtn);
   let stSeq = 0, stFor, stPartsFor;
   async function loadStatus() {
     const my = ++stSeq;
@@ -512,28 +632,25 @@ function renderEditor(chat) {
       if (my !== stSeq) return;
       const lines = (d && d.lines) || [];
       stLines.replaceChildren(...(lines.length ? lines.map(t => h('div', { class: 'stl', text: t })) : [h('div', { class: 'hint', text: 'Поки немає даних.' })]));
-    } catch {
-      if (my === stSeq) stLines.replaceChildren(h('div', { class: 'hint', text: 'Стан недоступний' }));
+      const details = d?.diagnostics?.lines;
+      diagnostics.hidden = !Array.isArray(details) || !details.length;
+      diagnosticLines.replaceChildren(...(Array.isArray(details) ? details : []).map(text => h('div', { class: 'stl', text })));
+      updateDiagnosticNote();
+    } catch (e) {
+      if (my === stSeq) {
+        stLines.replaceChildren(h('div', { class: 'msg err', role: 'alert', text: errorText(e).join(' ') + ' Спробуйте оновити.' }));
+        diagnostics.hidden = true;
+      }
     }
     if (my === stSeq) stBtn.disabled = false;
   }
   function syncStatus() {
-    const regionId = s.regionId;
-    const has = !!regionId;
-    stCard.hidden = !has;
-    if (!has) {
-      stFor = undefined;
-      stPartsFor = undefined;
-      stSeq++;
-      stBtn.disabled = false;
-      stLines.replaceChildren();
-    } else {
-      const parts = partIdsOf(s).join(',');
-      if (stFor !== regionId || stPartsFor !== parts) {
-        stFor = regionId;
-        stPartsFor = parts;
-        loadStatus();
-      }
+    const regionId = s.regionId || null;
+    const parts = partIdsOf(s).join(',');
+    if (stFor !== regionId || stPartsFor !== parts) {
+      stFor = regionId;
+      stPartsFor = parts;
+      loadStatus();
     }
   }
 
@@ -559,6 +676,50 @@ function renderEditor(chat) {
     card(h('div', { class: 'fld' }, fieldLabel('Регіон', 'region', 'regionSel'), regionSel), distBox),
     addressPanel,
     card(activeRow, toggle('Пауза', 'isPaused', 'pause')));
+
+  const presetNote = h('p', { class: 'hint', role: 'status' });
+  const compactTemplates = () => Object.fromEntries(slots.flatMap(slot => {
+    const token = key => {
+      const p = (slot.placeholders || []).find(p => (p.key || p.name) === key);
+      return p ? '{' + p.name + '}' : '';
+    };
+    if (ALERT_SLOTS.includes(slot.id) && token('message')) {
+      return [[slot.id, [
+        [token('emoji'), token('title')].filter(Boolean).join(' '),
+        token('where') || token('region'), token('address'), token('message'),
+      ].filter(Boolean).join('\n')]];
+    }
+    if (slot.id === 'before-off' && token('time')) {
+      return [[slot.id, [
+        '⏳ Планове відключення о ' + token('time') + (token('minutes') ? ' (через ' + token('minutes') + ' хв)' : ''),
+        [token('region'), token('group') ? 'черга ' + token('group') : ''].filter(Boolean).join(' · '),
+      ].filter(Boolean).join('\n')]];
+    }
+    return [];
+  }));
+  const emergencyPreset = h('button', { type: 'button', class: 'btn', text: 'Лише аварійні та екстрені', onclick: async () => {
+    if (!await confirmSetting('Підготувати режим «Лише аварійні та екстрені»? Публікації графіка та планові попередження буде вимкнено, аварійні й екстрені — увімкнено. Сповіщення про зняття запису, шаблони, адреси, пауза й активність не зміняться. Потрібно натиснути «Зберегти».')) return;
+    s.schedulePost = false; s.scheduleNotify = false; s.scheduleReminder = false;
+    for (const id of ['emergency', 'regional', 'local']) s.slotSettings[id].enabled = true;
+    refreshAll();
+    if (tab === 'msg') renderStudio();
+    presetNote.textContent = 'Режим підготовлено. Перевірте зміни й натисніть «Зберегти». Повідомлень не надіслано.';
+  } });
+  const compactPreset = h('button', { type: 'button', class: 'btn', text: 'Стислі тексти сповіщень', onclick: async () => {
+    const templates = compactTemplates();
+    if (!Object.keys(templates).length) {
+      presetNote.textContent = 'Сервер не надав потрібних підстановок для стислих шаблонів.';
+      return;
+    }
+    if (!await confirmSetting('Замінити тексти аварійних / екстрених сповіщень і планового попередження на стислі? Власні тексти цих видів буде замінено лише у чернетці. Шаблони графіка та режими публікації не зміняться. Застосування — лише після «Зберегти».')) return;
+    Object.assign(tpls, templates);
+    for (const id of Object.keys(templates)) { delete perr[id]; delete serr[id]; }
+    renderPills(); renderStudio(); touch();
+    presetNote.textContent = 'Стислі тексти підготовлено. Перегляньте їх у «Повідомленнях» та збережіть за бажанням.';
+  } });
+  panels.main.append(card(h('h3', { class: 'ct', text: 'Готові режими — лише за вашим вибором' }),
+    h('p', { class: 'hint', text: 'Кожна дія потребує підтвердження й лише готує зміни для кнопки «Зберегти». Пауза та неактивна підписка не вмикаються автоматично.' }),
+    emergencyPreset, compactPreset, presetNote));
 
   // ----- save logic -----
   function applyChat(c) {
@@ -1088,9 +1249,12 @@ function renderEditor(chat) {
   }
   const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : 'None';
   const previewBody = id => ({
-    slot: id, template: customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
-    addresses: chat.settings.addresses || null, groupId: groupOf(), kind: KIND_OF[id] || 'Emergency', imageKind: imageKindOf(id),
+    slot: ['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id,
+    template: ['schedule-heading', 'schedule-line'].includes(id) ? null : customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
+    addresses: chat.settings.addresses || null, groupId: groupOf(), kind: KIND_OF[id] || 'Emergency',
+    imageKind: imageKindOf(['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id),
     scheduleLineTemplate: tpls['schedule-line'] || null,
+    scheduleHeadingTemplate: tpls['schedule-heading'] || null,
   });
 
   // ----- tab: Графік -----
@@ -1247,9 +1411,11 @@ function renderEditor(chat) {
       svbPaint();
     }
     const r = regionOf(s.regionId);
+    const viewer = card(scheduleViewerButton(s.regionId, groupOf()),
+      h('p', { class: 'hint', text: 'Будь-який регіон і черга. Збереження налаштувань не потрібне.' }));
     if (!r || !r.hasSchedules) {
       pvSeq++; pv.key = '';
-      panels.sched.replaceChildren(empty(r ? 'Графіки відключень для цього регіону поки недоступні.' : 'Спершу оберіть регіон на вкладці «Основне».', r ? null : 'main'));
+      panels.sched.replaceChildren(viewer, empty(r ? 'Графіки відключень для цього регіону поки недоступні.' : 'Для налаштування публікацій оберіть регіон на вкладці «Основне».', r ? null : 'main'));
       return;
     }
     const has = !!groupOf();
@@ -1262,13 +1428,15 @@ function renderEditor(chat) {
       // Without a group there is no schedule to preview: one clear step instead of two locked sections.
       pvSeq++; pv.key = '';
       panels.sched.replaceChildren(
+        viewer,
         card(
-          h('p', { class: 'empty', text: 'Щоб побачити графік і налаштувати публікації, вкажіть свою адресу або чергу.' }),
+          h('p', { class: 'empty', text: 'Щоб налаштувати публікації, вкажіть свою адресу або чергу. Для перегляду скористайтеся кнопкою вище.' }),
           h('button', { type: 'button', class: 'btn', text: 'Вказати адресу або чергу', onclick: goToAddress })),
         h('p', { class: 'hint credit', text: CREDIT }));
       return;
     }
     panels.sched.replaceChildren(
+      viewer,
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Графік у Telegram-каналі' }), help('schedulePost')),
         h('p', { class: 'hint', text: 'Усі черги — в одному дописі. Світлобот отримує спільний тижневий графік.' }),
@@ -1282,6 +1450,7 @@ function renderEditor(chat) {
         h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
         h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), (chat.settings.addresses?.length > 1 || (chat.settings.addresses?.[0]?.groups?.length || 0) > 1) ? h('p', { class: 'hint', text: 'Об’єднаний графік надсилаємо текстом.' }) : imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
         edit('schedule', 'Редагувати шаблон'),
+        edit('schedule-line', 'Редагувати рядок графіка'),
         pvx.node),
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Попередження перед відключенням' }), help('scheduleReminder')),
@@ -1349,11 +1518,12 @@ function renderEditor(chat) {
     const groupKey = group => group === 'emergency' || group === 'regional' ? 'alerts' : group;
     const groups = [...SLOT_GROUPS, ...[...new Set(slots.map(x => groupKey(x.group)))].filter(g => !SLOT_GROUPS.some(y => y[0] === g)).map(g => [g, g])];
     slotBar.replaceChildren(...groups.map(([g, title]) => {
-      const list = slots.filter(x => groupKey(x.group) === g && !['regional', 'ended'].includes(x.id));
+      const list = slots.filter(x => groupKey(x.group) === g && !['regional', 'ended', 'schedule-heading', 'schedule-line'].includes(x.id));
       if (!list.length) return null;
       return h('div', { class: 'sgrp', role: 'presentation' }, h('div', { class: 'sgh', text: title }),
         h('div', { class: 'sgp' }, list.map(x => h('button', {
-          type: 'button', role: 'tab', class: 'spill' + (x.id === cs || x.id === 'emergency' && ['regional', 'ended'].includes(cs) ? ' on' : ''), id: 'slot-' + x.id, 'aria-selected': String(x.id === cs || x.id === 'emergency' && ['regional', 'ended'].includes(cs)),
+          type: 'button', role: 'tab', class: 'spill' + (x.id === cs || x.id === 'emergency' && ['regional', 'ended'].includes(cs) || x.id === 'schedule' && ['schedule-heading', 'schedule-line'].includes(cs) ? ' on' : ''), id: 'slot-' + x.id,
+          'aria-selected': String(x.id === cs || x.id === 'emergency' && ['regional', 'ended'].includes(cs) || x.id === 'schedule' && ['schedule-heading', 'schedule-line'].includes(cs)),
           onclick: () => openSlot(x.id, true),
         }, h('span', { text: x.title }), isCustom(x.id) ? h('i', { class: 'pd', title: 'Змінений шаблон' }) : null,
           slotErrs(x.id).length ? h('i', { class: 'rd2', title: 'Є помилки' }) : null))));
@@ -1361,7 +1531,7 @@ function renderEditor(chat) {
   }
 
   function openSlot(id, stay) {
-    cs = id;
+    cs = id === 'schedule' && slotOf('schedule-heading') ? 'schedule-heading' : id;
     renderPills(); renderStudio();
     if (!stay) setTab('msg');
     try { document.getElementById('slot-' + id).scrollIntoView({ inline: 'center', block: 'nearest' }); } catch { /* optional */ }
@@ -1445,6 +1615,11 @@ function renderEditor(chat) {
     }
 
     studio.replaceChildren(
+      ['schedule', 'schedule-heading', 'schedule-line'].includes(cs) ? card(
+        h('h3', { class: 'ct', text: 'Вигляд графіка' }),
+        h('p', { class: 'hint', text: 'Один допис: сьогодні й завтра, черги окремо. Редагуйте заголовок або один інтервал — бот повторить його для всіх відключень. Додайте {зміни} в заголовок, щоб розмістити там підсумок доданих і скасованих інтервалів; без нього підсумок додається автоматично.' }),
+        seg([['schedule-heading', 'Заголовок і дата'], ['schedule-line', 'Інтервал {відключення}']],
+          () => cs, value => openSlot(value, true), 'Частина графіка')) : null,
       ['emergency', 'regional', 'ended'].includes(cs) ? card(
         h('h3', { class: 'ct', text: 'Екстрені відключення' }),
         h('p', { class: 'hint', text: 'Один тип сповіщення: початок, районна аварія та зняття. Райони підставляє бот.' }),
@@ -1459,8 +1634,6 @@ function renderEditor(chat) {
           h('button', { type: 'button', class: 'chip', text, onmousedown: keep, onclick: () => put(text) })),
           cs === 'schedule-line' ? null : h('button', { type: 'button', class: 'chip', text: 'Жирний', onmousedown: keep,
             onclick: () => { const selected = tpl.value.slice(tpl.selectionStart, tpl.selectionEnd); put('<b>' + selected + '</b>', 3 + selected.length); } })),
-        cs === 'schedule' ? h('button', { type: 'button', class: 'btn ghost sm', text: 'Налаштувати рядок: значок, час, дата, тривалість',
-          onclick: () => openSlot('schedule-line') }) : null,
         h('div', { class: 'fl sm' }, h('span', { text: 'Параметри' }), help('cond')), chips, paramNote,
         prevx.node,
         h('div', { class: 'testrow' }, testBtn, help('test')), testOut),
@@ -1501,8 +1674,10 @@ function renderEditor(chat) {
         const err = await doSave(true);
         if (err) { fail(err.lines || errorText(err)); return; }
       }
-      const imageKind = id === 'schedule' || id === 'off' || id === 'on' ? imageKindOf(id) : null;
-      await api('POST', `/api/chats/${encodeURIComponent(chat.chatId)}/templates/${encodeURIComponent(id)}/send`, { template: customised(x, tpls[id]) ? tpls[id] : null, imageKind });
+      const target = ['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id;
+      const imageKind = target === 'schedule' || target === 'off' || target === 'on' ? imageKindOf(target) : null;
+      await api('POST', `/api/chats/${encodeURIComponent(chat.chatId)}/templates/${encodeURIComponent(target)}/send`,
+        { template: target === 'schedule' ? null : customised(x, tpls[id]) ? tpls[id] : null, imageKind });
       haptic('success');
       testOut.replaceChildren(h('div', { class: 'toast ok', role: 'status', text: 'Надіслано ✓' }));
       setTimeout(() => testOut && testOut.querySelector('.toast') && testOut.replaceChildren(), 4000);
@@ -1533,11 +1708,17 @@ function renderEditor(chat) {
     quietCard,
     card(h('div', { class: 'fl big sm' }, h('span', { text: 'Шаблони повідомлень' }), help('slots')),
       h('div', { class: 'slotwrap' }, slotBar)),
-    studio,
-    ...(removeBtn ? [card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Керування' }), help('remove')), removeBtn)] : []));
+    studio);
+  if (removeBtn) panels.main.append(card(h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Керування' }), help('remove')), removeBtn));
   renderPills(); renderStudio();
 
   // ----- wiring -----
+  function updateDiagnosticNote() {
+    diagnosticNote.className = isDirty() ? 'note warn' : 'hint';
+    diagnosticNote.textContent = 'Діагностика за збереженими налаштуваннями підписки.' + (isDirty()
+      ? ' Є незбережена чернетка: її зміни ще не впливають на доставку. Поточний стан вище може враховувати обраний у чернетці регіон.'
+      : '');
+  }
   function updateUi() {
     const d = isDirty(), districtError = districtSelectionError(), bad = blocking() || !!districtError;
     saveBtn.disabled = busy || bad || !d;
@@ -1547,6 +1728,7 @@ function renderEditor(chat) {
     rd.hidden = !anyErr();
     const [c, t] = statusOf(s);
     topPill.className = 'pill ' + c; topPill.textContent = t;
+    updateDiagnosticNote();
   }
 
   function refreshAll() { renderDistricts(); syncStatus(); renderAddr(); renderSched(); updateUi(); if (tab === 'msg') runPreview(); }
@@ -1598,7 +1780,7 @@ if (!tg || !initData) {
   }
   tg.ready();
   tg.expand();
-  tg.BackButton.onClick(() => { if (state.editing && state.goBack) state.goBack(); else renderList(); });
+  tg.BackButton.onClick(() => { if (sheet) closeSheet(); else if (state.editing && state.goBack) state.goBack(); else renderList(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && state.boot) refreshChats(false); });
   try { tg.onEvent && tg.onEvent('activated', () => { if (state.boot) refreshChats(false); }); } catch { /* optional */ }
   load();

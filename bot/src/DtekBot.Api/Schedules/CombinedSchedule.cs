@@ -7,38 +7,48 @@ namespace DtekBot.Api.Schedules;
 
 public static class CombinedSchedule
 {
-    public static string Render(Channel channel, ScheduleSnapshot snapshot, string regionName, DateTimeOffset now, bool updated)
+    public static string Render(Channel channel, ScheduleSnapshot snapshot, string regionName, DateTimeOffset now, bool updated,
+        IReadOnlyList<string>? partNames = null, IReadOnlyDictionary<string, string>? changes = null)
     {
-        var template = channel.TemplateFor(MessageSlots.Schedule);
+        var date = KyivTime.FromUtc(now).Date;
         var sections = new List<string>();
-        foreach (var groupId in channel.GroupIds())
+        for (var offset = 0; offset <= 1; offset++)
         {
-            if (snapshot.Find(groupId) is null)
+            var start = ScheduleText.KyivDayStart(date.AddDays(offset));
+            var end = ScheduleText.KyivDayStart(date.AddDays(offset + 1));
+            var values = new Dictionary<string, string>
             {
-                sections.Add(channel.Heading(groupId) + "\nГрафік тимчасово недоступний.");
+                ["header"] = (updated ? "Оновлений графік" : "Графік") + " відключень на " + (offset == 0 ? "сьогодні" : "завтра"),
+                ["weekday"] = ScheduleText.Weekdays[(int)date.AddDays(offset).DayOfWeek],
+                ["date"] = date.AddDays(offset).ToString("dd.MM.yyyy", System.Globalization.CultureInfo.InvariantCulture),
+                ["region"] = regionName,
+                ["part"] = string.Join(", ", partNames ?? []),
+                ["address"] = channel.AddressText(),
+                ["changes"] = changes?.GetValueOrDefault(ScheduleText.DateKey(start)) ?? "",
+            };
+            var template = channel.TemplateFor(MessageSlots.ScheduleHeading);
+            var fallback = MessageSlots.Find(MessageSlots.ScheduleHeading)!.DefaultTemplate;
+            var heading = MessageTemplate.Render(template, values, fallback);
+            // Custom headings opt in explicitly; never rewrite a saved template.
+            if (template is null && values["changes"].Length > 0 && !fallback.Contains("{changes}", StringComparison.Ordinal))
+                heading += "\n\n" + WebUtility.HtmlEncode(values["changes"]);
+            if (snapshot.CoverageStart > start || snapshot.CoverageEnd < end)
+            {
+                sections.Add(heading + "\n\nГрафік ще не оприлюднено.");
                 continue;
             }
-            var values = ScheduleText.PostValues(regionName, groupId, snapshot, now, updated, channel.TemplateFor(MessageSlots.ScheduleLine));
-            var text = MessageTemplate.Render(template, values, MessageSlots.Find(MessageSlots.Schedule)!.DefaultTemplate);
-            if (channel.IsCombined())
+            var groups = channel.GroupIds().Select(id =>
             {
-                if (string.IsNullOrWhiteSpace(template))
-                    text = values["outages"] + "\nЗавтра: " + (values["tomorrow"] == "" ? "ще не оприлюднено" : values["tomorrow"]);
-                text = channel.Heading(groupId) + "\n" + text;
-            }
-            sections.Add(text);
+                var group = snapshot.CoversDay(id, start, end) ? snapshot.Find(id) : null;
+                var lines = group is null ? "Графік тимчасово недоступний."
+                    : string.Join("\n", ScheduleText.OutageLines(group, start, end, channel.TemplateFor(MessageSlots.ScheduleLine)));
+                if (group is not null && lines.Length == 0) lines = ScheduleText.NoOutages;
+                return (channel.IsCombined() ? channel.Heading(id) + "\n" : "")
+                    + MessageTemplate.Render("{outages}", new Dictionary<string, string> { ["outages"] = lines });
+            });
+            sections.Add(heading + "\n\n" + string.Join("\n\n", groups));
         }
-        var body = string.Join("\n\n", sections);
-        if (channel.IsCombined() && string.IsNullOrWhiteSpace(template) && channel.GroupIds().Count > 0)
-        {
-            var values = ScheduleText.PostValues(regionName, channel.GroupIds()[0], snapshot, now, updated, channel.TemplateFor(MessageSlots.ScheduleLine)).ToDictionary(p => p.Key, p => p.Value);
-            values["outages"] = body;
-            // Sections already contain escaped heading labels; rendering {outages} would escape them a second time.
-            var marker = "COMBINED_SECTIONS";
-            values["outages"] = marker;
-            return MessageTemplate.Render(null, values, MessageSlots.Find(MessageSlots.Schedule)!.DefaultTemplate).Replace(marker, body);
-        }
-        return body;
+        return string.Join("\n\n", sections);
     }
 
     // Long digests use plain text so splitting cannot break HTML tags/entities.

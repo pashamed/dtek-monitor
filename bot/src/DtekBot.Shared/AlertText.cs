@@ -10,7 +10,8 @@ public static class AlertText
         IReadOnlyList<string> partNames,
         string siteUrl,
         DateTimeOffset now,
-        string? popup)
+        string? popup,
+        bool stabilizationActive = false)
     {
         var part = string.Join(", ", partNames);
         var where = partNames.Count > 0 ? $"{regionName} ({part})" : regionName;
@@ -28,7 +29,9 @@ public static class AlertText
             AlertKind.Ended => (
                 "ℹ️",
                 "Запис про відключення знято",
-                "екстрені відключення знято. Це не підтвердження, що світло вже повернулося."),
+                stabilizationActive
+                    ? "екстрені відключення завершено; за повідомленням ДТЕК, діють стабілізаційні графіки. Це не означає, що електроенергія вже є."
+                    : "запис про екстрені відключення більше не відображається. Це не підтверджує, що електропостачання відновлено."),
             _ => (
                 "ℹ️",
                 "Повідомлення ДТЕК",
@@ -48,6 +51,7 @@ public static class AlertText
             ["message"] = $"{where}: {sentence}",
             ["region"] = regionName,
             ["part"] = part,
+            ["address"] = "",
             ["where"] = where,
             ["site"] = siteUrl,
             ["time"] = KyivTime.Format(now),

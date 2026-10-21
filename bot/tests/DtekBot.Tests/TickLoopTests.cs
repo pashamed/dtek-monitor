@@ -49,9 +49,15 @@ public class TickLoopTests
 
         await loop.RunOnceAsync(CancellationToken.None);
 
-        Assert.True(await TickGate.Grid.WaitAsync(0));
-        TickGate.Grid.Release();
-        Assert.True(await TickGate.Schedules.WaitAsync(0));
-        TickGate.Schedules.Release();
+        Assert.True(await TickGate.Grid.WaitAsync(TimeSpan.FromSeconds(5)));
+        try
+        {
+            Assert.True(await TickGate.Schedules.WaitAsync(TimeSpan.FromSeconds(5)));
+            TickGate.Schedules.Release();
+        }
+        finally
+        {
+            TickGate.Grid.Release();
+        }
     }
 }

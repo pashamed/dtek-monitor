@@ -54,13 +54,63 @@ public sealed class MultiAddressTests : IDisposable
     }
 
     [Fact]
-    public void Rendering_OneAddressOneGroupIsExactlyLegacyTemplate()
+    public void Rendering_OneAddressOneGroupHasBothDaysWithoutGroupHeading()
     {
         var channel = new Channel { RegionId = "kyiv", GroupId = "45.1", Addresses = [Address("Дім", "45.1")] };
         var snapshot = RealSnapshot();
-        var expected = MessageTemplate.Render(null, ScheduleText.PostValues("м. Київ", "45.1", snapshot, Kyiv(15, 12), false),
-            MessageSlots.Find(MessageSlots.Schedule)!.DefaultTemplate);
+        var expected = "❗️ Графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)"
+            + "\n\n❗️ Графік відключень на завтра\n📅 Пʼятниця 16.10.2026\n\n🔴 06:00 - 09:30 (~3,5 год)\n🔴 17:00 - 20:30 (~3,5 год)";
         Assert.Equal(expected, CombinedSchedule.Render(channel, snapshot, "м. Київ", Kyiv(15, 12), false));
+    }
+
+    [Fact]
+    public void Rendering_CustomHeadingAndIntervalsApplyToBothDaysWithoutLegacyMetadata()
+    {
+        var channel = new Channel { RegionId = "kyiv", Addresses = [Address("Дім <1>", "45.1", "2.1")] };
+        channel.TemplateMap = new Dictionary<string, string>
+        {
+            [MessageSlots.Schedule] = "{outages}\n{tomorrowDate}\n{total}\n{updated}",
+            [MessageSlots.ScheduleHeading] = "⚡ {header}\n{weekday} · {date}",
+            [MessageSlots.ScheduleLine] = "🕒 {start}  →  {end}",
+        };
+        var text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false);
+        Assert.Equal(1, text.Split("Графік відключень на сьогодні").Length - 1);
+        Assert.Equal(1, text.Split("Графік відключень на завтра").Length - 1);
+        Assert.Equal(1, text.Split("Четвер · 15.10.2026").Length - 1);
+        Assert.Equal(1, text.Split("Пʼятниця · 16.10.2026").Length - 1);
+        Assert.Contains("🕒 11:00  →  14:00", text);
+        Assert.Contains("🕒 06:00  →  09:30", text);
+        Assert.Contains("<b>Черга 45.1</b> · Дім &lt;1&gt;", text);
+        Assert.DoesNotContain(" ? ", text);
+        Assert.DoesNotContain("~6,5 год", text);
+        Assert.DoesNotContain("20:24", text);
+    }
+
+    [Fact]
+    public void Rendering_UnpublishedTomorrowAndMissingGroupAreNotReportedAsNoOutages()
+    {
+        var channel = new Channel { RegionId = "kyiv", Addresses = [Address("Дім", "45.1", "missing")] };
+        var snapshot = RealSnapshot() with { CoverageEnd = Kyiv(16, 0) };
+        var text = CombinedSchedule.Render(channel, snapshot, "м. Київ", Kyiv(15, 12), false);
+        Assert.Contains("<b>Черга missing</b> · Дім\nГрафік тимчасово недоступний.", text);
+        Assert.EndsWith("Пʼятниця 16.10.2026\n\nГрафік ще не оприлюднено.", text);
+        Assert.DoesNotContain("06:00", text);
+    }
+
+    [Fact]
+    public void Rendering_GeographicPlaceholdersUseSavedValuesAndEscapeAddresses()
+    {
+        var channel = new Channel { RegionId = "kyiv", Addresses = [Address("Дім <1>", "45.1")] };
+        channel.TemplateMap = new Dictionary<string, string>
+        {
+            [MessageSlots.ScheduleHeading] = "{region}{#part} · {part}{/part}{#address}\n{address}{/address}\n{header}",
+        };
+        var text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false, ["Оболонський район"]);
+        Assert.Contains("м. Київ · Оболонський район\nВулиця Дім &lt;1&gt;, 1\nГрафік", text);
+        channel.Addresses.Clear();
+        channel.GroupId = "45.1";
+        text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false);
+        Assert.StartsWith("м. Київ\nГрафік", text);
     }
 
     [Fact]
@@ -70,9 +120,9 @@ public sealed class MultiAddressTests : IDisposable
         channel.Addresses[0].Groups[0].Label = "Під'їзд 1";
         Assert.Equal(new[] { "2.1", "45.1" }, channel.GroupIds());
         var text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false);
-        Assert.Equal(1, text.Split("<b>Черга 45.1</b>").Length - 1);
+        Assert.Equal(2, text.Split("<b>Черга 45.1</b>").Length - 1);
         Assert.Contains("Дім &lt;1&gt;", text); Assert.Contains("Офіс", text); Assert.Contains("Під&#39;їзд 1", text);
-        Assert.Contains("<b>Черга 2.1</b>", text); Assert.Contains("Завтра:", text);
+        Assert.Contains("<b>Черга 2.1</b>", text); Assert.Contains("Графік відключень на завтра", text);
     }
 
     [Fact]
@@ -99,6 +149,8 @@ public sealed class MultiAddressTests : IDisposable
         var message = Assert.Single(f.Bot.Requests.OfType<SendMessageRequest>());
         Assert.Contains("45.1", message.Text); Assert.Contains("2.1", message.Text);
         Assert.Contains("Дім", message.Text); Assert.Contains("Офіс", message.Text);
+        Assert.Contains("Дім · 45.1", message.Text); Assert.Contains("Офіс · 2.1", message.Text);
+        Assert.DoesNotContain(" ? ", message.Text);
         Assert.Single(f.Db.ScheduleReminderDeliveries);
         channel.GroupId = "2.1";
         await notifier.TickAsync(default);
@@ -205,7 +257,7 @@ public sealed class MultiAddressTests : IDisposable
     {
         var channel = new Channel { RegionId = "kyiv", Addresses = [Address("Дім", "45.1"), Address("Офіс", "45.1")] };
         var text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false);
-        Assert.Equal(1, text.Split("<b>Черга 45.1</b>").Length - 1);
+        Assert.Equal(2, text.Split("<b>Черга 45.1</b>").Length - 1);
         Assert.Contains("Дім, Офіс", text);
         Assert.Equal(1, text.Split("Графік відключень на сьогодні").Length - 1);
     }
@@ -267,6 +319,35 @@ public sealed class MultiAddressApiTests : IClassFixture<ApiFactory>
         var preview = await response.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options);
         Assert.Contains("Дім &lt;script&gt;", preview!.Html); Assert.Contains("Офіс", preview.Html);
         Assert.Null(preview.ImageUrl);
+    }
+
+    [Fact]
+    public async Task CombinedPreviewAndTestSendUseTheSameSavedHeaderAndIntervals()
+    {
+        var (id, client) = Chat();
+        var addresses = new[] { Address("Дім") with { Groups = [new("45.1"), new("2.1")] } };
+        (await client.PutAsJsonAsync($"/api/chats/{id}/addresses",
+            new SaveAddressesRequest(addresses), ApiJson.Options)).EnsureSuccessStatusCode();
+        const string heading = "⚡ {header}\n{weekday} {date}";
+        const string line = "🕒 {start}  →  {end}";
+        factory.WithDb(db => db.Channels.Single(c => c.ChatId == id).TemplateMap = new Dictionary<string, string>
+        {
+            [MessageSlots.ScheduleHeading] = heading,
+            [MessageSlots.ScheduleLine] = line,
+        });
+        var response = await client.PostAsJsonAsync("/api/preview",
+            new PreviewRequest(null, AlertKind.Emergency, "kyiv", null, Slot: MessageSlots.Schedule,
+                Addresses: addresses, ScheduleLineTemplate: line, ScheduleHeadingTemplate: heading), ApiJson.Options);
+        response.EnsureSuccessStatusCode();
+        var preview = (await response.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options))!;
+        Assert.Empty(preview.Errors);
+        var sent = await client.PostAsJsonAsync($"/api/chats/{id}/templates/schedule/send", new SendTestRequest(null), ApiJson.Options);
+        sent.EnsureSuccessStatusCode();
+        var message = Assert.Single(factory.Bot.Requests.OfType<SendMessageRequest>(),
+            r => r.ChatId.Identifier == id && r.Text.StartsWith("🧪", StringComparison.Ordinal));
+        Assert.Equal("🧪 <b>Тест</b>\n\n" + preview.Html, message.Text);
+        Assert.Contains("🕒 06:00  →  09:30", message.Text);
+        Assert.Equal(1, message.Text.Split("Графік відключень на завтра").Length - 1);
     }
     [Fact]
     public async Task GroupIngestDispatchesNonPrimaryMembershipAndRemovalClosesOnlyItsThread()

@@ -29,7 +29,8 @@ public sealed class ScheduleNotifierTests : IDisposable
         "🟢 14:00 Світло з'явилося за графіком\n🕓 Його не було 3год\n🗓 Наступне відключення за графіком о 20:30";
 
     private const string PostText12 =
-        "❗️ Графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)";
+        "❗️ Графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)"
+        + "\n\n❗️ Графік відключень на завтра\n📅 Пʼятниця 16.10.2026\n\n🔴 06:00 - 09:30 (~3,5 год)\n🔴 17:00 - 20:30 (~3,5 год)";
 
     private static readonly long Outage1Start = Kyiv(15, 11).ToUnixTimeSeconds();
     private static readonly long Outage2Start = Kyiv(15, 20, 30).ToUnixTimeSeconds();
@@ -1471,7 +1472,8 @@ public sealed class ScheduleNotifierTests : IDisposable
         Assert.Equal(new ScheduleTickSummary(1, 1, 0, 0, 0), summary);
         Assert.Equal(2, _f.Bot.Photos.Count());
         Assert.Equal(
-            "❗️ Графік відключень на сьогодні\n📅 П\u02BCятниця 16.10.2026\n\n🔴 06:00 - 09:30 (~3,5 год)\n🔴 17:00 - 20:30 (~3,5 год)",
+            "❗️ Графік відключень на сьогодні\n📅 П\u02BCятниця 16.10.2026\n\n🔴 06:00 - 09:30 (~3,5 год)\n🔴 17:00 - 20:30 (~3,5 год)"
+            + "\n\n❗️ Графік відключень на завтра\n📅 Субота 17.10.2026\n\nГрафік ще не оприлюднено.",
             _f.Bot.Photos.Last().Caption);
         Assert.Equal(deletes ? 1 : 0, _f.Bot.Deletes.Count());
         Assert.Empty(_f.Bot.CaptionEdits);
@@ -1572,28 +1574,32 @@ public sealed class ScheduleNotifierTests : IDisposable
     }
 
     [Fact]
-    public async Task Post_UsesTheChatsScheduleTemplate()
+    public async Task Post_UsesTheChatsHeadingAndRowInsteadOfLegacyScheduleMetadata()
     {
         AddPostChannel(configure: c => c.Templates = TemplatesJson(
-            (MessageSlots.Schedule, "{header}|{weekday}|{date}|{total}|{updated}|{region}|{group}\n{outages}\n{#tomorrow}Завтра:\n{tomorrow}{/tomorrow}")));
+            (MessageSlots.Schedule, "{outages}\n{tomorrowDate}\n{total}\n{updated}"),
+            (MessageSlots.ScheduleHeading, "⚡ {header}\n{weekday}|{date}"),
+            (MessageSlots.ScheduleLine, "🕒 {start} → {end}")));
 
         await TickAsync(Kyiv(15, 12));
 
         var caption = Assert.Single(_f.Bot.Photos).Caption!;
         Assert.StartsWith(
-            "Графік відключень на сьогодні|Четвер|15.10.2026|~6,5 год|15.10.2026 20:24|м. Київ|45.1\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)\nЗавтра:\n🔴 06:00 - 09:30",
+            "⚡ Графік відключень на сьогодні\nЧетвер|15.10.2026\n\n🕒 11:00 → 14:00\n🕒 20:30 → 24:00",
             caption);
+        Assert.Contains("⚡ Графік відключень на завтра\nПʼятниця|16.10.2026\n\n🕒 06:00 → 09:30", caption);
+        Assert.DoesNotContain("20:24", caption);
     }
 
     [Fact]
     public async Task Post_LongText_IsSentAsTextOnly_BecauseTheCaptionLimitIsExceeded()
     {
-        AddPostChannel(configure: c => c.Templates = TemplatesJson((MessageSlots.Schedule, new string('x', 1100) + "{outages}")));
+        AddPostChannel(configure: c => c.Templates = TemplatesJson((MessageSlots.ScheduleHeading, new string('x', 900) + "{header}")));
 
         await TickAsync(Kyiv(15, 12));
 
         Assert.Empty(_f.Bot.Photos);
-        Assert.Equal(1100, Assert.Single(_f.Bot.Sent).Text.IndexOf("🔴", StringComparison.Ordinal));
+        Assert.Contains("🔴 11:00 - 14:00", Assert.Single(_f.Bot.Sent).Text);
         Assert.False(PostOf(ChatA)!.IsPhoto);
     }
 

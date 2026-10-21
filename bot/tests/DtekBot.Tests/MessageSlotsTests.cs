@@ -27,14 +27,14 @@ public class MessageSlotsTests
     [Fact]
     public void All_HasTheSlots_InOrder()
     {
-        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "schedule-line", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
+        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "schedule-heading", "schedule-line", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
     }
 
     [Fact]
     public void All_GroupsTheSlots()
     {
         Assert.Equal(
-            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization"],
+            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization"],
             MessageSlots.All.Select(s => s.Group));
     }
 
@@ -117,15 +117,25 @@ public class MessageSlotsTests
     }
 
     [Fact]
+    public void ScheduleHeading_ExposesChangesPlaceholderInUkrainian()
+    {
+        var placeholder = MessageSlots.Find(MessageSlots.ScheduleHeading)!.Placeholders.Single(p => p.Name == "changes");
+
+        Assert.Equal("зміни", PlaceholderNames.Display(placeholder.Name));
+        Assert.Contains("додані або прибрані", placeholder.Description);
+        Assert.Contains("Зміни:", placeholder.Example);
+    }
+
+    [Fact]
     public void Placeholders_OfTheAlertSlotsAreTheSharedOnes_AndLocalAddsGroupAndAddress()
     {
         var shared = MessageTemplate.Placeholders.Select(p => p.Name).ToList();
         Assert.Equal(shared, MessageSlots.Find("emergency")!.Placeholders.Select(p => p.Name));
         Assert.Equal(shared, MessageSlots.Find("ended")!.Placeholders.Select(p => p.Name));
         Assert.Equal(shared, MessageSlots.Find("regional")!.Placeholders.Select(p => p.Name));
-        Assert.Equal(shared.Concat(new[] { "group", "address" }), MessageSlots.Find("local")!.Placeholders.Select(p => p.Name));
+        Assert.Equal(shared.Concat(new[] { "group" }), MessageSlots.Find("local")!.Placeholders.Select(p => p.Name));
         Assert.Equal(
-            new[] { "emoji", "title", "message", "region", "part", "where", "popup", "time", "date", "weekday", "daypart", "site" }.Order(),
+            new[] { "emoji", "title", "message", "region", "part", "address", "where", "popup", "time", "date", "weekday", "daypart", "site" }.Order(),
             shared.Order());
     }
 
@@ -312,7 +322,6 @@ public class MessageSlotsTests
 
     [Theory]
     [InlineData("emergency", "{message} {group}", "group")]
-    [InlineData("emergency", "{message} {address}", "address")]
     [InlineData("regional", "{message} {outages}", "outages")]
     [InlineData("schedule", "{outages} {message}", "message")]
     [InlineData("schedule", "{outages} {emoji}", "emoji")]
@@ -364,7 +373,7 @@ public class MessageSlotsTests
     [Fact]
     public void Validate_Block_NameFromAnotherSlot_IsUnknown()
     {
-        Assert.Contains("Невідомий параметр {address} в умовному блоці.", MessageTemplate.Validate("{message}{#address}x{/address}", "emergency"));
+        Assert.Contains("Невідомий параметр {group} в умовному блоці.", MessageTemplate.Validate("{message}{#group}x{/group}", "emergency"));
     }
 
     [Fact]

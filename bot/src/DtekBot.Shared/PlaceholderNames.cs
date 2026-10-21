@@ -42,6 +42,7 @@ public static class PlaceholderNames
         ["evening"] = "вечір",
         ["night"] = "ніч",
         ["tomorrowDate"] = "дата_завтра",
+        ["changes"] = "зміни",
     };
 
     private static readonly Dictionary<string, string> ToKey =
