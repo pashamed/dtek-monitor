@@ -169,7 +169,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(userId, bootstrap.UserId);
         Assert.Equal(MessageTemplate.MaxLength, bootstrap.MaxTemplateLength);
         Assert.Equal(
-            ["emergency", "ended", "regional", "local", "schedule", "schedule-line", "before-off", "off", "on"],
+            ["emergency", "ended", "regional", "local", "schedule", "schedule-heading", "schedule-line", "before-off", "off", "on"],
             bootstrap.TemplateSlots!.Select(s => s.Id));
         Assert.Equal(MessageSlots.All.Count, bootstrap.TemplateSlots!.Count);
         foreach (var (expected, actual) in MessageSlots.All.Zip(bootstrap.TemplateSlots!))
@@ -990,7 +990,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var status = await response.ReadAsync<ChatStatusDto>();
-        Assert.Equal("✅ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", status!.Lines[0]);
+        Assert.Equal("ℹ️ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", status!.Lines[0]);
 
         var invalid = await client.GetAsync($"/api/chats/{userId}/status?regionId=kyiv&partIds=unknown");
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
@@ -1310,7 +1310,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var result = await PreviewAsync(Preview("schedule", groupId: "45.1"));
 
         Assert.Equal(
-            "❗️ Оновлений графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)",
+            "❗️ Графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)"
+            + "\n\n❗️ Графік відключень на завтра\n📅 Пʼятниця 16.10.2026\n\n🔴 06:00 - 09:30 (~3,5 год)\n🔴 17:00 - 20:30 (~3,5 год)",
             result.Html);
         Assert.Equal(GridBase + "gpv-45-1-emergency.png?v=1991457b4408", result.ImageUrl);
     }
@@ -1332,7 +1333,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var result = await PreviewAsync(Preview("schedule"));
 
         Assert.Equal(
-            "❗️ Оновлений графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 14:00 - 18:00 (~4 год)",
+            "<b>Зразок</b>\n\n❗️ Графік відключень на сьогодні\n📅 Четвер 15.10.2026\n\n🔴 14:00 - 18:00 (~4 год)"
+            + "\n\n❗️ Графік відключень на завтра\n📅 Пʼятниця 16.10.2026\n\n🔴 14:00 - 18:00 (~4 год)",
             result.Html);
         Assert.Equal(GridBase + "gpv-1-1-emergency.png?v=1991457b4408", result.ImageUrl);
     }
@@ -1352,16 +1354,22 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var result = await PreviewAsync(Preview("schedule", regionId: "donetsk", groupId: "45.1"));
 
         Assert.Null(result.ImageUrl);
-        Assert.Contains("❗️ Оновлений графік", result.Html);
+        Assert.StartsWith("<b>Зразок</b>", result.Html);
+        Assert.Contains("❗️ Графік", result.Html);
     }
 
     [Fact]
-    public async Task Preview_ScheduleSlot_UsesTheCustomTemplate()
+    public async Task Preview_ScheduleSlot_UsesTheCustomHeadingAndRow()
     {
-        var result = await PreviewAsync(Preview("schedule", "{weekday} {date}|{total}|{group}\n{outages}", groupId: "45.1"));
+        var result = await PreviewAsync(Preview("schedule", groupId: "45.1") with
+        {
+            ScheduleHeadingTemplate = "⚡ {шапка}\n{день_тижня} {дата}",
+            ScheduleLineTemplate = "🕒 {початок} → {кінець}",
+        });
 
         Assert.Equal(
-            "Четвер 15.10.2026|~6,5 год|45.1\n🔴 11:00 - 14:00 (~3 год)\n🔴 20:30 - 24:00 (~3,5 год)",
+            "⚡ Графік відключень на сьогодні\nЧетвер 15.10.2026\n\n🕒 11:00 → 14:00\n🕒 20:30 → 24:00"
+            + "\n\n⚡ Графік відключень на завтра\nПʼятниця 16.10.2026\n\n🕒 06:00 → 09:30\n🕒 17:00 → 20:30",
             result.Html);
     }
 
@@ -1416,12 +1424,12 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Preview_LocalSlot_ShowsTheGroupAndASampleAddress()
+    public async Task Preview_LocalSlot_ShowsTheGroupWithoutInventingAnAddress()
     {
         var result = await PreviewAsync(Preview("local", groupId: "45.1"));
 
         Assert.Contains("черга 45.1", result.Html);
-        Assert.Contains("📍 вул. Крушельницької, 13", result.Html);
+        Assert.DoesNotContain("📍", result.Html);
         Assert.Contains("Деталі: https://www.dtek-kem.com.ua/ua/shutdowns", result.Html);
     }
 
@@ -1530,7 +1538,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var photo = Assert.Single(_factory.Bot.Photos, p => p.ChatId.Identifier == chatId);
         Assert.Equal(GridBase + "gpv-45-1-summary.png?v=1991457b4408", ((Telegram.Bot.Types.InputFileUrl)photo.Photo).Url.ToString());
-        Assert.StartsWith("🧪 <b>Тест</b>\n\n❗️ Оновлений графік відключень на сьогодні", photo.Caption);
+        Assert.StartsWith("🧪 <b>Тест</b>\n\n❗️ Графік відключень на сьогодні", photo.Caption);
         Assert.Contains("🔴 11:00 - 14:00 (~3 год)", photo.Caption);
     }
 

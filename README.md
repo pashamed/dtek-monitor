@@ -205,7 +205,7 @@ npm run watch
 
 - Підписка каналу на регіон і на **конкретні райони**: у редакторі можна обрати один чи кілька районів. Якщо в повідомленні на сайті ДТЕК названо інші райони, сповіщення не надсилається; якщо воно стосується всього регіону, його отримують усі.
 - Сповіщення по своїй черзі (поки що лише Київ): у редакторі оберіть вулицю й будинок, бот визначає чергу (наприклад `45.1`) і пише, коли для неї починаються екстрені відключення. Дані про черги беруться з API Yasno, а не з сайту ДТЕК, тому можуть відрізнятися від сайту.
-- Поточний стан: картка в редакторі показує, що зараз повідомляє сайт ДТЕК для регіону та що кажуть графіки для вашої черги.
+- Поточний стан: картка в редакторі відрізняє повідомлення ДТЕК, Укренерго та опублікований план від фактичної наявності світла. Діагностика показує збережений регіон (місто Київ і Київська область — різні регіони), райони, адреси й черги, час перевірок, доступність графіка на сьогодні/завтра та налаштування автопублікації. Попередня копія й відсутність даних позначаються явно. Час останнього оновлення запису доставки — це історія стану, а не перевірка повідомлення в Telegram чи журнал помилок.
 - Перевірка адреси за запитом: коли світла немає, натисни «Перевірити зараз» в особистому чаті (вкладка «Адреса і черга»). Для Києва можна обрати адресу зі списку; в інших регіонах вкажи населений пункт, вулицю й будинок так, як вони записані на сайті ДТЕК. Списки населених пунктів і вулиць оновлюються монітором Playwright та кешуються в API, щоб пошук працював і коли прямі запити сервера до сайту ДТЕК блокуються. За потреби GitHub Actions перевірить цю адресу на сайті, а бот напише, чи є для будинку планове або позапланове відключення, разом із загальним станом по регіону. Адреса зберігається лише поки діє підписка.
 - Автоматична перевірка за повідомленням «Світло зникло»: якщо застосунок для моніторингу світла (наприклад на Android) пише в канал «🔴 14:24 Світло зникло…», додай бота адміністратором цього каналу, обери адресу в Mini App і увімкни «Реагувати на «Світло зникло»». Бот побачить нове повідомлення в каналі (старі повідомлення читати неможливо). Порядок перевірок від найдешевшої до найдорожчої: спершу графік черги (якщо за графіком зараз планове стабілізаційне відключення, бот так і напише й **не звертається до сайту ДТЕК**; якщо на сайті водночас діє загальне повідомлення про екстрені відключення, він додасть попередження, що графік може не діяти), потім загальне повідомлення ДТЕК про екстрені відключення чи аварію по регіону, і лише тоді перевірка адреси на сайті ДТЕК.
 - Сповіщення за графіком (необов'язково, для кожного каналу окремо): обери адресу (Київ) або чергу вручну (Київська, Дніпропетровська, Одеська області) і увімкни «Сповіщення за графіком». Якщо чергу визначено неправильно, її можна змінити вручну, адреса при цьому лишається для перевірки на сайті ДТЕК. Картинку можна вибрати: таблиця на 2 дні, коротка картинка або без картинки. Є два незалежні види публікацій, і для кожного окремо обирається, як вони з'являються в каналі: **нове повідомлення щоразу**, **видалити старе й опублікувати нове** (потрібне право бота «Видаляти повідомлення», інакше старе просто лишається) або **редагувати те саме**.
@@ -389,17 +389,130 @@ MIT License - використовуй вільно для особистих т
 перемикач стану відкриває відповідний текст і налаштування. Старі шаблони
 кожного стану зберігаються; райони визначає бекенд.
 
-`{відключення}` — усі інтервали поточного дня, `{завтра}` — завтрашнього.
-Їхній вигляд задає окремий шаблон «Рядок графіка», наприклад:
+Графік — один допис із секціями «сьогодні» та «завтра». Заголовок і дата
+показуються один раз на день, нижче — черги й адреси без повторів у межах дня.
+Якщо графік на завтра ще не оприлюднений, бот прямо пише про це.
+У редакторі графіка є дві частини: «Заголовок і дата» та «Інтервал {відключення}».
+Заголовок підтримує `{шапка}`, `{день_тижня}`, `{дата}`: дата й день тижня
+відповідають своїй секції. `{зміни}` показує додані й прибрані планові
+інтервали порівняно з попереднім графіком цього дня; його можна розмістити
+власноруч у заголовку. Типовий заголовок додає короткий підсумок автоматично;
+власні збережені заголовки не змінюються, доки ви не додасте `{зміни}`.
+Порівнюються планові інтервали тієї самої дати й черги, а не фактично виміряний
+час без світла. Значки та текст можна змінювати.
+Кнопка «Редагувати рядок графіка» на вкладці «Графік» одразу відкриває
+редактор інтервалу. «Керування» та видалення каналу розміщені на «Основне».
+У заголовку графіка та аварійних шаблонах доступні `{регіон}`, `{район}`,
+`{адреса}` із даних бекенду. Відсутні райони й адреси порожні; використовуйте
+`{#район} · {район}{/район}` та `{#адреса}\n📍 {адреса}{/адреса}`.
+Для районної аварії підставляються лише відповідні адреси.
+Старий загальний шаблон `schedule` залишається у збережених даних для
+сумісності, але більше не керує дописом: окремі дати, підсумки й час оновлення
+не додаються автоматично. Це стосується і однієї, і кількох черг.
+
+`{відключення}` — повторення одного інтервалу. Його вигляд задає
+«Інтервал {відключення}» (шаблон `schedule-line`), наприклад:
 `⚡ {початок} → {кінець} · {тривалість_інтервалу} · {частина_доби}`.
 Доступні також `{дата}` й `{день_тижня}`. Рядок підтримує текст і значки,
-без HTML; загальний шаблон повідомлення підтримує Telegram HTML.
-У загальному шаблоні можна використати `{ранок}`, `{день}`, `{вечір}`, `{ніч}`
-замість повного списку — інтервали групуються за часом початку (00/06/12/18).
-Порожні секції можна приховати умовою, наприклад
-`{#ранок}🌅 Ранок:\n{ранок}{/ранок}`.
-Для завтрашньої дати є `{дата_завтра}`. Аварійні шаблони також мають
+без HTML; заголовок підтримує Telegram HTML. Пробіли й роздільники
+зберігаються для всіх інтервалів обох днів. Попередній перегляд та тест
+показують цілий допис. Для підстановок використовується наявний обробник
+фігурних дужок, а не регулярні вирази.
+Аварійні шаблони також мають
 `{дата}`, `{день_тижня}` й `{частина_доби}` (за київським часом).
+
+### Перегляд і зрозумілі сповіщення
+
+- **Переглянути графік**: окремий режим читання в Mini App. Оберіть регіон і
+  чергу без підключення каналу, збереження підписки чи публікації повідомлень.
+  Показуються сьогодні й завтра; неопублікований день не є порожнім графіком.
+  Відлік до наступної зміни ґрунтується лише на плані. Під час відомих
+  екстрених обмежень є попередження, що план може не діяти.
+- **Лише аварійні та екстрені** й компактне оформлення застосовуються лише
+  після явного вибору та підтвердження, а потім зберігаються звичайною кнопкою.
+  Перегляд і пресети самі не надсилають повідомлень і не знімають паузу.
+- Коли ДТЕК прямо повідомляє про стабілізаційні графіки, типове завершальне
+  сповіщення пояснює перехід від екстрених до погодинних відключень. Просте
+  зникнення запису означає лише, що сайт більше його не показує.
+- Відсутність запису за адресою, відсутність відключення в плані та
+  повернення електроенергії — різні речі. Дані сайту й графіка не вимірюють
+  фактичну напругу. Власні шаблони й обраний спосіб завершення гілки
+  (редагування, відповідь, нове повідомлення) зберігаються.
+
+### Live Telegram integration tests
+
+`LiveTelegramTests` are skipped by default. To run them, set `DTEK_LIVE_TELEGRAM=1`,
+`Bot__Token` to a separate test bot token, and `TELEGRAM_TEST_CHAT_ID=-1004471996729`,
+then run
+`dotnet test bot\tests\DtekBot.Tests --filter "FullyQualifiedName~LiveTelegramTests&FullyQualifiedName!~EveryDistrict"`.
+The local `.env.telegram-test` file is ignored by Git; load its values into the
+test process without printing them. Never use a production bot token.
+
+These tests use an isolated SQLite database, labelled simulated events, actual
+Telegram sends/edits/deletes, and finally delete the messages they created.
+The transport rejects requests targeting another chat and does not change the
+bot's webhook or menu. The Mini App API test signs local test authentication
+data and checks the test bot's real admin membership; it is not a real Telegram
+Mini App login. Schedule/grid source and photo delivery checks use public live
+feeds. The public-source test checks every configured grid region and every
+region with a configured schedule source. A source publishing `fact.data=[]`
+is explicitly reported as unavailable, not as a successfully delivered
+schedule; unexpected failures still fail the test. GitHub workflow dispatch,
+DTEK address scraping, Svitlobot writes,
+production hosting timers and mobile Telegram UI are not covered by these live tests.
+
+`ReceivedEvents_RespectGeographyClosureSettingsAndCronScheduleChanges` additionally
+saves each clearance mode through the settings API, receives emergency and
+stabilization popups through `/ingest`, local statuses through `/ingest/groups`,
+and grid statuses through `/ingest/grid/tick`. It checks city/oblast isolation,
+group matching, duplicate suppression, and all three saved clearance modes
+against real Telegram operations. The current local group-status source is
+configured for Kyiv only; unsupported regions are checked for explicit rejection,
+not counted as successful local-alert delivery. Controlled changed snapshots are delivered
+through `/ingest/schedules/tick` in Edit, New, and ReplaceDelete modes, with
+repeat ticks verified as no-ops. The source providers and database are isolated;
+this does not inject simulated events into the hosted production application.
+`DeliveryFanoutTests` checks the same ingest/cron recipient fanout offline with
+multiple eligible subscribers and inactive, paused, and unsubscribed controls.
+
+`BrowserSettings_SaveReloadValidateAndSendToRealTestChannel` runs installed
+Playwright Chromium against the actual lite editor, an ephemeral loopback HTTP
+proxy, and the isolated test API/database. It checks save/reload behavior for
+pause, district selection, channel trigger, address name/district, schedule
+publishing/reminders, quiet hours, cleanup and clearance mode. It verifies the
+three-address UI limit, invalid-template blocking, a deliberately injected
+failed-save response followed by a real successful retry, and actual test-alert
+and schedule delivery to the allowlisted Telegram channel. Mobile and desktop
+screenshots are written under ignored `artifacts`. Telegram WebApp initialization
+is simulated with signed fixture authentication; this is not a mobile Telegram
+login, hosted-production UI test, live address-directory lookup, or live Svitlobot
+key/write test. Run it with the Telegram opt-in variables above and
+`dotnet test bot\tests\DtekBot.Tests --filter FullyQualifiedName~BrowserSettings_SaveReloadValidateAndSendToRealTestChannel`.
+
+For the district ingest-to-Telegram matrix, first populate the ignored
+`.env.llm-test` with `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`. With
+`DTEK_LIVE_LLM=1`, run
+`node --env-file=.env.llm-test src\live-routing-inputs.js` from the repository root.
+This reads all configured DTEK regional pages in parallel, then asks the configured
+real model to identify districts in labelled, controlled public-text replays.
+Only public notices and configured geographic names are sent to the model.
+Successful answers are validated and grounded against the source text. Results
+are saved to ignored `artifacts\live-routing-inputs.json`; provider errors are
+reported, not replaced with fabricated successful answers. To retry only failed
+district cases, add `--retry-failures` (successful cases are retained).
+
+Set `DTEK_ROUTING_INPUTS` to the absolute path of that result file, retain the
+Telegram opt-in variables above, and run
+`dotnet test bot\tests\DtekBot.Tests --filter FullyQualifiedName~EveryDistrict_DeterministicAndRealLlmInputs_IngestToLiveTelegram`.
+The matrix exercises every configured district through the real `/ingest`
+endpoint, isolated persistence, saved templates, real Telegram sends/edits,
+duplicate suppression, stabilization clearance, and cleanup. It also ingests
+the captured current website popups. Allow roughly 12 minutes for Telegram
+rate limiting. These are controlled replays, not evidence of current emergencies
+in those districts. The exhaustive model calls deliberately test the model
+directly; production bypasses the model for recognized deterministic notices.
+The offline city/oblast routing matrices additionally cover matching,
+nonmatching, region-wide subscriptions and both source arrival/clearance orders.
 
 ### Кілька адрес і черг
 

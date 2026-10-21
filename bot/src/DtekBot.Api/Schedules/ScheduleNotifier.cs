@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
@@ -46,6 +47,51 @@ public sealed partial class ScheduleNotifier(
 
     private sealed record Desired(SchedulePhase Phase, long EpisodeStart, string Text, string ImageVersion, string? ImageUrl, ScheduleImage ImageKind);
 
+    private sealed record PlanBaseline(string RegionId, Dictionary<string, long[][]> Days);
+
+    private async Task<(Dictionary<string, long[][]> Days, List<KeyValue> Rows)> ReadPlanAsync(Channel channel, CancellationToken ct)
+    {
+        var prefix = $"schedule-plan:{channel.ChatId}:";
+        var rows = await db.KeyValues.Where(v => v.Key.StartsWith(prefix)).OrderBy(v => v.Key).ToListAsync(ct);
+        if (rows.Count > 0)
+        {
+            try
+            {
+                var baseline = JsonSerializer.Deserialize<PlanBaseline>(string.Concat(rows.Select(r => r.Value)));
+                if (baseline is not null && baseline.RegionId == channel.RegionId && baseline.Days is not null
+                    && baseline.Days.Values.All(day => day is not null && day.All(o => o is { Length: 2 } && o[1] > o[0])))
+                    return (baseline.Days, rows);
+            }
+            catch (JsonException ex)
+            {
+                logger.LogWarning(ex, "Stored schedule plan for chat {ChatId} is malformed; starting a new baseline", channel.ChatId);
+                return (new Dictionary<string, long[][]>(), rows);
+            }
+            logger.LogWarning("Stored schedule plan for chat {ChatId} is invalid or belongs to another region; starting a new baseline", channel.ChatId);
+        }
+        return (new Dictionary<string, long[][]>(), rows);
+    }
+
+    private void SavePlan(Channel channel, Dictionary<string, long[][]> previous,
+        Dictionary<string, long[][]> current, List<KeyValue> rows, DateTimeOffset now)
+    {
+        var today = ScheduleText.DateKey(now);
+        var tomorrow = ScheduleText.DateKey(ScheduleText.KyivDayStart(KyivTime.FromUtc(now).Date.AddDays(1)));
+        var keys = channel.GroupIds().SelectMany(id => new[] { today + "|" + id, tomorrow + "|" + id }).ToHashSet();
+        var days = previous.Where(p => keys.Contains(p.Key)).ToDictionary(p => p.Key, p => p.Value);
+        foreach (var pair in current) days[pair.Key] = pair.Value;
+        var json = JsonSerializer.Serialize(new PlanBaseline(channel.RegionId, days));
+        // KeyValues already supports durable state; chunk to respect its 256-character value limit.
+        var chunks = (json.Length + 255) / 256;
+        for (var index = 0; index < chunks; index++)
+        {
+            var value = json.Substring(index * 256, Math.Min(256, json.Length - index * 256));
+            if (index < rows.Count) rows[index].Value = value;
+            else db.KeyValues.Add(new KeyValue { Key = $"schedule-plan:{channel.ChatId}:{index:D6}", Value = value });
+        }
+        db.KeyValues.RemoveRange(rows.Skip(chunks));
+    }
+
     public async Task<ScheduleTickSummary> TickAsync(CancellationToken ct)
     {
         var settings = options.CurrentValue;
@@ -70,6 +116,13 @@ public sealed partial class ScheduleNotifier(
 
         // A thread whose chat turned the feature off or changed group starts fresh next time.
         var byChat = channels.ToDictionary(c => c.ChatId);
+        var planState = await db.KeyValues.Where(v => v.Key.StartsWith("schedule-plan:")).ToListAsync(ct);
+        db.KeyValues.RemoveRange(planState.Where(row =>
+        {
+            var parts = row.Key.Split(':');
+            return parts.Length != 3 || !long.TryParse(parts[1], out var chatId)
+                || !byChat.TryGetValue(chatId, out var channel) || !channel.SchedulePost;
+        }));
         foreach (var thread in threads.Values.ToList())
         {
             if (!byChat.TryGetValue(thread.ChatId, out var channel)
@@ -230,7 +283,7 @@ public sealed partial class ScheduleNotifier(
                 values,
                 MessageSlots.Find(MessageSlots.BeforeOff)!.DefaultTemplate);
             if (channel.IsCombined())
-                text += "\n" + string.Join("; ", affected.Select(id => System.Net.WebUtility.HtmlEncode(channel.GroupNames(id)) + " ? " + id));
+                text += "\n" + string.Join("; ", affected.Select(id => System.Net.WebUtility.HtmlEncode(channel.GroupNames(id)) + " · " + id));
             try
             {
                 await WithRetry(() => WithMarkupFallback(
@@ -443,17 +496,21 @@ public sealed partial class ScheduleNotifier(
         var sameDay = post is not null && post.DateKey == dateKey;
         var values = ScheduleText.PostValues(region.Name, groupId, snapshot, now, updated: sameDay,
             lineTemplate: channel.TemplateFor(MessageSlots.ScheduleLine));
-        var fingerprint = Hash(ScheduleText.PostFingerprint(values) + "|" + channel.SchedulePostImage);
+        var fingerprint = Hash(ScheduleText.RenderPost(channel, snapshot, region.Name, now, false, region.DisplayNames(channel.DistrictIds())) + "|" + channel.SchedulePostImage);
+        var (previousPlan, planRows) = await ReadPlanAsync(channel, ct);
+        var currentPlan = ScheduleText.PlannedDays(channel, snapshot, now);
 
-        if (!force && (sameDay ? post!.ContentHash == fingerprint : values["outages"] == ScheduleText.NoOutages))
+        var noUpcomingOutages = values["outages"] == ScheduleText.NoOutages
+            && (values["tomorrow"] is "" or ScheduleText.NoOutages);
+        if (!force && (sameDay ? post!.ContentHash == fingerprint : noUpcomingOutages))
         {
+            if (sameDay && post!.ContentHash == fingerprint)
+                SavePlan(channel, previousPlan, currentPlan, planRows, now);
             return Outcome.Skipped;
         }
 
-        var text = MessageTemplate.Render(
-            channel.TemplateFor(MessageSlots.Schedule),
-            values,
-            MessageSlots.Find(MessageSlots.Schedule)!.DefaultTemplate);
+        var changes = ScheduleText.PlannedChanges(channel, previousPlan, currentPlan, now);
+        var text = ScheduleText.RenderPost(channel, snapshot, region.Name, now, sameDay, region.DisplayNames(channel.DistrictIds()), changes);
         var imageUrl = ScheduleText.ImageUrl(settings.Schedules, snapshot.DataFile, groupId, snapshot.Version, channel.SchedulePostImage);
         var mode = channel.SchedulePostMode;
 
@@ -505,6 +562,7 @@ public sealed partial class ScheduleNotifier(
             post.ImageVersion = snapshot.Version;
             post.ImageKind = channel.SchedulePostImage;
             post.UpdatedAt = now;
+            SavePlan(channel, previousPlan, currentPlan, planRows, now);
             return outcome;
         }
         catch (ApiRequestException ex) when (IsChatGone(ex))
@@ -519,19 +577,13 @@ public sealed partial class ScheduleNotifier(
         }
     }
 
-    public async Task<string?> PreviewCombinedAsync(Channel channel, CancellationToken ct, string? template = null)
+    public async Task<string?> PreviewCombinedAsync(Channel channel, CancellationToken ct)
     {
         var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId && r.HasSchedules);
         if (region is null) return null;
         var snapshot = await schedules.GetAsync(region.Id, ct);
         if (snapshot is null) return null;
-        var target = channel;
-        if (template is not null)
-        {
-            target = new Channel { RegionId = channel.RegionId, GroupId = channel.GroupId, Addresses = channel.Addresses };
-            target.TemplateMap = new Dictionary<string, string> { [MessageSlots.Schedule] = template };
-        }
-        return CombinedSchedule.Render(target, snapshot, region.Name, time.GetUtcNow(), false);
+        return ScheduleText.RenderPost(channel, snapshot, region.Name, time.GetUtcNow(), false, region.DisplayNames(channel.DistrictIds()));
     }
 
     private async Task<Outcome> ApplyCombinedPostAsync(Channel channel, RegionSettings region,
@@ -541,10 +593,17 @@ public sealed partial class ScheduleNotifier(
         if (now < snapshot.CoverageStart || now >= snapshot.CoverageEnd) return Outcome.Skipped;
         var date = ScheduleText.DateKey(now);
         var sameDay = post?.DateKey == date;
-        var stable = CombinedSchedule.Render(channel, snapshot, region.Name, now, false);
+        var stable = ScheduleText.RenderPost(channel, snapshot, region.Name, now, false, region.DisplayNames(channel.DistrictIds()));
         var fingerprint = Hash(stable);
-        if (!force && sameDay && post!.ContentHash == fingerprint) return Outcome.Skipped;
-        var text = CombinedSchedule.Render(channel, snapshot, region.Name, now, sameDay);
+        var (previousPlan, planRows) = await ReadPlanAsync(channel, ct);
+        var currentPlan = ScheduleText.PlannedDays(channel, snapshot, now);
+        if (!force && sameDay && post!.ContentHash == fingerprint)
+        {
+            SavePlan(channel, previousPlan, currentPlan, planRows, now);
+            return Outcome.Skipped;
+        }
+        var text = ScheduleText.RenderPost(channel, snapshot, region.Name, now, sameDay, region.DisplayNames(channel.DistrictIds()),
+            ScheduleText.PlannedChanges(channel, previousPlan, currentPlan, now));
         var parts = CombinedSchedule.Parts(text);
         var oldIds = post is null ? [] : post.MessageIds is null ? new List<int> { post.MessageId }
             : System.Text.Json.JsonSerializer.Deserialize<List<int>>(post.MessageIds) ?? [];
@@ -571,6 +630,7 @@ public sealed partial class ScheduleNotifier(
             post.IsPhoto = false; post.RegionId = region.Id; post.GroupId = channel.GroupId!;
             post.DateKey = date; post.ContentHash = fingerprint; post.ImageKind = ScheduleImage.None;
             post.ImageVersion = ""; post.UpdatedAt = now;
+            SavePlan(channel, previousPlan, currentPlan, planRows, now);
             return edit ? Outcome.Edited : Outcome.Sent;
         }
         catch (ApiRequestException ex) when (IsChatGone(ex)) { Deactivate(channel, ex); return Outcome.Failed; }

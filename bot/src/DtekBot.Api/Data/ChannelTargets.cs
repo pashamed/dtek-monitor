@@ -12,17 +12,29 @@ public static class ChannelTargets
 
     public static bool IsCombined(this Channel channel) => channel.Addresses.Count > 1 || channel.GroupIds().Count > 1;
 
+    public static IReadOnlyList<string> DistrictIds(this Channel channel) =>
+        channel.PartIdList.Concat(channel.Addresses.SelectMany(a =>
+            a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? []))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    public static string AddressText(this Channel channel, IEnumerable<ChatAddress>? addresses = null) =>
+        channel.Addresses.Count == 0 ? channel.AddressLabel ?? ""
+        : string.Join("; ", (addresses ?? channel.Addresses).Select(a =>
+            !string.IsNullOrWhiteSpace(a.Label) ? a.Label
+            : string.Join(", ", new[] { a.City, a.Street, a.House }.Where(v => !string.IsNullOrWhiteSpace(v))))
+            .Where(v => !string.IsNullOrWhiteSpace(v)).Distinct());
+
     public static string GroupNames(this Channel channel, string groupId) => string.Join(", ",
         channel.Addresses.Where(a => a.Groups.Any(g => g.GroupId == groupId)).Select(a =>
         {
             var label = a.Groups.First(g => g.GroupId == groupId).Label;
             var name = string.IsNullOrWhiteSpace(a.Name) ? a.Label ?? a.Street ?? "Адреса" : a.Name;
-            return string.IsNullOrWhiteSpace(label) ? name : $"{name} ? {label}";
+            return string.IsNullOrWhiteSpace(label) ? name : $"{name} · {label}";
         }).Distinct());
 
     public static string Heading(this Channel channel, string groupId) =>
         $"<b>Черга {WebUtility.HtmlEncode(groupId)}</b>" +
-        (string.IsNullOrEmpty(channel.GroupNames(groupId)) ? "" : $" ? {WebUtility.HtmlEncode(channel.GroupNames(groupId))}");
+        (string.IsNullOrEmpty(channel.GroupNames(groupId)) ? "" : $" · {WebUtility.HtmlEncode(channel.GroupNames(groupId))}");
 
     // Scalar columns remain a readable projection for older clients and existing integrations.
     public static void MirrorPrimary(this Channel channel)

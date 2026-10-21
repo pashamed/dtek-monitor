@@ -76,7 +76,25 @@ public enum EndStyle
 public sealed record TriggerCheckDto(bool Valid, int Seen, int Matched, string? Warning);
 
 // Plain-text lines describing where things stand for a chat right now (popup, schedule, group emergency).
-public sealed record ChatStatusDto(IReadOnlyList<string> Lines);
+public sealed record ChatStatusDto(IReadOnlyList<string> Lines, ChatDiagnosticsDto? Diagnostics = null);
+
+public sealed record ChatDiagnosticsDto(IReadOnlyList<string> Lines);
+
+public sealed record ScheduleViewIntervalDto(DateTimeOffset Start, DateTimeOffset End);
+
+public sealed record ScheduleViewDayDto(string Date, bool Available, IReadOnlyList<ScheduleViewIntervalDto> Intervals);
+
+public sealed record ScheduleViewDto(
+    string RegionId,
+    string RegionName,
+    string GroupId,
+    DateTimeOffset ServerNow,
+    DateTimeOffset CheckedAt,
+    bool IsCached,
+    IReadOnlyList<ScheduleViewDayDto> Days,
+    DateTimeOffset? NextChangeAt,
+    bool? NextChangeIsOff,
+    IReadOnlyList<string> Warnings);
 
 // The answer to "the power is off, why?" (and, when a DTEK address check is queued, what to expect).
 public sealed record CheckResultDto(string Text);
@@ -176,7 +194,8 @@ public sealed record PreviewRequest(
     string? GroupId = null,
     ScheduleImage? ImageKind = null,
     IReadOnlyList<ChatAddressDto>? Addresses = null,
-    string? ScheduleLineTemplate = null);
+    string? ScheduleLineTemplate = null,
+    string? ScheduleHeadingTemplate = null);
 
 // ImageUrl is set for slots that come with a picture (the schedule post).
 public sealed record PreviewResponse(string Html, IReadOnlyList<string> Errors, string? ImageUrl = null);

@@ -5,7 +5,10 @@ namespace DtekBot.Api.Schedules;
 
 public sealed record OutageInterval(DateTimeOffset Start, DateTimeOffset End);
 
-public sealed record GroupSchedule(string GroupId, IReadOnlyList<OutageInterval> Outages);
+public sealed record GroupSchedule(
+    string GroupId,
+    IReadOnlyList<OutageInterval> Outages,
+    IReadOnlyList<DateTimeOffset>? PublishedDays = null);
 
 // Where a group stands at a given moment, according to the published schedule.
 // Since/Until are null when the moment lies outside what the data covers (before today / after tomorrow).
@@ -35,10 +38,16 @@ public sealed record ScheduleSnapshot(
 
     public IEnumerable<string> GroupIds => Groups.Keys.OrderBy(GroupSort);
 
+    public bool CoversDay(string groupId, DateTimeOffset start, DateTimeOffset end) =>
+        CoverageStart <= start && CoverageEnd >= end && Find(groupId) is { } group
+        && (group.PublishedDays is null || group.PublishedDays.Contains(start));
+
     public ScheduleStatus? StatusAt(string groupId, DateTimeOffset now)
     {
         var group = Find(groupId);
-        if (group is null || now < CoverageStart || now >= CoverageEnd)
+        var dayStart = ScheduleText.KyivDayStart(DtekBot.Shared.KyivTime.FromUtc(now).Date);
+        if (group is null || now < CoverageStart || now >= CoverageEnd
+            || (group.PublishedDays is not null && !group.PublishedDays.Contains(dayStart)))
         {
             return null;
         }
@@ -46,6 +55,22 @@ public sealed record ScheduleSnapshot(
         var current = group.Outages.FirstOrDefault(o => o.Start <= now && now < o.End);
         var previous = group.Outages.LastOrDefault(o => o.End <= now);
         var next = group.Outages.FirstOrDefault(o => o.Start > now);
+        var knownStart = CoverageStart;
+        var knownEnd = CoverageEnd;
+        if (group.PublishedDays is { } published)
+        {
+            var date = DtekBot.Shared.KyivTime.FromUtc(now).Date;
+            var firstDay = date;
+            var afterLastDay = date.AddDays(1);
+            while (published.Contains(ScheduleText.KyivDayStart(firstDay.AddDays(-1))))
+                firstDay = firstDay.AddDays(-1);
+            while (published.Contains(ScheduleText.KyivDayStart(afterLastDay)))
+                afterLastDay = afterLastDay.AddDays(1);
+            var start = ScheduleText.KyivDayStart(firstDay);
+            var end = ScheduleText.KyivDayStart(afterLastDay);
+            knownStart = start > knownStart ? start : knownStart;
+            knownEnd = end < knownEnd ? end : knownEnd;
+        }
 
         // An outage that touches the edge of the data may continue beyond it.
         DateTimeOffset? Edge(DateTimeOffset value, DateTimeOffset edge) => value == edge ? null : value;
@@ -54,8 +79,8 @@ public sealed record ScheduleSnapshot(
         {
             return new ScheduleStatus(
                 true,
-                Edge(current.Start, CoverageStart),
-                Edge(current.End, CoverageEnd),
+                Edge(current.Start, knownStart),
+                Edge(current.End, knownEnd),
                 previous?.End,
                 next?.Start);
         }
@@ -105,6 +130,7 @@ public static class ScheduleParser
         }
 
         var raw = new Dictionary<string, List<OutageInterval>>(StringComparer.Ordinal);
+        var publishedDays = new Dictionary<string, List<DateTimeOffset>>(StringComparer.Ordinal);
         DateTimeOffset? first = null, last = null;
 
         foreach (var day in data.EnumerateObject())
@@ -115,8 +141,9 @@ public static class ScheduleParser
             }
 
             var dayStart = DateTimeOffset.FromUnixTimeSeconds(epoch);
+            var dayEnd = ScheduleText.KyivDayStart(DtekBot.Shared.KyivTime.FromUtc(dayStart).Date.AddDays(1));
             first = first is null || dayStart < first ? dayStart : first;
-            last = last is null || dayStart.AddDays(1) > last ? dayStart.AddDays(1) : last;
+            last = last is null || dayEnd > last ? dayEnd : last;
 
             foreach (var group in day.Value.EnumerateObject())
             {
@@ -129,7 +156,9 @@ public static class ScheduleParser
                 if (!raw.TryGetValue(id, out var list))
                 {
                     raw[id] = list = [];
+                    publishedDays[id] = [];
                 }
+                publishedDays[id].Add(dayStart);
 
                 foreach (var hour in group.Value.EnumerateObject())
                 {
@@ -154,7 +183,7 @@ public static class ScheduleParser
             return null;
         }
 
-        var groups = raw.ToDictionary(p => p.Key, p => new GroupSchedule(p.Key, Merge(p.Value)));
+        var groups = raw.ToDictionary(p => p.Key, p => new GroupSchedule(p.Key, Merge(p.Value), publishedDays[p.Key]));
         var version = root.TryGetProperty("meta", out var meta) && meta.TryGetProperty("contentHash", out var hash)
             ? hash.GetString() ?? ""
             : "";

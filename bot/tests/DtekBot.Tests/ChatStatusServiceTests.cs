@@ -97,8 +97,8 @@ public sealed class ChatStatusServiceTests : IDisposable
     [InlineData(PopupKind.Accident, "⚠️ На сайті ДТЕК повідомлено про аварію в енергосистемі.")]
     [InlineData(PopupKind.Unknown, "ℹ️ На сайті ДТЕК є невизначене повідомлення.")]
     [InlineData(PopupKind.Stabilization, "🗓 Діють стабілізаційні відключення (за графіками).")]
-    [InlineData(PopupKind.None, "✅ Екстрених відключень на сайті ДТЕК немає.")]
-    [InlineData(PopupKind.Cancelled, "✅ Екстрених відключень на сайті ДТЕК немає.")]
+    [InlineData(PopupKind.None, "ℹ️ Екстрених відключень на сайті ДТЕК не зазначено.")]
+    [InlineData(PopupKind.Cancelled, "ℹ️ Екстрених відключень на сайті ДТЕК не зазначено.")]
     public async Task PopupLine_ForEachKind(PopupKind kind, string expected)
     {
         StoreState(kind);
@@ -174,7 +174,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("✅ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", lines[0]);
+        Assert.Equal("ℹ️ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", lines[0]);
         Assert.DoesNotContain(lines, line => line.Contains("🚨"));
     }
 
@@ -192,10 +192,10 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         Assert.Equal(
             [
-                "✅ Екстрених відключень на сайті ДТЕК немає.",
+                "ℹ️ Екстрених відключень на сайті ДТЕК не зазначено.",
                 "Перевірено: 15.07 15:00 (час Києва · м. Київ)",
                 "🚨 Для черги 45.1 діють екстрені відключення (за даними Yasno).",
-                "🟢 За графіком (черга 45.1) світло є. Наступне відключення о 20:30.",
+                "🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступне відключення о 20:30.",
             ],
             lines);
     }
@@ -241,7 +241,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🔴 За графіком (черга 45.1) світла немає з 11:00. Світло очікується о 14:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення з 11:00. Планове завершення о 14:00.", lines.Last());
         Assert.Equal(["kyiv"], _schedules.Calls);
     }
 
@@ -253,7 +253,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🟢 За графіком (черга 45.1) світло є. Наступне відключення о 20:30.", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступне відключення о 20:30.", lines.Last());
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🔴 За графіком (черга 45.1) світла немає з 20:30. Світло очікується о 00:00 (16.10).", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення з 20:30. Планове завершення о 00:00 (16.10).", lines.Last());
     }
 
     [Fact]
@@ -275,7 +275,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🟢 За графіком (черга 45.1) світло є. Наступне відключення о 06:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступне відключення о 06:00.", lines.Last());
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🟢 За графіком (черга 45.1) світло є. Наступних відключень за графіком поки немає.", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступних відключень за графіком поки немає.", lines.Last());
     }
 
     [Fact]
@@ -299,7 +299,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🔴 За графіком (черга 45.1) світла немає. Світло очікується о 03:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення. Планове завершення о 03:00.", lines.Last());
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🔴 За графіком (черга 45.1) світла немає з 22:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення з 22:00.", lines.Last());
     }
 
     [Fact]
@@ -324,7 +324,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal(["✅ Екстрених відключень на сайті ДТЕК немає.", "Перевірено: 15.07 15:00 (час Києва · м. Київ)"], lines);
+        Assert.Equal(["ℹ️ Екстрених відключень на сайті ДТЕК не зазначено.", "Перевірено: 15.07 15:00 (час Києва · м. Київ)"], lines);
     }
 
     [Fact]

@@ -39,7 +39,9 @@ public sealed class AlertDispatcher(
         string? popupText,
         CancellationToken ct,
         AlertSource source = AlertSource.None,
-        bool regionWideActive = false)
+        bool regionWideActive = false,
+        PopupClassification? regionWideFallback = null,
+        string? regionWideFallbackText = null)
     {
         int sent = 0, edited = 0, closed = 0, failed = 0;
         var now = time.GetUtcNow();
@@ -87,6 +89,24 @@ public sealed class AlertDispatcher(
                     () => SendOrEditAsync(channel, slot, region.Id, delivery, text, RenderHash(channel, result.Hash, text), now, ct),
                     ct);
             }
+            else if (regionWideFallback is { IsAlert: true } fallback
+                && !channel.IsPaused
+                && channel.SlotEnabled(SlotFor(fallback.Kind == PopupKind.Emergency ? AlertKind.Emergency
+                    : fallback.Kind == PopupKind.Accident ? AlertKind.Accident : AlertKind.Unknown, false))
+                && Matches(channel, fallback))
+            {
+                var fallbackKind = fallback.Kind == PopupKind.Emergency ? AlertKind.Emergency
+                    : fallback.Kind == PopupKind.Accident ? AlertKind.Accident
+                    : AlertKind.Unknown;
+                var fallbackSlot = SlotFor(fallbackKind, false);
+                var text = Render(channel, region, fallbackKind, PartNames(region, fallback), regionWideFallbackText, now,
+                    source: AlertSource.Ukrenergo, affectedPartIds: fallback.PartIds);
+                outcome = await TrySendAsync(
+                    channel,
+                    () => SendOrEditAsync(channel, fallbackSlot, region.Id, delivery, text,
+                        RenderHash(channel, fallback.Hash, text), now, ct),
+                    ct);
+            }
             else if (delivery is not null && result.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
             {
                 // Narrowed out by the districts of the newer popup while the region-wide alert is still on:
@@ -101,7 +121,8 @@ public sealed class AlertDispatcher(
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
-                        () => SendEndAsync(channel, region, delivery, OwnPartNames(region, channel, result), popupText, now, ct),
+                        () => SendEndAsync(channel, region, delivery, OwnPartNames(region, channel, result), popupText, now, ct,
+                            stabilizationActive: result.Kind == PopupKind.Stabilization),
                         ct)
                     : Outcome.Closed;
 
@@ -323,9 +344,10 @@ public sealed class AlertDispatcher(
         string? popupText,
         DateTimeOffset now,
         CancellationToken ct,
-        bool isGroup = false, string? groupId = null)
+        bool isGroup = false, string? groupId = null, bool stabilizationActive = false)
     {
-        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup, groupId: groupId);
+        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup, groupId: groupId,
+            stabilizationActive: stabilizationActive);
         var style = channel.SlotEndStyle(MessageSlots.Ended);
 
         if (style == EndStyle.Edit)
@@ -392,27 +414,31 @@ public sealed class AlertDispatcher(
         string? popupText,
         DateTimeOffset now,
         bool isGroup = false,
-        AlertSource source = AlertSource.None, string? groupId = null, IReadOnlyList<string>? affectedPartIds = null)
+        AlertSource source = AlertSource.None, string? groupId = null, IReadOnlyList<string>? affectedPartIds = null,
+        bool stabilizationActive = false)
     {
         var slot = SlotFor(kind, isGroup);
-        var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText).ToDictionary(p => p.Key, p => p.Value);
+        var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText, stabilizationActive)
+            .ToDictionary(p => p.Key, p => p.Value);
         values["message"] = AlertSourceText.Tag(values["message"], source, kind);
+        var matching = channel.Addresses.Where(a =>
+        {
+            if (isGroup) return a.Groups.Any(g => g.GroupId == (groupId ?? channel.GroupId));
+            if (partNames.Count == 0) return true;
+            IReadOnlyList<string> scope = a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? channel.PartIdList;
+            return scope.Count == 0 || (affectedPartIds is { Count: > 0 }
+                ? scope.Any(id => affectedPartIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                : region.DisplayNames(scope).Any(partNames.Contains));
+        }).ToArray();
+        values["address"] = channel.AddressText(matching);
         if (isGroup)
         {
             values["group"] = groupId ?? channel.GroupId ?? "";
-            values["address"] = channel.IsCombined() ? channel.GroupNames(groupId ?? channel.GroupId ?? "") : channel.AddressLabel ?? "";
         }
 
         var rendered = MessageTemplate.Render(channel.TemplateFor(slot), values, MessageSlots.Find(slot)!.DefaultTemplate);
         if (!isGroup && channel.IsCombined() && partNames.Count > 0)
         {
-            var matching = channel.Addresses.Where(a =>
-            {
-                IReadOnlyList<string> scope = a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? channel.PartIdList;
-                return scope.Count == 0 || (affectedPartIds is { Count: > 0 }
-                    ? scope.Any(id => affectedPartIds.Contains(id, StringComparer.OrdinalIgnoreCase))
-                    : region.DisplayNames(scope).Any(partNames.Contains));
-            });
             var names = matching.Select(a => a.Name).Where(n => n != "").Distinct().ToArray();
             if (names.Length > 0) rendered += "\n📍 " + System.Net.WebUtility.HtmlEncode(string.Join(", ", names));
         }

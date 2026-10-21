@@ -347,12 +347,13 @@ public class ScheduleTextTests
     }
 
     [Fact]
-    public void PostValues_UnknownGroup_HasNoOutages()
+    public void PostValues_UnknownGroup_IsUnavailable_NotAnEmptyPlan()
     {
         var values = ScheduleText.PostValues("R", "99.9", Real, Kyiv(15, 12), false);
 
-        Assert.Equal(ScheduleText.NoOutages, values["outages"]);
+        Assert.Equal("Графік тимчасово недоступний.", values["outages"]);
         Assert.Equal("", values["total"]);
+        Assert.Equal("", values["tomorrow"]);
     }
 
     [Fact]

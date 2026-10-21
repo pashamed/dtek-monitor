@@ -1,4 +1,5 @@
 using System.Globalization;
+using DtekBot.Api.Data;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
 
@@ -7,10 +8,98 @@ namespace DtekBot.Api.Schedules;
 // Wording and picture links for schedule messages. Kept free of I/O so it is easy to test.
 public static class ScheduleText
 {
-    private static readonly string[] Weekdays =
+    internal static readonly string[] Weekdays =
         ["Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "Пʼятниця", "Субота"];
 
     public const string NoOutages = "🟢 Відключень не заплановано";
+
+    // Only complete calendar days with a known group are comparable. Missing data is not an empty plan.
+    public static Dictionary<string, long[][]> PlannedDays(Channel channel, ScheduleSnapshot snapshot, DateTimeOffset now)
+    {
+        var result = new Dictionary<string, long[][]>(StringComparer.Ordinal);
+        var date = KyivTime.FromUtc(now).Date;
+        for (var offset = 0; offset <= 1; offset++)
+        {
+            var start = KyivDayStart(date.AddDays(offset));
+            var end = KyivDayStart(date.AddDays(offset + 1));
+            if (snapshot.CoverageStart > start || snapshot.CoverageEnd < end) continue;
+            foreach (var id in channel.GroupIds())
+            {
+                if (!snapshot.CoversDay(id, start, end) || snapshot.Find(id) is not { } group) continue;
+                var intervals = group.Outages
+                    .Select(o => new[] { Math.Max(o.Start.ToUnixTimeSeconds(), start.ToUnixTimeSeconds()),
+                        Math.Min(o.End.ToUnixTimeSeconds(), end.ToUnixTimeSeconds()) })
+                    .Where(o => o[1] > o[0]).OrderBy(o => o[0]).ThenBy(o => o[1]);
+                var merged = new List<long[]>();
+                foreach (var interval in intervals)
+                {
+                    if (merged.Count > 0 && interval[0] <= merged[^1][1])
+                        merged[^1][1] = Math.Max(merged[^1][1], interval[1]);
+                    else merged.Add(interval);
+                }
+                result[DateKey(start) + "|" + id] = merged.ToArray();
+            }
+        }
+        return result;
+    }
+
+    public static IReadOnlyDictionary<string, string> PlannedChanges(Channel channel,
+        IReadOnlyDictionary<string, long[][]> previous, IReadOnlyDictionary<string, long[][]> current,
+        DateTimeOffset now)
+    {
+        var changes = new Dictionary<string, string>(StringComparer.Ordinal);
+        var date = KyivTime.FromUtc(now).Date;
+        for (var offset = 0; offset <= 1; offset++)
+        {
+            var start = KyivDayStart(date.AddDays(offset));
+            var end = KyivDayStart(date.AddDays(offset + 1));
+            var dateKey = DateKey(start);
+            var lines = new List<string>();
+            foreach (var id in channel.GroupIds())
+            {
+                var key = dateKey + "|" + id;
+                if (!previous.TryGetValue(key, out var before) || !current.TryGetValue(key, out var after)) continue;
+                string Ranges(IReadOnlyList<long[]> intervals) => string.Join(", ", intervals.Take(4).Select(o =>
+                    Clock(DateTimeOffset.FromUnixTimeSeconds(o[0])) + "–" +
+                    (o[1] == end.ToUnixTimeSeconds() ? "24:00" : Clock(DateTimeOffset.FromUnixTimeSeconds(o[1])))))
+                    + (intervals.Count > 4 ? $" (+{intervals.Count - 4})" : "");
+                var added = Subtract(after, before);
+                var removed = Subtract(before, after);
+                var parts = new List<string>();
+                if (added.Count > 0) parts.Add("додано планове відключення " + Ranges(added));
+                if (removed.Count > 0) parts.Add("скасовано планове відключення " + Ranges(removed));
+                if (parts.Count == 0) continue;
+                var names = channel.GroupNames(id);
+                lines.Add($"Черга {id}" + (names.Length == 0 ? "" : $" · {names}") + ": " + string.Join("; ", parts));
+            }
+            changes[dateKey] = lines.Count == 0 ? "" : "🔄 Зміни планового графіка:\n" + string.Join("\n", lines);
+        }
+        return changes;
+    }
+
+    private static List<long[]> Subtract(long[][] source, long[][] excluded)
+    {
+        var result = new List<long[]>();
+        foreach (var interval in source)
+        {
+            var cursor = interval[0];
+            foreach (var other in excluded)
+            {
+                if (other[1] <= cursor) continue;
+                if (other[0] >= interval[1]) break;
+                if (other[0] > cursor) result.Add([cursor, other[0]]);
+                cursor = Math.Max(cursor, other[1]);
+                if (cursor >= interval[1]) break;
+            }
+            if (cursor < interval[1]) result.Add([cursor, interval[1]]);
+        }
+        return result;
+    }
+
+    public static string RenderPost(Channel channel, ScheduleSnapshot snapshot, string regionName,
+        DateTimeOffset now, bool updated, IReadOnlyList<string> partNames,
+        IReadOnlyDictionary<string, string>? changes = null) =>
+        CombinedSchedule.Render(channel, snapshot, regionName, now, updated, partNames, changes);
 
     // Compact style used in the channel messages: "17год 23хв".
     public static string Duration(TimeSpan span)
@@ -136,9 +225,10 @@ public static class ScheduleText
         var dayEnd = KyivDayStart(local.Date.AddDays(1));
         var nextEnd = KyivDayStart(local.Date.AddDays(2));
         var group = snapshot.Find(groupId);
+        var todayKnown = snapshot.CoversDay(groupId, dayStart, dayEnd);
 
-        var today = OutageLines(group, dayStart, dayEnd, lineTemplate);
-        var tomorrowLines = snapshot.CoverageEnd >= nextEnd ? OutageLines(group, dayEnd, nextEnd, lineTemplate) : null;
+        var today = OutageLines(todayKnown ? group : null, dayStart, dayEnd, lineTemplate);
+        var tomorrowLines = snapshot.CoversDay(groupId, dayEnd, nextEnd) ? OutageLines(group, dayEnd, nextEnd, lineTemplate) : null;
         var total = OutageTotal(group, dayStart, dayEnd);
 
         return new Dictionary<string, string>
@@ -146,16 +236,16 @@ public static class ScheduleText
             ["header"] = updated ? "Оновлений графік відключень на сьогодні" : "Графік відключень на сьогодні",
             ["weekday"] = Weekdays[(int)local.DayOfWeek],
             ["date"] = local.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
-            ["outages"] = today.Count == 0 ? NoOutages : string.Join("\n", today),
+            ["outages"] = !todayKnown ? "Графік тимчасово недоступний." : today.Count == 0 ? NoOutages : string.Join("\n", today),
             ["total"] = today.Count == 0 ? "" : Approx(total),
             ["tomorrow"] = tomorrowLines is null ? "" : tomorrowLines.Count == 0 ? NoOutages : string.Join("\n", tomorrowLines),
             ["updated"] = snapshot.SourceUpdatedText ?? "",
             ["region"] = regionName,
             ["group"] = groupId,
-            ["night"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 0)),
-            ["morning"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 1)),
-            ["afternoon"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 2)),
-            ["evening"] = string.Join("\n", OutageLines(group, dayStart, dayEnd, lineTemplate, 3)),
+            ["night"] = string.Join("\n", OutageLines(todayKnown ? group : null, dayStart, dayEnd, lineTemplate, 0)),
+            ["morning"] = string.Join("\n", OutageLines(todayKnown ? group : null, dayStart, dayEnd, lineTemplate, 1)),
+            ["afternoon"] = string.Join("\n", OutageLines(todayKnown ? group : null, dayStart, dayEnd, lineTemplate, 2)),
+            ["evening"] = string.Join("\n", OutageLines(todayKnown ? group : null, dayStart, dayEnd, lineTemplate, 3)),
             ["tomorrowDate"] = local.AddDays(1).ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
         };
     }

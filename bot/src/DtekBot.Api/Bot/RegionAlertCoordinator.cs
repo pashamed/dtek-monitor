@@ -46,8 +46,11 @@ public sealed class RegionAlertCoordinator(
             if (dtek.IsAlert)
             {
                 // Narrowing to districts must not end a region-wide Ukrenergo alert for chats outside them.
+                var gridFallback = gridActive ? GridClassification(grid!) : null;
                 return await dispatcher.DispatchAsync(
-                    region, dtek, state?.PopupText, ct, AlertSource.Dtek, regionWideActive: gridActive);
+                    region, dtek, state?.PopupText, ct, AlertSource.Dtek, regionWideActive: gridActive,
+                    regionWideFallback: gridFallback,
+                    regionWideFallbackText: gridActive ? GridPopupText(grid!) : null);
             }
 
             if (gridActive)

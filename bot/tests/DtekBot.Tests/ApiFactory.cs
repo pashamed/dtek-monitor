@@ -22,6 +22,12 @@ namespace DtekBot.Tests;
 // The real application in-process (Program), with SQLite in memory, a fake Telegram client and a fake schedule provider.
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
+    private readonly ITelegramBotClient? _liveBot;
+
+    public ApiFactory() { }
+
+    internal ApiFactory(ITelegramBotClient liveBot) => _liveBot = liveBot;
+
     public const string BotToken = "123456:API-TEST-TOKEN";
     public const string IngestSecret = "test-ingest-secret";
 
@@ -51,7 +57,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         builder.UseContentRoot(AppContext.BaseDirectory);
         builder.UseSetting("Bot:Token", BotToken);
-        builder.UseSetting("App:PublicUrl", "https://example.test");
+        builder.UseSetting("App:PublicUrl", _liveBot is null ? "https://example.test" : "");
         builder.UseSetting("Ingest:Secret", IngestSecret);
 
         // The built-in tick loop would post on its own in the middle of a test.
@@ -66,7 +72,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 .ReplaceService<IModelCustomizer, UtcTicksModelCustomizer>());
 
             services.RemoveAll<ITelegramBotClient>();
-            services.AddSingleton<ITelegramBotClient>(Bot);
+            services.AddSingleton<ITelegramBotClient>(_liveBot ?? Bot);
             services.RemoveAll<IScheduleProvider>();
             services.AddSingleton<IScheduleProvider>(Schedules);
             services.RemoveAll<IDtekAddressClient>();

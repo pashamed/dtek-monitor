@@ -191,6 +191,37 @@ public sealed class AlertDispatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task EmergencyEnding_WithStabilizationNotice_StatesSchedulesAreActiveWithoutClaimingPowerIsBack()
+    {
+        _f.AddChannel(ChatA);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        await _f.DispatchAsync(DispatcherFixture.StabilizationText);
+
+        var ending = _f.Bot.Sent.Last().Text;
+        Assert.Contains("екстрені відключення завершено", ending);
+        Assert.Contains("діють стабілізаційні графіки", ending);
+        Assert.Contains("не означає, що електроенергія вже є", ending);
+        Assert.DoesNotContain("світло повернулося", ending);
+        Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
+    }
+
+    [Fact]
+    public async Task EmergencyEnding_WhenPopupDisappears_SaysOnlyThatItIsNoLongerReported()
+    {
+        _f.AddChannel(ChatA);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        await _f.DispatchAsync("");
+
+        var ending = _f.Bot.Sent.Last().Text;
+        Assert.Contains("запис про екстрені відключення більше не відображається", ending);
+        Assert.Contains("не підтверджує, що електропостачання відновлено", ending);
+        Assert.DoesNotContain("діють стабілізаційні графіки", ending);
+        Assert.DoesNotContain("світло повернулося", ending);
+    }
+
+    [Fact]
     public async Task AlertEnding_ThenNewAlert_StartsAFreshThread()
     {
         _f.AddChannel(ChatA);
