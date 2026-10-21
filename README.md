@@ -2,6 +2,8 @@
 
 Автоматичний моніторинг аварійних та екстрених відключень електроенергії від ДТЕК зі сповіщеннями в Telegram.
 
+Architecture and onboarding: [application diagram and walkthrough](docs/architecture.md).
+
 ## 💖 Підтримка
 
 Якщо проєкт корисний для тебе, не забудь поставити ⭐️ та [підтримати донатом](https://send.monobank.ua/jar/3QTpZrNn2T).
