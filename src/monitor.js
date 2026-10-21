@@ -246,7 +246,7 @@ async function getGridStatusLine() {
         })})`
       : ""
 
-    return `${region.emoji} <b>${region.name_uk}:</b> ${region.title_uk}${since}`
+    return `${region.emoji} <b>${region.name_uk}:</b> ${region.title_uk}${since} (за даними НЕК «Укренерго»)`
   } catch (error) {
     // The grid status is only a supplement, never block the notification
     console.error(`⚠️ Grid status unavailable: ${error.message}.`)
@@ -264,6 +264,7 @@ function generateEmergencyMessage(emergencyNotice, gridStatusLine) {
 
   const outageText = [
     `🚨 <b>Екстрені / аварійні відключення:</b>\n\n${escapedNotice}`,
+    "⚠️ Через аварійні відключення стабілізаційні графіки можуть тимчасово не діяти.",
     gridStatusLine,
   ]
     .filter(Boolean)
