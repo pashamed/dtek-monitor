@@ -20,8 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      INGEST_URL: ${{ secrets.INGEST_URL }}
-      INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
       DTEK_COLLECTION_ID: ${{ github.event.client_payload.collectionId }}
       DTEK_REGION_IDS: ${{ toJSON(github.event.client_payload.regionIds) }}
 
@@ -73,6 +71,17 @@ jobs:
             echo "address=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check ingest configuration
+        id: ingest
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+        run: |
+          if [ -n "$INGEST_URL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run monitoring script
         if: github.event.action != 'check-addresses' && github.event.action != 'check-regions'
         env:
@@ -87,10 +96,12 @@ jobs:
         run: node ./src/monitor.js
 
       - name: Check all regions for the shared bot
-        if: always() && env.INGEST_URL != '' && github.event.action != 'check-addresses'
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-addresses'
         continue-on-error: true
         timeout-minutes: 5
         env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
           # Optional: lets an LLM read which districts a popup names. Any OpenAI-compatible provider works;
           # the defaults are the Google Gemini free tier. Without the key the bot matches district names itself.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
@@ -100,16 +111,22 @@ jobs:
 
       # Cheap when nothing is queued (one HTTP request); any run also drains requests whose dispatch failed.
       - name: Check pending addresses for the shared bot
-        if: always() && env.INGEST_URL != '' && github.event.action != 'check-regions'
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
         continue-on-error: true
         timeout-minutes: 5
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
         run: node ./src/check-addresses.js
 
       # Ukrenergo status feed: a region-wide emergency is posted at once, before the DTEK popup shows it.
       - name: Check the Ukrenergo status for the shared bot
-        if: always() && env.INGEST_URL != '' && github.event.action != 'check-regions'
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
         continue-on-error: true
         timeout-minutes: 2
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
         run: |
           # IIS answers 411 to a POST that has no length at all, so the empty body announces its length.
           curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
@@ -118,9 +135,12 @@ jobs:
 
       # Posts and edits the schedule messages. Safe to run often: it only compares stored state with the cached schedule.
       - name: Update schedule messages for the shared bot
-        if: always() && env.INGEST_URL != '' && github.event.action != 'check-regions'
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
         continue-on-error: true
         timeout-minutes: 2
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
         run: |
           curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
             -H "x-ingest-secret: $INGEST_SECRET" \
