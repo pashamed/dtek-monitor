@@ -16,12 +16,12 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    env:
-      INGEST_URL: ${{ secrets.INGEST_URL }}
-      INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
 
     steps:
       - name: Update schedule posts and Svitlobot weekly schedules
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
         run: |
           if [ -z "$INGEST_URL" ] || [ -z "$INGEST_SECRET" ]; then
             echo "INGEST_URL and INGEST_SECRET must be configured."
