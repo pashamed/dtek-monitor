@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-10-22",
+  "description": "Reviewed repository skill inventory; SHA-256 covers installed bytes. This is not an automatic updater.",
+  "skills": [
+    {
+      "name": "hybrid-contract-review",
+      "path": ".agents/skills/hybrid-contract-review",
+      "origin": "repository-authored",
+      "local_adaptations": [],
+      "files_sha256": {
+        "SKILL.md": "820bbe6512ffd05da03d5f49e717d20721f195c4a70f6a57dd4f6451ec0d15a5"
+      }
+    },
+    {
+      "name": "security-threat-model",
+      "path": ".agents/skills/security-threat-model",
+      "origin": "upstream",
+      "source": {
+        "repository": "https://github.com/openai/skills",
+        "commit": "49f948faa9258a0c61caceaf225e179651397431",
+        "path": "skills/.curated/security-threat-model",
+        "observed_repository_stars": 28245
+      },
+      "local_adaptations": [],
+      "files_sha256": {
+        "LICENSE.txt": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "SKILL.md": "1283c0dd62a8104d9edda4583569b5d8510b4ddaa45120687c999250fd96bad2",
+        "agents/openai.yaml": "3319b59736312abceca614e341c0e59cae47263e3b58a22b2b5ddf1e5fc8c227",
+        "references/prompt-template.md": "81a59aa3fb3ac3a739d6a26ab38e4015965f215581ee54becef21a2b121ec29b",
+        "references/security-controls-and-assets.md": "d536cfa9acad2523dc39134bcf33b9566c29dd9a57b407cbc9901637230c6b98"
+      }
+    },
+    {
+      "name": "node",
+      "path": "src/.agents/skills/node",
+      "origin": "upstream",
+      "source": {
+        "repository": "https://github.com/mcollina/skills",
+        "commit": "c75d70dbfbe991d8cec42aeda0b64ff14fbb9ac7",
+        "path": "skills/node",
+        "observed_repository_stars": 1956
+      },
+      "local_adaptations": [
+        "SKILL.md: repository JavaScript scope and conditional streaming/caching guidance",
+        "LICENSE: included from repository root"
+      ],
+      "files_sha256": {
+        "LICENSE": "55b21f8286eae11ad53f43c3e3ae5bc2797efbfda786087fb547b9a54655947e",
+        "SKILL.md": "2772d3e4d208ae01c9bb9fe66276c6f2729cb1fdd9852e0c4e998de4a40ae2fb",
+        "rules/assets/graceful-server.test.ts": "6f8b00df094c50a735f5ce8fbe8d95660e5be35c5ddc8517daaebe7f930a13bd",
+        "rules/assets/graceful-server.ts": "1a5777071880d1e500d7b632a6725dd3486fb2da41610ba4e6317035d4b8b0a8",
+        "rules/async-patterns.md": "2d7090311433b905e307f8ebee30e09a9d7a7472503f076950d8bc1cde28236e",
+        "rules/caching.md": "2de838d89c88c76066c6fab8402c6c76237f39dfd0450db6366d24cd3104050f",
+        "rules/environment.md": "93e19f5b6364abf7658283fac93fa60c0f7837964cb91095e671acef55315051",
+        "rules/error-handling.md": "11a3509b3d4c0603a7432cf2005946d6c61f952b8c6ef7c6d5c22e93a4c4586c",
+        "rules/flaky-tests.md": "6474eedd22c5861cfeaf985f3de56dbbc4d8d7dc9f37584a420b0446c213e970",
+        "rules/graceful-shutdown.md": "1ae1ea0673e1a5591160afaec72e47dc5f234b0c1e4c566ee1541079fb364296",
+        "rules/logging.md": "3ccf1285a5d6e1dbf6d9cf782ec4983b62bd2b378adbfb34407bb72831f89765",
+        "rules/modules.md": "ce217cd4db681d8be3272b297e22ff6e3f50f735948b690248f6dd14aa2354ef",
+        "rules/node-modules-exploration.md": "986a7d00b080ec993aa24c9555e520a6e10263ddc303f95126a54a33aa64e4a2",
+        "rules/performance.md": "363b29d7042ad7bb8df54053d35336bf1748c7adab4d9f7a034a98ffed5af939",
+        "rules/profiling.md": "d062f646b93dddaf4404003ce21177c9de4feae5f95e333f82d24536c223fc62",
+        "rules/streams.md": "8ac9e6692519db72f762d826934ddce36d718fc9479d032d9d5e6797774b67d5",
+        "rules/stuck-processes-and-tests.md": "822a38daf7ab9558bd7683c334e986a28056000bf161d5e4ac17d9174d598f38",
+        "rules/testing.md": "208e888301a9117847eea1a1fbf32e52c1f556b2fcfa36ce3a0c78aab765b019",
+        "rules/typescript.md": "4d31f5ee7c13ee4641c5dc588840a3ecf859c7fa77b82f35f913344aca08e4e1",
+        "tile.json": "981428fab6a3f266fad731808de019bfb09626faf21b70c21d273fb2db3178a6"
+      }
+    },
+    {
+      "name": "playwright",
+      "path": "src/.agents/skills/playwright",
+      "origin": "upstream",
+      "source": {
+        "repository": "https://github.com/openai/skills",
+        "commit": "49f948faa9258a0c61caceaf225e179651397431",
+        "path": "skills/.curated/playwright",
+        "observed_repository_stars": 28245
+      },
+      "local_adaptations": [
+        "SKILL.md: local wrapper, artifacts path, Mini App harness and external-effect guidance",
+        "references/cli.md: local wrapper path",
+        "references/workflows.md: ignored artifact location"
+      ],
+      "files_sha256": {
+        "LICENSE.txt": "9a7110fc2d2f964038e5dc49128f908f29f47a574c961cba16085914e879cbda",
+        "NOTICE.txt": "417d5d3372914ecfd9fe102ac1d7dc2119253209f9718d6c222f616876c1904b",
+        "SKILL.md": "a8e1f95c5257e726acbe2527fe647ef314153aced89fabe20025b990c8a6b993",
+        "agents/openai.yaml": "ddda43720fc566fffa45264be8f17f7745a3cee28d5245d41d3b963bc9967230",
+        "assets/playwright-small.svg": "f1d213c0f76735d8272c3d3e9fbf71fe7b894e2d1588907044c780f2c33a9732",
+        "assets/playwright.png": "521669f088c838196c6c852ccc9abdd7234d8f37fc9a8a7a9af7db2d50193381",
+        "references/cli.md": "3dafff4159275059f88fb4897693df428a521acaa99b37c38577267a1ad21272",
+        "references/workflows.md": "f9bcee7051cb47b38ebbfaef5fc33817c0c8a35b3c28ac976daf7cefc8fb7a69",
+        "scripts/playwright_cli.sh": "aa3fdff5d0e4556177f4dfd5f04117e772aa54f94b6a2e34b6c0edf629c6b9b5"
+      }
+    },
+    {
+      "name": "aspnet-core",
+      "path": "bot/.agents/skills/aspnet-core",
+      "origin": "upstream",
+      "source": {
+        "repository": "https://github.com/openai/skills",
+        "commit": "49f948faa9258a0c61caceaf225e179651397431",
+        "path": "skills/.curated/aspnet-core",
+        "observed_repository_stars": 28245
+      },
+      "local_adaptations": [],
+      "files_sha256": {
+        "LICENSE.txt": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+        "SKILL.md": "1f487ef3565e5ac1ee6c93cbeb9ac666292b30285877c82ddb0a77c9777fe92f",
+        "agents/openai.yaml": "06a421ca2f92fc86d83dc7c02e31ad5c85da8193eebbe17aa883ef274e26011a",
+        "assets/dotnet-logo.png": "7f561a8f84ca88130803ecc8664914a4c619530836c705a4b9169704b4195d7c",
+        "references/_sections.md": "eefa51074986d078dd108857ff1e376bf6b75935ee125ebdafef47ba53a57f19",
+        "references/apis-minimal-and-controllers.md": "156283486289a1765d0cad6f7c296bad2f8aa45ad24d730c8ed0b845713cfee1",
+        "references/data-state-and-services.md": "9b0f2253c77a9ade7ebd39103de8fdfe1ae0cd73f71a86936bb1f5ccde064ef4",
+        "references/program-and-pipeline.md": "375d4e4580ce43f72f5d3d01e7c26a292eec2f43dc63c03f0200a4e24dbcd543",
+        "references/realtime-grpc-and-background-work.md": "ba6cfd463620b608c33ed65bcc4d6b25c4ec921cc77bd2fb9379cb486a11a824",
+        "references/security-and-identity.md": "a661dc33dc64e44f9a389d08c20f4e89f1ed62970197a3d2df35036b07884f35",
+        "references/source-map.md": "21e11fee79253f9c0050a3fb207b91e0c44360572662b2c900a855d0a332fa93",
+        "references/stack-selection.md": "9de61ba6c4c1fbb9b4b68d2fb6a9f3ed475feb87d912999c8a1c81911f38c8a3",
+        "references/testing-performance-and-operations.md": "14fecd1e3f5c7a54de2e7ffdd51a91a52101da5765f1ccdfd1f6c6437dd6c8ec",
+        "references/ui-blazor.md": "37267429839b21d084b35749550e85fa96077e06e96fef4917d558b8602afdcc",
+        "references/ui-mvc.md": "25657bf06f9f485967cc07d9cd93b5631d4a49871cd63bd7b2ae982fb776e659",
+        "references/ui-razor-pages.md": "3f3e2dc6e47ce6202649f28fd3143087c067048e60cb997030f8f0bc17a09f1a",
+        "references/versioning-and-upgrades.md": "3a51900fb9046ea9c0aec738410389854ab2474950253ab0719909aaf709a840"
+      }
+    },
+    {
+      "name": "optimizing-ef-core-queries",
+      "path": "bot/.agents/skills/optimizing-ef-core-queries",
+      "origin": "upstream",
+      "source": {
+        "repository": "https://github.com/dotnet/skills",
+        "commit": "fbada88709c854e3ea74fb1b34dd237dea13d413",
+        "path": "plugins/dotnet-data/skills/optimizing-ef-core-queries",
+        "observed_repository_stars": 5699
+      },
+      "local_adaptations": [
+        "LICENSE: included from repository root"
+      ],
+      "files_sha256": {
+        "LICENSE": "cfc21f5e8bd655ae997eec916138b707b1d290b83272c02a95c9f821b8c87310",
+        "SKILL.md": "a4c0d87d624f3ac1e291db0e613026815ee3247f5414ece17fd3b45600943ff7"
+      }
+    }
+  ]
+}
