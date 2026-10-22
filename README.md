@@ -556,3 +556,13 @@ nonmatching, region-wide subscriptions and both source arrival/clearance orders.
 старі колонки читабельними та зберігає ідентифікатори повідомлень. Міграція створена,
 але не застосовується до production в межах розробки. Перед окремим розгортанням
 потрібні резервна копія й звичайний контрольований процес міграції.
+
+## Agent skills and engineering audit
+
+Repository-scoped skills are organized by workspace: shared workflows in
+`.agents/skills/`, JavaScript in `src/.agents/skills/`, and .NET in
+`bot/.agents/skills/`. The JavaScript browser skill also covers the lite Mini App
+inside the API project. See [the skill guide](docs/agent-skills.md) for discovery,
+usage, sources, and updates, and [the engineering audit](docs/project-audit-2026-10-22.md)
+for findings and validation limits. Follow [AGENTS.md](AGENTS.md) for repository
+commands and rules.
