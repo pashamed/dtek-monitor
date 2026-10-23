@@ -1,0 +1,28 @@
+{
+  "odesa": {
+    "key": "0392a7a53c5e9a7ff3a7fa70cc313b1a6fc7a81f692ebec05cc675d4486304b7",
+    "result": null,
+    "failedAt": 1792835172628
+  },
+  "kyiv-oblast": {
+    "key": "12e1fecc6f372e63a299c4f8563053b542aeedd9317b0d535c9beb61003d0f8b",
+    "result": {
+      "scope": "districts",
+      "districts": [
+        "bucha",
+        "fastiv"
+      ]
+    },
+    "at": "2026-10-22T11:16:26.976Z"
+  },
+  "dnipropetrovsk": {
+    "key": "ab23c1e219665ea52246e10d2ec4bce22689998df673dea605ddba130eb70de8",
+    "result": {
+      "scope": "districts",
+      "districts": [
+        "nikopol"
+      ]
+    },
+    "at": "2026-10-23T14:23:00.832Z"
+  }
+}
