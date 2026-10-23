@@ -30,14 +30,18 @@ flowchart TB
 
     subgraph GitHub["GitHub"]
         REPO["main branch<br/>code and shared regional configuration"]
-        MON["monitor.yml<br/>15-minute cron, manual or repository_dispatch<br/>Node.js + Playwright Chromium"]
-        REFRESH["schedule-refresh.yml<br/>5-minute schedule tick"]
-        ART["artifacts branch<br/>standalone state and popup LLM cache"]
+        MON["monitor.yml<br/>standalone monitor.js; dispatched every 15 min by the backend,<br/>hourly cron backup, manual or check-dtek"]
+        SHARED["shared-bot.yml<br/>check-regions / check-addresses dispatch, hourly cron backup<br/>Node.js + Playwright Chromium"]
+        REFRESH["schedule-refresh.yml<br/>10-minute schedule tick (backup)"]
+        ART["artifacts branch<br/>standalone monitor state"]
+        BART["bot-artifacts branch<br/>popup LLM cache"]
         RELEASE["release-please.yml<br/>release PRs / releases, not deployment"]
         REPO --> MON
+        REPO --> SHARED
         REPO --> REFRESH
         REPO --> RELEASE
         MON <--> ART
+        SHARED <--> BART
     end
 
     subgraph Backend["Shared ASP.NET Core backend (.NET 10)"]
@@ -46,6 +50,7 @@ flowchart TB
         HOOK["/webhook<br/>Telegram webhook secret"]
         INGEST["/ingest*<br/>shared ingest secret"]
         TIMER["TickLoop, normally every 5 minutes<br/>MonitoringCycle + in-process gates"]
+        MTIMER["MonitorWorkflowTimer, every 15 minutes<br/>dispatches the standalone monitor"]
         COLLECT["Source providers<br/>parallel collection + caches<br/>HTTP first, browser fallback for DTEK"]
         ROUTE["Classification and reconciliation<br/>region / district / address / group<br/>DTEK + Ukrenergo applicable-source logic"]
         SEND["Notification services<br/>templates, dedupe, quiet hours<br/>send / edit / reply / replace-delete"]
@@ -82,13 +87,15 @@ flowchart TB
     end
 
     SVB["External Svitlobot API<br/>optional encrypted channel key"]
+    DTEK --> SHARED
+    YASNO --> SHARED
     DTEK --> MON
-    YASNO --> MON
-    MON -. "optional extraction" .-> LLM
-    MON -->|"popup / group / directory / address results"| INGEST
+    SHARED -. "optional extraction" .-> LLM
+    SHARED -->|"popup / group / directory / address results"| INGEST
     REFRESH -->|"POST /ingest/schedules/tick"| INGEST
-    COLLECT -->|"repository_dispatch: check-regions"| MON
-    CHECK -->|"repository_dispatch: check-addresses"| MON
+    COLLECT -->|"repository_dispatch: check-regions"| SHARED
+    CHECK -->|"repository_dispatch: check-addresses"| SHARED
+    MTIMER -->|"repository_dispatch: check-emergency"| MON
     DTEK --> COLLECT
     GRID --> COLLECT
     PLAN --> COLLECT
@@ -111,11 +118,14 @@ the diagram groups the API boundary for readability.
 | Component | Responsibility | Trigger / persistence |
 |---|---|---|
 | Backend `TickLoop` | Collect DTEK popups, grid status and schedules in parallel; reconcile after collection; update schedule messages and Svitlobot | Default 5 minutes, after an initial 30-second delay; configurable / disableable |
-| GitHub monitor workflow | Browser collection, group statuses, address directories, queued address checks; grid/schedule tick requests; optional standalone monitor | UTC cron at minutes 7, 22, 37, 52; manual and dispatch events |
-| GitHub schedule-refresh workflow | Ask backend to evaluate schedules and sync Svitlobot | UTC cron every 5 minutes, offset to minute 2 |
+| Backend `MonitorWorkflowTimer` | Dispatch `check-emergency` to the standalone monitor workflow, because GitHub cron often skips runs | Every `GitHub:MonitorIntervalMinutes` (default 15, `0` = off); needs `GitHub:Repository` and `GitHub:DispatchToken` |
+| GitHub monitor workflow | Optional standalone monitor (`monitor.js`) | Backend dispatch every 15 minutes; hourly UTC cron backup at minute 7; manual, `check-dtek` (with address check) and `check-emergency` |
+| GitHub shared-bot workflow | Browser collection, group statuses, address directories, queued address checks; grid tick request | `check-regions` / `check-addresses` dispatch from the backend; hourly UTC cron backup at minute 37; manual |
+| GitHub schedule-refresh workflow | Ask backend to evaluate schedules and sync Svitlobot (backup for `TickLoop`) | UTC cron every 10 minutes, offset to minute 2 |
 | SQL Server | Shared product's durable state | EF Core; source state, subscriptions and delivery records survive restarts |
 | Backend memory | Source caches, coordination gates and pending correlated browser replies | Process lifetime only; not a distributed queue/lock |
-| GitHub `artifacts` branch | Standalone monitor state and optional popup model cache | Monitor workflow writes it; correlated `check-regions` runs skip checkout/commit |
+| GitHub `artifacts` branch | Standalone monitor state | Monitor workflow writes it |
+| GitHub `bot-artifacts` branch | Optional popup model cache | Shared-bot workflow writes it; correlated `check-regions` runs skip checkout/commit |
 | Release workflow | Release PR / GitHub release management | Push to `main`; **not a backend deployment pipeline** |
 
 GitHub cron is best-effort, not a real-time scheduler. The built-in timer requires
@@ -213,6 +223,6 @@ duplicate work/messages within the application instance.
 | Mini App and authenticated API | [app.js](../bot/src/DtekBot.Api/wwwroot/lite/app.js), [MiniAppApi.cs](../bot/src/DtekBot.Api/MiniApp/MiniAppApi.cs) |
 | Durable data model | [BotDbContext.cs](../bot/src/DtekBot.Api/Data/BotDbContext.cs) |
 | Schedule parsing, notification and Svitlobot | [Schedules/](../bot/src/DtekBot.Api/Schedules/), [Svitlobot/](../bot/src/DtekBot.Api/Svitlobot/) |
-| Worker schedules | [monitor.yml](../.github/workflows/monitor.yml), [schedule-refresh.yml](../.github/workflows/schedule-refresh.yml) |
+| Worker schedules | [monitor.yml](../.github/workflows/monitor.yml), [shared-bot.yml](../.github/workflows/shared-bot.yml), [schedule-refresh.yml](../.github/workflows/schedule-refresh.yml), [MonitorWorkflowTimer.cs](../bot/src/DtekBot.Api/Checks/MonitorWorkflowTimer.cs) |
 | Regional/operator configuration | [dtek-settings.json](../bot/src/DtekBot.Api/dtek-settings.json) |
 | Tests | [DtekBot.Tests/](../bot/tests/DtekBot.Tests/), [lite-editor.test.js](../src/lite-editor.test.js), [live-ui-check.js](../src/live-ui-check.js) |

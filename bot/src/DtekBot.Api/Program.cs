@@ -68,6 +68,7 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
 builder.Services.AddScoped<BotUpdateHandler>();
 builder.Services.AddHostedService<BotMenuInitializer>();
 builder.Services.AddHostedService<TickLoop>();
+builder.Services.AddHostedService<MonitorWorkflowTimer>();
 builder.Services.AddScoped<MonitoringCycle>();
 builder.Services.AddScoped<RegionObservationStore>();
 builder.Services.AddSingleton<DtekPopupCollector>();

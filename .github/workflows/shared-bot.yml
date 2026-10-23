@@ -1,0 +1,131 @@
+name: Check regions for the shared bot
+
+# Browser checks for the shared bot. The bot polls DTEK, Ukrenergo and the schedules itself and dispatches
+# check-regions (blocked DTEK pages) and check-addresses (pending address checks) when it needs a browser.
+# The hourly cron is a backup that also drains address checks whose dispatch failed.
+on:
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [check-regions, check-addresses]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.action == 'check-regions' && 'regions' || 'checks' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  shared-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INGEST_URL: ${{ secrets.INGEST_URL }}
+      INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+      DTEK_COLLECTION_ID: ${{ github.event.client_payload.collectionId }}
+      DTEK_REGION_IDS: ${{ toJSON(github.event.client_payload.regionIds) }}
+
+    steps:
+      - name: Check ingest configuration
+        id: ingest
+        run: |
+          if [ -n "$INGEST_URL" ] && [ -n "$INGEST_SECRET" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "INGEST_URL and INGEST_SECRET are not configured; nothing to do."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout code
+        if: steps.ingest.outputs.configured == 'true'
+        uses: actions/checkout@v7
+
+      # Its own branch, so the personal monitor's artifacts push never overwrites this cache (and vice versa).
+      - name: Checkout bot artifacts
+        if: steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
+        run: |
+          if [ -n "$(git ls-remote --heads origin bot-artifacts)" ]; then
+            git fetch --depth 1 origin bot-artifacts
+            git worktree add --detach artifacts FETCH_HEAD
+          else
+            git worktree add --orphan -b bot-artifacts artifacts
+            # One-time move of the popup cache that used to live on the personal artifacts branch.
+            if [ -n "$(git ls-remote --heads origin artifacts)" ]; then
+              git fetch --depth 1 origin artifacts
+              git show FETCH_HEAD:popup-structure.json > artifacts/popup-structure.json 2>/dev/null \
+                || rm -f artifacts/popup-structure.json
+            fi
+          fi
+
+      - name: Set up Node.js
+        if: steps.ingest.outputs.configured == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.ingest.outputs.configured == 'true'
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: Check all regions
+        if: steps.ingest.outputs.configured == 'true' && github.event.action != 'check-addresses'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          # Optional: lets an LLM read which districts a popup names. Any OpenAI-compatible provider works;
+          # the defaults are the Google Gemini free tier. Without the key the bot matches district names itself.
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: node ./src/ingest-regions.js
+
+      # Cheap when nothing is queued (one HTTP request).
+      - name: Check pending addresses
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node ./src/check-addresses.js
+
+      # Backup for the bot's own Ukrenergo poll: a region-wide emergency is posted at once.
+      - name: Check the Ukrenergo status
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          # IIS answers 411 to a POST that has no length at all, so the empty body announces its length.
+          curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
+            -H "x-ingest-secret: $INGEST_SECRET" \
+            "${INGEST_URL%/}/grid/tick"
+
+      - name: Commit updated bot artifacts
+        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git -C artifacts add --all
+
+          if git -C artifacts diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          if git -C artifacts rev-parse --verify --quiet HEAD; then
+            git -C artifacts commit --amend --no-edit
+          else
+            git -C artifacts commit -m "chore: update bot artifacts"
+          fi
+
+          git push --force origin "$(git -C artifacts rev-parse HEAD):refs/heads/bot-artifacts"
+
+      - name: Keep workflow enabled
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/shared-bot.yml/enable"

@@ -1,8 +1,9 @@
 name: Refresh power schedules
 
+# Backup for the bot's own loop, which already pulls the Baskerville schedules every Ticks:IntervalMinutes.
 on:
   schedule:
-    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+    - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
 
 concurrency:
