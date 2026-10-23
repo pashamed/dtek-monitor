@@ -117,7 +117,8 @@ the diagram groups the API boundary for readability.
 
 | Component | Responsibility | Trigger / persistence |
 |---|---|---|
-| Backend `TickLoop` | Collect DTEK popups, grid status and schedules in parallel; reconcile after collection; update schedule messages and Svitlobot | Default 5 minutes, after an initial 30-second delay; configurable / disableable |
+| Backend `TickLoop` | Collect DTEK popups and grid status alongside cache-aware schedule reads; reconcile after collection; evaluate schedule messages and Svitlobot | Default 5 minutes, after an initial 30-second delay; configurable / disableable |
+| Baskerville schedule provider | Share one snapshot per source file across cycles, Mini App reads and backup schedule ticks; conditional GET when due; retain usable stale data on failure | 10-minute refresh window (`Dtek:Schedules:CacheMinutes`); intervening 5-minute cycles use cached data, including backoff after failed attempts |
 | Backend `MonitorWorkflowTimer` | Dispatch `check-emergency` to the standalone monitor workflow, because GitHub cron often skips runs | Every `GitHub:MonitorIntervalMinutes` (default 15, `0` = off); needs `GitHub:Repository` and `GitHub:DispatchToken` |
 | GitHub monitor workflow | Optional standalone monitor (`monitor.js`) | Backend dispatch every 15 minutes; hourly UTC cron backup at minute 7; manual, `check-dtek` (with address check) and `check-emergency` |
 | GitHub shared-bot workflow | Browser collection, group statuses, address directories, queued address checks; grid tick request | `check-regions` / `check-addresses` dispatch from the backend; hourly UTC cron backup at minute 37; manual |
@@ -132,6 +133,10 @@ GitHub cron is best-effort, not a real-time scheduler. The built-in timer requir
 the backend process to stay alive (important with IIS). Both timer paths can
 evaluate the same schedule: stored delivery fingerprints and gates prevent
 duplicate work/messages within the application instance.
+The personal monitor first dispatches after 60 seconds; failed dispatches retry
+on the next interval. Dispatch acceptance is not proof of a completed run.
+Deploy the backend and merge workflows to the default branch to activate them.
+Use one backend instance; the timers and coordination gates are not distributed.
 
 ## 3. Main journeys
 

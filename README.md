@@ -1,74 +1,74 @@
 # 🪫 DTEK Monitor
 
-Автоматичний моніторинг аварійних та екстрених відключень електроенергії від ДТЕК зі сповіщеннями в Telegram.
+Automatic monitoring of DTEK accidental and emergency power outages, with Telegram notifications.
 
 Architecture and onboarding: [application diagram and walkthrough](docs/architecture.md).
 
-## 💖 Підтримка
+## 💖 Support
 
-Якщо проєкт корисний для тебе, не забудь поставити ⭐️ та [підтримати донатом](https://send.monobank.ua/jar/3QTpZrNn2T).
+If you find this project useful, give it a ⭐️ and consider [making a donation](https://send.monobank.ua/jar/3QTpZrNn2T).
 
-## 📋 Опис
+## 📋 Overview
 
-Проєкт автоматично перевіряє інформацію про відключення електроенергії на сайті ДТЕК для вказаної адреси та надсилає сповіщення в Telegram, коли там з'являється аварійне чи екстрене відключення. Також він відстежує регіональне попередження про екстрені відключення на сайті ДТЕК. Відключення за графіком бот пропускає. Перевірка запускається за розкладом через GitHub Actions.
+The standalone monitor checks the DTEK website for a configured address and sends Telegram notifications about accidental or emergency outages. It also tracks regional emergency notices and skips scheduled address outages. GitHub Actions runs the browser script; the optional shared backend dispatches regular popup checks, with GitHub cron as a best-effort backup. The shared application additionally supports multiple chats, schedule notifications, and a Telegram Mini App.
 
-## ✨ Можливості
+## ✨ Features
 
-- 🤖 Автоматична перевірка статусу електропостачання за розкладом.
-- 📱 Надсилання сповіщень в Telegram про аварійні та екстрені відключення.
-- 🚨 Перевірка регіонального попередження кожні 15 хвилин та повідомлення про перехід від екстрених до стабілізаційних відключень або про відсутність стабілізаційних відключень.
-- 🔴 До повідомлень про екстрені відключення та їх скасування додається поточний статус енергосистеми налаштованого регіону ДТЕК (за даними [ua-power-status](https://github.com/lasercat12/ua-power-status)). Відповідність: `k` — м. Київ, `kr` — Київська область, `dn` — Дніпропетровська область, `o` — Одеська область, `d` — Донецька область. Якщо дані недоступні, рядок просто пропускається.
-- ♻️ Оновлення існуючого повідомлення, якщо час і причина відключення не змінилися.
-- ↩️ Надсилання нового повідомлення у відповідь на попереднє, якщо змінився час або причина відключення.
-- 📊 Відображення причини, часу початку та очікуваного часу відновлення.
-- 🌙 Тихі сповіщення в нічний час (22:00-08:00).
-- 🔄 Автоматичний запуск через GitHub Actions.
-- 🗂 Зберігання стану бота в окремій гілці `artifacts`, щоб у `main` був лише код.
+- 🤖 Automatic periodic checks of reported outage status.
+- 📱 Telegram notifications about accidental and emergency outages.
+- 🚨 Regional popup checks dispatched every 15 minutes by the backend, with notices about transitions to stabilization outages or the absence of stabilization outages.
+- 🔴 Regional grid status in emergency and clearance messages, using [ua-power-status](https://github.com/lasercat12/ua-power-status). Region mapping: `k` — Kyiv city, `kr` — Kyiv oblast, `dn` — Dnipropetrovsk oblast, `o` — Odesa oblast, `d` — Donetsk oblast. The status line is omitted if data is unavailable.
+- ♻️ Updates to the existing message when the outage time and cause are unchanged.
+- ↩️ A reply to the previous message when the outage time or cause changes.
+- 📊 Outage cause, start time, and estimated restoration time.
+- 🌙 Silent notifications at night (22:00–08:00).
+- 🔄 Browser checks executed through GitHub Actions.
+- 🗂 Standalone bot state stored on a separate `artifacts` branch, keeping runtime state out of `main`.
 
-## 🚀 Швидкий старт
+## 🚀 Quick start
 
-### 1. Форк репозиторію
+### 1. Fork the repository
 
-Натисни кнопку "Fork" у правому верхньому куті сторінки репозиторію.
+Click **Fork** in the upper-right corner of the repository page.
 
-### 2. Створення Telegram бота
+### 2. Create a Telegram bot
 
-1. Відкрий [@BotFather](https://t.me/BotFather) в Telegram.
-2. Відправ команду `/newbot`.
-3. Вкажи ім'я та username для бота.
-4. Збережи отриманий токен (формат: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`).
+1. Open [@BotFather](https://t.me/BotFather) in Telegram.
+2. Send `/newbot`.
+3. Choose a name and username for the bot.
+4. Save the token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`).
 
-### 3. Отримання Chat ID
+### 3. Get the chat ID
 
-1. Відправ будь-яке повідомлення своєму боту.
-2. Відкрий у браузері `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`.
-3. Знайди значення у форматі `"chat":{"id":123456789}` — це твій Chat ID.
+1. Send any message to your bot.
+2. Open `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates` in a browser.
+3. Find a value such as `"chat":{"id":123456789}` — this is your chat ID.
 
-### 4. Налаштування Secrets
+### 4. Configure secrets
 
-Перейди в **Settings** → **Secrets and variables** → **Actions** свого форкнутого репозиторію та додай такі secrets:
+In your fork, open **Settings → Secrets and variables → Actions** and add:
 
-| Secret               | Опис                                                                                             | Приклад                                                                                          |
+| Secret               | Description                                                                                      | Example                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `TELEGRAM_BOT_TOKEN` | Токен бота від BotFather                                                                         | `123456789:ABCdefGHI...`                                                                         |
-| `TELEGRAM_CHAT_ID`   | ID чату в Telegram                                                                               | `123456789` або `-123456789` (для каналу)                                                        |
-| `REGION`             | Регіон ДТЕК                                                                                      | `k` — Київ, `kr` — Київська обл., `dn` — Дніпровська обл.,`o` — Одеська обл.,`d` — Донецька обл. |
-| `CITY`               | Тип і назва населеного пункту кирилицею, як на сайті ДТЕК: `м.` (місто), `с.` (село), `смт` тощо | `м. Васюківка`, `с. Васюківка` (для Києва [`REGION=k`] поле пусте)                               |
-| `STREET`             | Тип і назва вулиці кирилицею, як на сайті ДТЕК: `вул.`, `пров.`, `просп.` тощо                   | `вул. Перемоги`, `пров. Перемоги`                                                                |
-| `HOUSE`              | Номер будинку                                                                                    | `1`                                                                                              |
-| `CHECK_GRID_STATUS`  | (необов'язково) Статус енергосистеми в повідомленнях про екстрені відключення                    | `false` — вимкнути; порожнє або будь-яке інше значення — увімкнено (за замовчуванням)            |
+| `TELEGRAM_BOT_TOKEN` | BotFather token                                                                                  | `123456789:ABCdefGHI...`                                                                         |
+| `TELEGRAM_CHAT_ID`   | Telegram chat ID                                                                                  | `123456789` or `-123456789` (channel)                                                             |
+| `REGION`             | DTEK region                                                                                      | `k` — Kyiv city, `kr` — Kyiv oblast, `dn` — Dnipropetrovsk oblast, `o` — Odesa oblast, `d` — Donetsk oblast |
+| `CITY`               | Settlement type and name in Cyrillic, exactly as on DTEK: `м.` (city), `с.` (village), `смт`, etc. | `м. Васюківка`, `с. Васюківка`; leave empty for Kyiv city (`REGION=k`)                            |
+| `STREET`             | Street type and name in Cyrillic, exactly as on DTEK, including `вул.`, `пров.`, or `просп.`       | `вул. Перемоги`, `пров. Перемоги`                                                                |
+| `HOUSE`              | Building number                                                                                  | `1`                                                                                              |
+| `CHECK_GRID_STATUS`  | Optional grid status in emergency messages                                                        | `false` disables it; empty or any other value enables it (default)                               |
 
-### 5. Запуск Actions
+### 5. Run the workflow
 
-1. Перейди на вкладку **Actions**.
-2. Знайди та відкрий workflow з назвою **"Run power outages monitor"**.
-3. Праворуч вгорі натисни **Run workflow** → і ще раз на **Run workflow** всередині випадного меню.
+1. Open the **Actions** tab.
+2. Select **Run power outages monitor**.
+3. Click **Run workflow**, then confirm with **Run workflow** in the dropdown.
 
-### 6. (Необов'язково) Запуск перевірки з телефону чи іншого сервісу
+### 6. Optional: trigger a check from a phone or another service
 
-Нічого пушити чи змінювати в коді форка не потрібно: уся конфігурація — у Secrets, а токен потрібен лише для відправки запиту. Переконайся, що на вкладці **Actions** твого форка дозволено запуск workflow (після форку GitHub просить натиснути **I understand my workflows, go ahead and enable them**).
+No code changes or pushes are needed: configuration lives in secrets, and the token is only used to send the dispatch request. Enable workflows in your fork's **Actions** tab; after forking, GitHub may ask you to click **I understand my workflows, go ahead and enable them**.
 
-Перевірку можна запускати зовнішнім HTTP-запитом, наприклад коли пропало світло. Створи [fine-grained токен](https://github.com/settings/personal-access-tokens/new) лише для свого форка з правом **Contents: Read and write** і відправ запит:
+To trigger a check with an external HTTP request, for example after losing power, create a [fine-grained token](https://github.com/settings/personal-access-tokens/new) restricted to your fork with **Contents: Read and write**, then send:
 
 ```bash
 curl -X POST \
@@ -78,38 +78,38 @@ curl -X POST \
   -d '{"event_type":"check-emergency"}'
 ```
 
-- `check-emergency` — перевіряє лише регіональне попередження про екстрені відключення (без запиту за адресою), публікує або оновлює повідомлення, а за потреби скасовує його після повторної перевірки в тому ж запуску.
-- `check-dtek` — повна перевірка, разом із запитом за адресою.
-- `check-regions` — внутрішній browser-fallback бота: лише регіональні попередження
-  для `client_payload.regionIds`, із поверненням `collectionId`; без власних
-  повідомлень у Telegram і без перевірок адрес.
+- `check-emergency` — checks only the regional emergency popup, without an address request; publishes or updates the message and, if needed, clears it after a second check in the same run.
+- `check-dtek` — performs a full standalone check, including the address request.
+- `check-regions` — internal shared-bot browser fallback: checks regional notices
+  for `client_payload.regionIds` and returns `collectionId`; does not post
+  directly to Telegram or check addresses.
 
-Надсилай один запит на подію, а не кілька: повторну перевірку для скасування скрипт робить сам. Запуски стають у чергу, тож паралельні запити не заважають один одному. Не зберігай токен у відкритому вигляді та за потреби відклич його.
+Send one request per event: the script performs its own clearance recheck. Workflow concurrency serializes execution; GitHub can replace an older pending run when further requests arrive. Keep the token private and revoke it when no longer needed.
 
-## 🛠 Локальний запуск
+## 🛠 Local setup
 
-### Вимоги
+### Requirements
 
-- Node.js (версія вказана в `.nvmrc`)
+- Node.js (version pinned in `.nvmrc`)
 - npm
 
-### Встановлення
+### Installation
 
 ```bash
-# Клонування репозиторію
+# Clone the repository
 git clone https://github.com/YOUR_USERNAME/dtek-monitor.git
 cd dtek-monitor
 
-# Встановлення залежностей
-npm install
+# Install locked dependencies
+npm ci
 
-# Встановлення Playwright залежностей
+# Install the Playwright browser
 npx playwright install chromium
 ```
 
-### Налаштування
+### Configuration
 
-Створи файл `.env` в кореневій директорії (скористайся `.env.example`) з таким вмістом:
+Create `.env` in the repository root using `.env.example`:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
@@ -118,35 +118,37 @@ REGION=kr
 CITY=м. Васюківка
 STREET=вул. Перемоги
 HOUSE=1
-# Необов'язково: false вимикає запит статусу енергосистеми
+# Optional: false disables the grid-status request
 CHECK_GRID_STATUS=true
 ```
 
-### Запуск
+### Running
 
 ```bash
-# Для разового запуску
+# Run once
 npm run start
 
-# Для автоматичного перезапуску
+# Restart automatically when source files change
 npm run watch
 ```
 
-## 🔍 Як це працює
+## 🔍 How it works
 
-1. **Отримання інформації**: Скрипт використовує Playwright для відкриття сайту ДТЕК. Він перевіряє регіональне попередження про екстрені відключення (запуск за розкладом або подія `check-emergency`), а AJAX-запит з вказаною адресою виконує лише при ручному запуску та події `check-dtek`.
-2. **Перевірка відключень**: Аналізуються дані про наявність відключень (причина, час початку, час завершення). Якщо відключення немає або воно за графіком, повідомлення не надсилається.
-3. **Відправлення повідомлення**: При виявленні аварійного чи екстреного відключення формується повідомлення та відправляється в Telegram, з тихим режимом у нічний час (22:00-08:00).
-4. **Оновлення повідомлення**: логіка показана на схемі нижче. Головні правила:
-   - Екстрене/аварійне попередження (будь-який текст, що не містить «діють стабілізаційні відключення») надсилається **одним повідомленням**; якщо текст або статус енергосистеми змінюється, це ж повідомлення **редагується**.
-   - Скасування надсилається **відповіддю** на це повідомлення лише після двох перевірок в одному запуску (з паузою 30 секунд) на справжній сторінці ДТЕК. Воно **закриває гілку**: наступне екстрене відключення почнеться окремим повідомленням.
-   - Після скасування статус енергосистеми в цьому повідомленні оновлюється редагуванням, доки не почнеться нове екстрене відключення.
-   - Адресні відключення: поки час і причина не змінюються, повідомлення редагується; якщо змінилися, надсилається відповідь на попереднє. Перше повідомлення нового дня надсилається окремо.
+1. **Collection:** Playwright opens the DTEK website. Scheduled runs and `check-emergency` check the regional popup; manual workflow runs and `check-dtek` additionally request the configured address.
+2. **Assessment:** The script reads the outage cause, start time, and end time. It sends no address notification if there is no outage or the outage is scheduled.
+3. **Delivery:** An accidental or emergency outage produces a Telegram notification, sent silently at night (22:00–08:00).
+4. **Message updates:**
+   - A regional emergency/accident notice is sent as **one message**. Changes to the notice or grid status **edit that message**; stabilization notices are not treated as new emergencies.
+   - Clearance is sent as a **reply** only after two checks of a genuine DTEK page in the same run, 30 seconds apart. It **closes the thread**; the next emergency starts a new message.
+   - After clearance, the grid-status line in the clearance message continues to be edited until a new emergency starts.
+   - Address outages edit the current message while time and cause are unchanged; otherwise they reply to the previous message. The first message of a new day is separate.
 
-5. **Збереження стану**: Інформація про останнє повідомлення зберігається у файлі `last-message.json` в окремій гілці `artifacts`. Workflow підключає цю гілку як папку `artifacts/` і після роботи скрипта комітить зміни назад. У новому форку гілка створюється автоматично під час першого запуску, на якому є що зберегти. При локальному запуску стан зберігається в папці `artifacts/`, яка не потрапляє до репозиторію.
-6. **Захист від вимкнення**: GitHub автоматично вимикає заплановані workflow у публічних репозиторіях після 60 днів без активності, тому наприкінці кожного запуску workflow вмикає сам себе через GitHub API.
+5. **State:** `last-message.json` lives on the separate `artifacts` branch. The workflow mounts that branch at `artifacts/` and commits changes after the script completes. A fresh fork creates the branch on the first run with state to save. Local runs use the ignored `artifacts/` directory.
+6. **Workflow enablement:** GitHub can disable scheduled workflows in public repositories after 60 days without activity. Each run requests that its workflow remain enabled through the GitHub API; an already disabled workflow cannot run this step by itself.
 
-## 📱 Приклад повідомлення
+## 📱 Example message
+
+Bot messages and upstream notices remain in Ukrainian; examples below preserve the product text.
 
 ```
 ⚡️ Зафіксовано відключення:
@@ -158,14 +160,14 @@ npm run watch
 🤖 17.11.2025 11:27
 ```
 
-- 🪫 — час початку та очікуваний час відновлення електропостачання.
-- ⚠️ — причина відключення.
-- 📢 — час останнього оновлення інформації на сайті ДТЕК.
-- 🤖 — час останнього оновлення повідомлення ботом.
+- 🪫 — outage start and estimated restoration time.
+- ⚠️ — outage cause.
+- 📢 — last update on the DTEK website.
+- 🤖 — last bot message update.
 
-### Екстрені / аварійні відключення в регіоні
+### Regional emergency / accidental outages
 
-Коли на сайті ДТЕК з'являється регіональне попередження (будь-який текст, що не містить «діють стабілізаційні відключення»), бот публікує його текст, а нижче додає статус енергосистеми регіону (якщо `CHECK_GRID_STATUS` не вимкнено):
+When DTEK displays a regional emergency/accident notice rather than a stabilization notice, the bot publishes its text and appends the region's grid status unless `CHECK_GRID_STATUS` is disabled:
 
 ```
 🚨 Екстрені / аварійні відключення:
@@ -179,9 +181,9 @@ npm run watch
 🤖 09.10.2026 13:10
 ```
 
-Поки попередження діє, це ж повідомлення редагується, якщо змінюється його текст або статус енергосистеми.
+While the notice is active, the same message is edited when its text or the grid status changes.
 
-Коли попередження зникає (підтверджується повторною перевіркою в тому ж запуску), бот надсилає відповідь на це повідомлення і закриває гілку:
+When the notice disappears, confirmed by a second check in the same run, the bot replies to the message and closes the thread:
 
 ```
 ✅ Екстрені / аварійні відключення скасовано.
@@ -193,80 +195,85 @@ npm run watch
 🤖 09.10.2026 15:40
 ```
 
-Якщо попередження немає взагалі, замість другого рядка буде «Стабілізаційних відключень наразі немає.». Наступне екстрене відключення почнеться окремим новим повідомленням.
+If there is no notice at all, the second line is “Стабілізаційних відключень наразі немає.” The next emergency starts a separate new message.
 
-- 🔴 🟡 🟢 — статус енергосистеми регіону за даними [ua-power-status](https://github.com/lasercat12/ua-power-status).
+- 🔴 🟡 🟢 — regional grid status from [ua-power-status](https://github.com/lasercat12/ua-power-status).
 
-## 🤖 Спільний бот (необов'язково)
+## 🤖 Shared bot (optional)
 
-У папці [`bot/`](bot/) є .NET застосунок, який дозволяє одному боту обслуговувати багато чатів і каналів. GitHub Actions (окремий workflow `shared-bot.yml`) перевіряє сайти ДТЕК усіх регіонів зі списку в `bot/src/DtekBot.Api/dtek-settings.json`, передає текст спливаючого вікна на `/ingest`, а бот зберігає стан у базі й оновлює повідомлення в підписаних чатах. Твій особистий бот із цього репозиторію працює як раніше й не залежить від спільного.
+The .NET application in [`bot/`](bot/) lets one bot serve multiple chats and channels. The backend checks sources directly and uses the separate `shared-bot.yml` browser workflow when needed. Collectors use the regions in `bot/src/DtekBot.Api/dtek-settings.json` and send popup observations to `/ingest`; the backend stores state in its database and updates subscribed chats. The standalone monitor retains separate configuration, Telegram delivery, and state.
 
-**Що вміє бот**
+**Capabilities**
 
-У самому Telegram у бота немає кнопок і команд, окрім `/start`: усе налаштовується в редакторі (Mini App). Він відкривається кнопкою «Редактор» біля поля вводу (бот сам її встановлює) або кнопкою під привітанням після `/start`.
+Apart from `/start`, configuration is handled in the Mini App editor rather than Telegram commands. Open it with the “Редактор” menu button beside the input field, installed automatically by the bot, or the button under the `/start` greeting.
 
-- Підписка каналу на регіон і на **конкретні райони**: у редакторі можна обрати один чи кілька районів. Якщо в повідомленні на сайті ДТЕК названо інші райони, сповіщення не надсилається; якщо воно стосується всього регіону, його отримують усі.
-- Сповіщення по своїй черзі (поки що лише Київ): у редакторі оберіть вулицю й будинок, бот визначає чергу (наприклад `45.1`) і пише, коли для неї починаються екстрені відключення. Дані про черги беруться з API Yasno, а не з сайту ДТЕК, тому можуть відрізнятися від сайту.
-- Поточний стан: картка в редакторі відрізняє повідомлення ДТЕК, Укренерго та опублікований план від фактичної наявності світла. Діагностика показує збережений регіон (місто Київ і Київська область — різні регіони), райони, адреси й черги, час перевірок, доступність графіка на сьогодні/завтра та налаштування автопублікації. Попередня копія й відсутність даних позначаються явно. Час останнього оновлення запису доставки — це історія стану, а не перевірка повідомлення в Telegram чи журнал помилок.
-- Перевірка адреси за запитом: коли світла немає, натисни «Перевірити зараз» в особистому чаті (вкладка «Адреса і черга»). Для Києва можна обрати адресу зі списку; в інших регіонах вкажи населений пункт, вулицю й будинок так, як вони записані на сайті ДТЕК. Списки населених пунктів і вулиць оновлюються монітором Playwright та кешуються в API, щоб пошук працював і коли прямі запити сервера до сайту ДТЕК блокуються. За потреби GitHub Actions перевірить цю адресу на сайті, а бот напише, чи є для будинку планове або позапланове відключення, разом із загальним станом по регіону. Адреса зберігається лише поки діє підписка.
-- Автоматична перевірка за повідомленням «Світло зникло»: якщо застосунок для моніторингу світла (наприклад на Android) пише в канал «🔴 14:24 Світло зникло…», додай бота адміністратором цього каналу, обери адресу в Mini App і увімкни «Реагувати на «Світло зникло»». Бот побачить нове повідомлення в каналі (старі повідомлення читати неможливо). Порядок перевірок від найдешевшої до найдорожчої: спершу графік черги (якщо за графіком зараз планове стабілізаційне відключення, бот так і напише й **не звертається до сайту ДТЕК**; якщо на сайті водночас діє загальне повідомлення про екстрені відключення, він додасть попередження, що графік може не діяти), потім загальне повідомлення ДТЕК про екстрені відключення чи аварію по регіону, і лише тоді перевірка адреси на сайті ДТЕК.
-- Сповіщення за графіком (необов'язково, для кожного каналу окремо): обери адресу (Київ) або чергу вручну (Київська, Дніпропетровська, Одеська області) і увімкни «Сповіщення за графіком». Якщо чергу визначено неправильно, її можна змінити вручну, адреса при цьому лишається для перевірки на сайті ДТЕК. Картинку можна вибрати: таблиця на 2 дні, коротка картинка або без картинки. Є два незалежні види публікацій, і для кожного окремо обирається, як вони з'являються в каналі: **нове повідомлення щоразу**, **видалити старе й опублікувати нове** (потрібне право бота «Видаляти повідомлення», інакше старе просто лишається) або **редагувати те саме**.
-  - **Публікація графіка**: окремий пост з графіком черги на сьогодні, зазвичай із картинкою: «❗️ Оновлений графік відключень на сьогодні / 📅 Четвер 15.10.2026 / 🔴 14:00 - 18:00 (~4 год)». Перший пост за день має заголовок «Графік…», а коли графік черги змінився, «Оновлений графік…». Кнопка «Надіслати графік у канал зараз» публікує його негайно; автоматична публікація може бути вимкнена.
-  - **Попередження перед відключенням**: окреме повідомлення за 5, 10, 15, 30 або 60 хвилин до запланованого початку відключення черги. Текст можна змінити у вкладці «Повідомлення».
-  - **Події «світло вимкнено / з'явилося»**: «🔴 14:24 Світло вимкнено за графіком / 🕓 Воно було 17год 23хв / 🗓 Очікуємо за графіком о 18:00» і «🟢 18:07 Світло з'явилося за графіком / 🕓 Його не було 3год 42хв». Повідомлення про повернення світла бот надсилає лише для відключення, про яке вже повідомляв.
+- **Region and district subscriptions:** Select one or more districts in the editor. Notices naming only other districts are not delivered; region-wide notices reach every eligible subscriber in that region.
+- **Outage-group alerts (currently Kyiv only):** Select a street and building to resolve a group such as `45.1` and receive group emergency alerts. Group data comes from Yasno rather than the DTEK website and can differ from it.
+- **Current status and diagnostics:** The editor distinguishes DTEK notices, Ukrenergo status, and published plans from actual power availability. Diagnostics show the saved region (Kyiv city and Kyiv oblast are distinct), districts, addresses, groups, check timestamps, today's/tomorrow's schedule availability, and automatic publishing settings. Stale or unavailable data is labelled explicitly. A delivery record's update timestamp is state history, not a Telegram message verification or an error log.
+- **On-demand address checks:** In the private-chat editor, select “Перевірити зараз” under “Адреса і черга”. Kyiv addresses can be selected from a directory; elsewhere, enter the settlement, street, and building exactly as on DTEK. Playwright refreshes directories cached by the API, allowing searches even when direct server requests to DTEK are blocked. When needed, GitHub Actions checks the address and the bot reports scheduled or unscheduled outages alongside regional status. Addresses are retained only while subscribed.
+- **Automatic checks after “Світло зникло”:** If a power-monitoring app posts a message such as “🔴 14:24 Світло зникло…” to a channel, add this bot as an administrator, configure the address in the Mini App, and enable “Реагувати на «Світло зникло»”. The bot receives new channel posts, not historical messages. Assessment proceeds from cheapest to most expensive: the group's schedule first (a current planned stabilization outage is reported **without an address request to DTEK**, with a warning if a regional emergency may invalidate the plan), then the regional emergency/accident notice, and finally an address check.
+- **Optional schedule notifications per channel:** Select an address in Kyiv or choose a group manually for Kyiv, Dnipropetrovsk, or Odesa oblast, then enable “Сповіщення за графіком”. A detected group can be overridden manually while retaining the address for DTEK checks. Choose a two-day table image, a compact image, or no image. Schedule posts and outage-event messages have independent delivery modes: **new message**, **delete the old message and publish a replacement**, or **edit the same message**. Replacement requires permission to delete messages; otherwise the old message remains.
+  - **Schedule posts:** A separate post shows the group's schedule, usually with an image: “❗️ Оновлений графік відключень на сьогодні / 📅 Четвер 15.10.2026 / 🔴 14:00 - 18:00 (~4 год)”. The first daily post starts with “Графік…”; changes use “Оновлений графік…”. “Надіслати графік у канал зараз” publishes immediately, even when automatic publishing is disabled.
+  - **Advance warnings:** A separate message 5, 10, 15, 30, or 60 minutes before a planned group outage. Customize it in “Повідомлення”.
+  - **Planned power-off / power-on events:** Examples: “🔴 14:24 Світло вимкнено за графіком / 🕓 Воно було 17год 23хв / 🗓 Очікуємо за графіком о 18:00” and “🟢 18:07 Світло з'явилося за графіком / 🕓 Його не було 3год 42хв”. A return-of-power message is sent only for an outage previously reported by the bot; these are schedule-based events, not voltage measurements.
 
-  Графіки й готові картинки беруться без генерації з відкритого репозиторію [outage-data-ua](https://github.com/Baskerville42/outage-data-ua) (MIT): дані — з `data/`, а зображення — з `images/<регіон>/` (наприклад, [images/kyiv-region](https://github.com/Baskerville42/outage-data-ua/tree/main/images/kyiv-region)). Репозиторій кожні кілька хвилин публікує оновлення з сайту ДТЕК, тому бот не навантажує сайт. Дані кешуються на 5 хвилин для всіх каналів разом.
-- Налаштування для кожного каналу: усі сповіщення чи лише екстрені та аварії, писати чи ні про завершення, редагувати те саме повідомлення чи щоразу надсилати нове, пауза.
-- Тихі години налаштовуються окремо для кожного чату чи каналу у вкладці «Повідомлення»: автоматичні сповіщення та повідомлення графіка надходять одразу, але без звукового сповіщення у вибраний щоденний проміжок за київським часом. За замовчуванням вимкнено; ручні дії та тестові повідомлення не приглушуються.
-- Як показувати повідомлення про зняття аварійного запису (вкладка «Повідомлення», шаблон «Зняття запису»): відповіддю на початкове сповіщення (за замовчуванням), окремим новим повідомленням або зміною тексту початкового повідомлення. Якщо початкове повідомлення вже видалено чи його не можна змінити, бот відповість на нього новим.
-- Власні шаблони для кожного типу повідомлення (екстрені відключення, скасування, аварія в регіоні, локальне відключення, графік, світло вимкнено, світло з'явилося) з параметрами, живим переглядом у стилі Telegram і кнопкою «Надіслати тест у канал» (тест позначений 🧪).
-- Змінювати налаштування каналу можуть лише його адміністратори.
+  Schedules and ready-made images come from the public MIT-licensed
+  [outage-data-ua](https://github.com/Baskerville42/outage-data-ua) repository:
+  schedule JSON is under `data/` and images under `images/<region>/`, for example
+  [images/kyiv-region](https://github.com/Baskerville42/outage-data-ua/tree/main/images/kyiv-region).
+  The backend shares a 10-minute source cache across all chats instead of
+  generating images or requesting schedules directly from DTEK.
+- **Per-channel settings:** All alerts or emergencies/accidents only, clearance notifications, edit-versus-new delivery, and pause.
+- **Quiet hours:** Configure a daily Kyiv-time interval per chat or channel under “Повідомлення”. Automatic alerts and schedule messages arrive immediately but silently during that interval. Disabled by default; manual actions and test messages are not silenced.
+- **Clearance delivery:** Under “Повідомлення”, the “Зняття запису” template supports replying to the original alert (default), sending a new message, or editing the original. If the original has been deleted or cannot be edited, the bot falls back to a new reply message.
+- **Custom templates:** Each message type — emergency, clearance, regional accident, local outage, schedule, power-off, and power-on — supports placeholders, a Telegram-style preview, and “Надіслати тест у канал” (tests are marked 🧪).
+- **Authorization:** Only channel administrators can change channel settings.
 
-**Два джерела екстрених відключень**
+**Two emergency-outage sources**
 
-Бот вірить тому джерелу, яке повідомило про екстрені відключення першим:
+The bot can alert from whichever source first reports an emergency:
 
-1. **Сайт ДТЕК** (спливаюче вікно, `POST /ingest`): може називати райони.
-2. **НЕК «Укренерго»**: статус кожного регіону з відкритого [фіду](https://github.com/lasercat12/ua-power-status) (`data/regions.json`). GitHub Actions викликає `POST /ingest/grid/tick` разом з іншими перевірками; адреса фіду й межа «застарілості» (`MaxAgeMinutes`, 45 хв) задаються в розділі `Grid` файла `dtek-settings.json`.
+1. **DTEK website:** Popup observations, including district names when provided, received through `POST /ingest` or direct backend collection.
+2. **Ukrenergo:** Regional status from the public [feed](https://github.com/lasercat12/ua-power-status), `data/regions.json`. The backend polls it directly; GitHub Actions can also call `POST /ingest/grid/tick`. The `Grid` section of `dtek-settings.json` configures the feed URL and freshness limit (`MaxAgeMinutes`, 45 minutes).
 
-Правила:
+Rules:
 
-- `emergency_outages` означає екстрені відключення, `grid_damage` означає аварію. Статуси `normal`, `shortage` і `outage_schedules` (стабілізаційні графіки) не є екстреним сповіщенням. Фід, створений понад 45 хвилин тому, ігнорується: невідомий стан ніколи нічого не відкриває й не закриває; збій завантаження стан також не змінює.
-- Якщо Укренерго повідомило першим, сповіщення надходить одразу **по всьому регіону**, без районів, тож його отримують усі підписники регіону, зокрема й ті, хто обрав райони. Текст завершується «(за даними Укренерго)».
-- Коли згодом на сайті ДТЕК з'являється попередження з подробицями чи районами, вже надіслане повідомлення **редагується** (у режимі «нове повідомлення щоразу» надсилається нове). Чат, який не підпадає під райони з ДТЕК, поки в регіоні діє екстрене відключення за Укренерго, не отримує «скасовано»: його гілка закривається мовчки.
-- Повідомлення «скасовано» надсилається лише тоді, коли **обидва** джерела вже без екстреного стану. Якщо ДТЕК прибрав попередження, а Укренерго ще повідомляє про екстрене відключення, повідомлення редагується на текст за даними Укренерго; якщо Укренерго завершило, а попередження ДТЕК лишається, діє текст за даними ДТЕК.
-- Кожен користувач, як і раніше, отримує лише те, що стосується його регіону та районів. Перевірка «світла немає?» вважає активне екстрене відключення за Укренерго таким самим поясненням, як загальне повідомлення ДТЕК, і не звертається до сайту ДТЕК.
+- `emergency_outages` means an emergency; `grid_damage` means an accident. `normal`, `shortage`, and `outage_schedules` (stabilization schedules) are not emergency alerts. A feed older than 45 minutes is ignored: unknown status neither opens nor closes an alert, and fetch failures do not change state.
+- If Ukrenergo reports first, the alert is **region-wide**, without district filtering, so all eligible regional subscribers receive it, including those with district selections. The text ends with “(за даними Укренерго)”.
+- When DTEK later provides details or districts, the existing message is **edited**, or replaced by a new message in new-message mode. A chat outside DTEK's named districts does not receive a false clearance while Ukrenergo still reports a regional emergency; its thread closes silently.
+- Clearance is sent only when **both** sources are no longer in an emergency state. If DTEK clears while Ukrenergo remains active, the message switches to Ukrenergo text; if Ukrenergo clears while DTEK remains active, DTEK text remains.
+- Regional and district eligibility still applies. An address assessment treats an active Ukrenergo emergency as an explanation, just like a general DTEK notice, without an additional DTEK address request.
 
-**Шаблон повідомлення** — це HTML Telegram (`<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="https://…">`, `<tg-spoiler>`, `<blockquote>`) з параметрами:
+**Message templates** use Telegram HTML (`<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="https://…">`, `<tg-spoiler>`, `<blockquote>`) and placeholders:
 
-| Параметр                              | Значення                                     |
+| Placeholder                           | Meaning                                      |
 | ------------------------------------- | -------------------------------------------- |
-| `{значок}`                            | значок типу події                            |
-| `{заголовок}`                         | короткий заголовок                           |
-| `{текст}`                             | готовий текст сповіщення                     |
-| `{регіон}`, `{район}`, `{місце}`      | регіон, частина, регіон разом із частиною    |
-| `{текст_сайту}`                       | оригінальний текст повідомлення з сайту ДТЕК |
-| `{час}`                               | час (київський)                              |
-| `{сайт}`                              | посилання на сайт ДТЕК                       |
+| `{значок}`                            | Event-type icon                              |
+| `{заголовок}`                         | Short title                                  |
+| `{текст}`                             | Prepared notification text                    |
+| `{регіон}`, `{район}`, `{місце}`      | Region, district/area, and their combination   |
+| `{текст_сайту}`                       | Original DTEK notice                          |
+| `{час}`                               | Kyiv time                                    |
+| `{сайт}`                              | DTEK website link                            |
 
-Параметри пишуться українською. Старі латинські назви (`{emoji}`, `{message}`, `{time}`, `{site}`, `{region}`, `{part}`, `{where}`, `{popup}`, `{title}`, `{group}` тощо) і далі працюють: їх можна змішувати, а збережені раніше шаблони не потрібно переписувати.
+Placeholder identifiers are Ukrainian application data and must not be translated. Legacy English aliases (`{emoji}`, `{message}`, `{time}`, `{site}`, `{region}`, `{part}`, `{where}`, `{popup}`, `{title}`, `{group}`, etc.) still work, can be mixed with Ukrainian identifiers, and do not require rewriting saved templates.
 
-Стандартний шаблон екстрених повідомлень: `{значок} {текст}` і `Деталі: {сайт}` на новому рядку. Щоб вивести фігурні дужки буквально, пиши `{{` і `}}`.
+The default emergency template is `{значок} {текст}` followed by `Деталі: {сайт}` on a new line. Use `{{` and `}}` for literal braces.
 
-**Умовний блок** `{#назва}…{/назва}` показується лише коли значення параметра не порожнє, наприклад `{#світло_було}🕓 Воно було {світло_було}{/світло_було}`. Блоки не можуть бути вкладеними.
+A **conditional block**, `{#назва}…{/назва}`, is shown only when its placeholder is nonempty, for example `{#світло_було}🕓 Воно було {світло_було}{/світло_було}`. Blocks cannot be nested.
 
-Кожен тип повідомлення має власний набір параметрів (їх показує редактор). Крім наведених вище:
+Each message type has its own placeholders, shown in the editor. Additional placeholders include:
 
-| Повідомлення           | Додаткові параметри                                                                                                         |
+| Message                | Additional placeholders                                                                                                    |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Локальне відключення   | `{черга}`, `{адреса}` (збережена адреса)                                                                                    |
-| Графік                 | `{шапка}`, `{день_тижня}`, `{дата}`, `{відключення}`, `{разом}`, `{завтра}`, `{оновлено}`, `{регіон}`, `{черга}`            |
-| Світло вимкнено        | `{час}`, `{світло_було}`, `{очікуємо_до}`, `{тривалість}`, `{регіон}`, `{черга}`                                            |
-| Світло з'явилося       | `{час}`, `{світла_не_було}`, `{наступне}`, `{регіон}`, `{черга}`                                                            |
+| Local outage           | `{черга}`, `{адреса}` (saved address)                                                                                       |
+| Schedule               | `{шапка}`, `{день_тижня}`, `{дата}`, `{відключення}`, `{разом}`, `{завтра}`, `{оновлено}`, `{регіон}`, `{черга}`            |
+| Power off              | `{час}`, `{світло_було}`, `{очікуємо_до}`, `{тривалість}`, `{регіон}`, `{черга}`                                            |
+| Power on               | `{час}`, `{світла_не_було}`, `{наступне}`, `{регіон}`, `{черга}`                                                            |
 
-**Mini App** відкривається з приватного чату з ботом (кнопка в меню) за адресою `/lite/`: це чистий HTML і JS без збірки, дуже легкий для телефонів. Бот публікує сповіщення в **каналах**: щоб підключити канал, достатньо додати бота адміністратором із правом публікувати повідомлення, і канал сам з'явиться в редакторі (для цього вебхук має отримувати `my_chat_member`). Запасний варіант для публічного каналу: ввести `@імʼя` в редакторі. Далі обери регіон і адресу, за потреби змінити чергу вручну, і за бажанням увімкни публікацію графіків із картинкою. Підключений канал можна прибрати зі списку кнопкою «Видалити зі списку» в його налаштуваннях: якщо ти єдиний, хто ним керує, сповіщення вимикаються, а збережена адреса видаляється. Сам бот при цьому залишається в каналі, поки ти не видалиш його вручну в Telegram. Альтернативна версія на Blazor WebAssembly лежить у `bot/src/DtekBot.WebApp`, але до бота не підключена.
+The **Mini App** opens from the bot's private-chat menu at `/lite/`. It uses plain HTML and JavaScript without a build step and is lightweight for phones. To connect a **channel**, add the bot as an administrator with posting permission; the channel appears in the editor when the webhook receives `my_chat_member`. For public channels, entering the channel's `@username` in the editor is an alternative. Select a region and address, optionally override the group, and enable schedule images if desired. “Видалити зі списку” removes a channel from your list; if you are its last manager, alerts are disabled and saved address data is removed. The bot stays in the Telegram channel until manually removed. An alternative Blazor WebAssembly editor exists in `bot/src/DtekBot.WebApp` but is not connected to the bot.
 
-**Налаштування сервера** (файл `appsettings.Production.json` на хостингу, не в репозиторії):
+**Server configuration** (`appsettings.Production.json` on the host, never committed):
 
 ```json
 {
@@ -279,167 +286,193 @@ npm run watch
 }
 ```
 
-`AutoMigrate: true` потрібен лише під час першого запуску та після оновлень зі змінами бази. **Міграція `ResetApplicationData` видаляє всі дані застосунку з бази** (підключені чати й адміністраторів, адреси, розклади, ключі Світлобота та стан перевірок); таблиці й історія міграцій лишаються. Це незворотно — перед застосуванням зроби резервну копію. Секрети конфігурації хостингу зберігаються поза базою й цією міграцією не видаляються. `App:PublicUrl` — адреса сайту з HTTPS: за нею бот встановлює кнопку «Редактор» біля поля вводу й кнопку під привітанням.
+Use `AutoMigrate: true` only for initial setup and updates requiring database migrations. **The `ResetApplicationData` migration deletes all application data**: connected chats and administrators, addresses, schedules, Svitlobot keys, and check state. Tables and migration history remain. This is irreversible; back up the database before applying it. Hosting configuration secrets are outside the database and are not deleted. `App:PublicUrl` is the site's HTTPS URL, used for the “Редактор” menu button and the button under the greeting.
 
-**Розпізнавання районів у повідомленні ДТЕК.** Текст спливаючого вікна пишуть вручну й він змінюється, тому бот спершу шукає назви районів за словником із `dtek-settings.json` (корені слів, які працюють у будь-якому відмінку: «бучанськ» знаходить «Бучанському районі»). Додатково, якщо в репозиторії задано secret `LLM_API_KEY`, крок workflow надсилає в мовну модель **лише незнайомі тексти**: ті, де словник не визначив вид повідомлення, або де сказано про райони, але жодного відомого району не знайдено. Якщо словник уже все зрозумів, модель не питають. Модель повертає готовий результат: «усі», «райони: obukhiv, fastiv, bucha» або «невідомо». Вона бачить лише текст публічного повідомлення й список дозволених районів, а відповідь перевіряється: невідомі ідентифікатори відкидаються. Запит надсилається, лише коли текст змінився (результат кешується в гілці `bot-artifacts`), а якщо модель недоступна чи відповідь некоректна, сповіщення все одно надходить за результатом словника (без районів його отримують усі в регіоні). За замовчуванням це безкоштовний тариф Google Gemini (Flash-Lite): отримай ключ у [Google AI Studio](https://aistudio.google.com/apikey) і додай його як `LLM_API_KEY`. Безкоштовний тариф Google може використовувати запити для покращення своїх продуктів, але тут вони містять лише публічний текст. Будь-який інший OpenAI-сумісний провайдер підключається secrets `LLM_BASE_URL` і `LLM_MODEL` (для OpenAI: `https://api.openai.com/v1` і `gpt-5-nano`; безкоштовного API в ChatGPT немає, OpenAI бере плату за токени, але тут це частки цента на місяць). Назву моделі перевір у кабінеті провайдера: за замовчуванням `gemini-3.1-flash-lite`.
+**District recognition in DTEK notices.** Popup wording changes, so the bot first matches dictionary entries from `dtek-settings.json`. Word stems handle Ukrainian inflections: “бучанськ” matches “Бучанському районі”. If the repository has `LLM_API_KEY`, the workflow asks a language model about **unfamiliar notices only**: an unrecognized message kind, or district-related wording without a recognized district. Understood notices bypass the model. The result identifies all districts, specific IDs such as `obukhiv`, `fastiv`, and `bucha`, or unknown scope. The model receives only the public notice and allowed geography; unknown IDs and ungrounded district selections are rejected. Non-correlated browser runs persist the popup cache on `bot-artifacts`; correlated fallback runs skip branch checkout/commit. Model failures or invalid results fall back to deterministic classification; without district restrictions, eligible subscribers throughout the region receive the alert.
 
-Цей крок виконується в **GitHub Actions**, а не у вебзастосунку: `LLM_API_KEY` (і за потреби `LLM_BASE_URL`, `LLM_MODEL`) потрібно задати в **Settings → Secrets and variables → Actions** репозиторію, з якого запускається workflow. Значення `LLM_API_KEY` у `appsettings.Production.json` API-сервера не використовується.
+The default provider is Google Gemini Flash-Lite. Obtain a key from [Google AI Studio](https://aistudio.google.com/apikey) and store it as `LLM_API_KEY`. Check current provider pricing and data-use terms; the free tier may use requests for product improvement, so only public notice text is sent. Other OpenAI-compatible providers use `LLM_BASE_URL` and `LLM_MODEL`; an OpenAI example is `https://api.openai.com/v1` with `gpt-5-nano`. API billing is separate from a ChatGPT subscription. Verify model availability in your provider account; the configured default is `gemini-3.1-flash-lite`.
 
-`GitHub:DispatchToken` потрібен для перевірки адреси за запитом: це [fine-grained токен](https://github.com/settings/personal-access-tokens/new) лише для цього репозиторію з правом **Contents: Read and write** (так само, як у розділі про запуск із телефону). Бот надсилає ним подію `check-addresses` у workflow `shared-bot.yml`. Без токена запити все одно виконаються під час найближчого запуску за розкладом (щогодини). Тим самим токеном бот кожні `GitHub:MonitorIntervalMinutes` хвилин (типово 15, `0` вимикає) надсилає `check-emergency` в особистий монітор `monitor.yml`, бо GitHub часто пропускає запуски за cron. Токен лежить лише в `appsettings.Production.json` і ніколи не потрапляє в логи.
+This step runs in **GitHub Actions**, not the web application. Set `LLM_API_KEY` and, if needed, `LLM_BASE_URL` / `LLM_MODEL` under the workflow repository's **Settings → Secrets and variables → Actions**. The API does not use an `LLM_API_KEY` value from `appsettings.Production.json`.
 
-Щоб не навантажувати GitHub Actions і сайт ДТЕК, діють ліміти з `AddressChecks` у `dtek-settings.json`: пауза між запитами одного чату, добовий ліміт, кеш результату, мінімальний інтервал між запусками, одна перевірка на вулицю для всіх користувачів і обмеження кількості вулиць за запуск.
+`GitHub:DispatchToken` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new) restricted to this repository with **Contents: Read and write**, as in the external-trigger setup. It dispatches `check-addresses` to `shared-bot.yml`. Without it, queued requests depend on a later backup run; the hourly cron is not a guaranteed deadline. The same token dispatches `check-emergency` to the standalone `monitor.yml` every `GitHub:MonitorIntervalMinutes` (default 15, `0` disables it). Keep the token only in private hosting configuration, such as `appsettings.Production.json`; never log it.
 
-Сам бот раз на 5 хвилин (`Ticks:IntervalMinutes`, вимикається `Ticks:Enabled=false`)
-запускає спільний цикл: **паралельно** перевіряє всі графіки Baskerville, фід
-Укренерго та регіональні сторінки ДТЕК. Перевірки графіків і фіду примусово
-оновлюють кеш умовним HTTP-запитом (ETag), навіть якщо інший читач щойно заповнив кеш.
-Лише після завершення збору бот зберігає стани, узгоджує ДТЕК/Укренерго,
-надсилає сповіщення, оновлює графіки й передає тижневий розклад Світлоботу.
-Перший цикл починається через 30 секунд після запуску; цикли не перекриваються.
+To limit GitHub Actions and DTEK load, `AddressChecks` in `dtek-settings.json` defines per-chat cooldowns, daily budgets, result caching, a minimum dispatch interval, shared checks per street, and a maximum number of streets per run.
 
-Якщо прямий запит ДТЕК заблоковано (включно з HTTP 200 зі сторінкою Imperva),
-бот надсилає `check-regions` через `GitHub:DispatchToken`. Browser-workflow (`shared-bot.yml`)
-перевіряє лише недоступні регіони паралельно; `collectionId` пов’язує його
-відповіді з поточним циклом. Очікування обмежено `Ticks:BrowserWaitSeconds`
-(типово 180 секунд, максимум 240). Невдалий запуск, тайм-аут або недоступне
-джерело логуються; попередній стан не скидається й не означає «аварій немає».
-Запізнілі відповіді зберігаються звичайним ingest, але старіші спостереження
-не перезаписують новіші. GitHub Actions не гарантує час запуску.
+The backend runs a coordinated cycle every 5 minutes (`Ticks:IntervalMinutes`;
+disable with `Ticks:Enabled=false`). DTEK popups and the Ukrenergo feed are
+collected in parallel with schedule reads. Baskerville requests use a shared
+10-minute refresh window (`Dtek:Schedules:CacheMinutes` in
+`bot/src/DtekBot.Api/dtek-settings.json`); intervening cycles and Mini App reads
+reuse that copy rather than forcing another network request. Due refreshes use
+ETag conditional requests. A failed request backs off for the same window and
+keeps the last usable copy, without treating unavailable data as an all-clear.
+The first cycle starts after 30 seconds; cycles do not overlap. Only after source
+collection completes does the backend reconcile alerts, evaluate schedule posts
+and reminders, and sync Svitlobot. Notification evaluation stays at 5 minutes;
+the 10-minute refresh window does not slow it down.
 
-Резервні workflow також викликають `POST /ingest/schedules/tick` (`schedule-refresh.yml`, кожні 10 хвилин) і
-`POST /ingest/grid/tick` (`shared-bot.yml`) з `X-Ingest-Secret` і `Content-Length: 0`.
-Ці сумісні резервні endpoint-и не запускають повний збір; під час спільного
-циклу вони чекають, щоб не публікувати проміжний стан.
-**IIS має тримати застосунок активним** (Always On / без idle timeout або
-зовнішній keep-alive): вбудований планувальник не працює, коли процес зупинено.
+| Function | Primary trigger | Separate GitHub workflow / backup |
+|---|---|---|
+| Personal regional-popup monitor (`src/monitor.js`) | Backend `MonitorWorkflowTimer`: every 15 minutes, first dispatch after 60 seconds | `monitor.yml`: `check-emergency`, manual / `check-dtek`, hourly cron |
+| Baskerville schedules and schedule notifications | Backend cycle: 5-minute evaluation, 10-minute shared source refresh window | `schedule-refresh.yml`: 10-minute best-effort cron |
+| Shared-bot regional browser fallback | Backend dispatches `check-regions` only when direct DTEK collection fails | `shared-bot.yml`: correlated region results; hourly backup |
+| Shared-bot address checks | On demand, after schedule and regional-emergency assessment | `shared-bot.yml`: `check-addresses`; hourly backup drains queued requests |
 
-Якщо чат вмикають або змінюють у ході вже активного екстреного відключення, бот одразу надсилає чинне сповіщення, а не чекає наступної зміни на сайті.
+The personal monitor timer needs `GitHub:Repository` and `GitHub:DispatchToken`.
+`GitHub:MonitorIntervalMinutes` defaults to 15; set it to `0` to disable personal
+monitor dispatches without disabling shared-bot monitoring. An accepted dispatch
+does not guarantee an immediate GitHub runner start. Failed dispatches are logged
+and retried at the next interval. GitHub cron remains a best-effort backup, not a
+guaranteed retry deadline. Deploy the backend and put the workflows on the
+repository's default branch to activate this split. Run one backend instance:
+timers, caches and duplicate-prevention gates are process-local.
 
-**Підключення**
+If direct DTEK access is blocked, including HTTP 200 containing an Imperva page,
+the bot dispatches `check-regions` using `GitHub:DispatchToken`. The browser
+workflow (`shared-bot.yml`) checks only unavailable regions, in parallel;
+`collectionId` correlates replies with the current cycle. The wait is bounded by
+`Ticks:BrowserWaitSeconds` (default 180 seconds, maximum 240). Failed dispatches,
+timeouts, and unavailable sources are logged; previous state is preserved,
+not interpreted as an all-clear. Late replies pass through normal ingest,
+and older observations cannot overwrite newer ones. GitHub Actions does not
+guarantee runner start time.
 
-1. Збери й опублікуй `bot/src/DtekBot.Api` (Mini App вже всередині).
-2. Зареєструй вебхук (дозволь `message`, `callback_query`, `channel_post`, `my_chat_member`):
+Backup workflows call `POST /ingest/schedules/tick` (`schedule-refresh.yml`,
+every 10 minutes) and `POST /ingest/grid/tick` (`shared-bot.yml`) with
+`X-Ingest-Secret` and `Content-Length: 0`. These compatibility endpoints do not
+start a full collection cycle; they wait for an active coordinated cycle to
+finish rather than publishing intermediate state.
+**IIS must keep the application running** (Always On, no idle timeout, or an
+external keep-alive). In-process timers cannot run while the process is stopped.
+
+When a chat is enabled or changed during an active emergency, the bot delivers the applicable current alert immediately instead of waiting for another website change.
+
+**Deployment**
+
+1. Build and publish `bot/src/DtekBot.Api`; it includes the Mini App.
+2. Register the webhook, allowing `message`, `callback_query`, `channel_post`, and `my_chat_member`:
    `https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-host.example/webhook&secret_token=<WebhookSecret>&allowed_updates=["message","callback_query","channel_post","my_chat_member"]`
-3. У Secrets репозиторію додай `INGEST_URL` (`https://your-host.example/ingest`) і `INGEST_SECRET`. Поки `INGEST_URL` порожній, крок спільного бота пропускається.
+3. Add repository secrets `INGEST_URL` (`https://your-host.example/ingest`) and `INGEST_SECRET`. Both are required; the shared-bot workflow reports a configuration failure if either is missing.
 
-Бот пише логи у `logs/app-<дата>.log` поруч із застосунком.
+The bot writes logs to `logs/app-<date>.log` beside the application.
 
-**Світлобот (необов'язково).** Для кожного підключеного Telegram-каналу, який веде графік на [svitlobot.in.ua](https://svitlobot.in.ua), можна окремо вказати власний `channel_key` у налаштуваннях цього каналу в Mini App. Один Telegram-користувач може керувати кількома такими каналами; ключ, черга та автоматична синхронізація належать лише вибраному Telegram-каналу. Кнопкою можна оновити у Світлоботі тижневі планові відключення обраної черги цього чату (типовий тиждень із джерела даних; за замовчуванням «можливі» відключення рахуються як відключення, а прапорець `includeMaybe: false` залишає лише певні). За наявності шаблонів автоматично обирається той, що відповідає черзі, але його можна змінити. Це оновлює дані розкладу у Світлоботі, а не надсилає негайне повідомлення в Telegram: публікацією та закріпленням керує сам Світлобот за своїм розкладом. Щоб саме бот надіслав графік у Telegram-канал негайно, використовуйте кнопку «Надіслати графік у канал зараз» у розділі публікації графіка. Кнопка видалення прибирає розклад у Світлоботі та його допис у каналі. Ключ дозволяє будь-кому змінювати графік каналу, тому бот зберігає його лише зашифрованим (AES-GCM) і ніколи не повертає назад і не пише в логи. Змін графіка не більше 6 на хвилину для одного чату; доступ мають лише керівники чату. Кнопка «Забути ключ» видаляє його тільки з бота, графік у Світлоботі лишається; ключ також стирається, коли чат прибирають зі списку останнім керівником.
+**Svitlobot (optional).** Each connected Telegram channel using [svitlobot.in.ua](https://svitlobot.in.ua) can have its own `channel_key` in the Mini App. One user can manage several channels; keys, groups, and automatic sync belong to the selected channel only. A button uploads its typical weekly outage plan from the source data. Possible outages count as outages by default; `includeMaybe: false` includes only definite ones. A matching group preset is selected when available and can be changed. This updates Svitlobot schedule data, not an immediate Telegram message; Svitlobot controls its own posting and pinning. To post immediately through this bot, use “Надіслати графік у канал зараз”. The delete action removes the Svitlobot schedule and its channel post. Because a key authorizes schedule changes, it is stored only encrypted with AES-GCM, never returned or logged. Writes are limited to six per minute per chat and require management access. “Забути ключ” removes the key from this bot only, leaving the Svitlobot schedule intact. The key is also erased when the last manager removes the chat.
 
-Збережені ключі синхронізуються автоматично після змін у джерелі графіків. Щопонеділка після 02:05 за київським часом бот повторно надсилає доступний тижневий графік із запланованими відключеннями, щоб відновити його після перемальовування у Світлоботі. Порожній графік не надсилається.
+Schedules for saved keys synchronize automatically after source changes. Each Monday after 02:05 Kyiv time, the bot resends an available weekly plan containing outages to restore it after Svitlobot redraws its schedule. Empty plans are not sent.
 
-Для цього на сервері потрібен ключ шифрування в `appsettings.Production.json` (без нього розділ відповідає «Світлобот не налаштований на сервері»):
+Configure an encryption key in the server's `appsettings.Production.json`; without it, the UI reports “Світлобот не налаштований на сервері”:
 
 ```json
-{ "Svitlobot": { "KeyEncryptionKey": "<32 випадкові байти в base64>" } }
+{ "Svitlobot": { "KeyEncryptionKey": "<32 random bytes encoded as base64>" } }
 ```
 
-Згенерувати його можна однією командою PowerShell:
+Generate it with PowerShell:
 
 ```powershell
 $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)
 ```
 
-Збережи ключ у надійному місці: якщо його змінити, раніше збережені ключі каналів стануть нечитабельними, і їх доведеться ввести знову. Адресу API за потреби можна змінити налаштуванням `Svitlobot:BaseUrl` (за замовчуванням `https://api.svitlobot.in.ua`).
+Keep the encryption key safe. Changing it makes previously stored channel keys unreadable, requiring users to enter them again. Override the API URL with `Svitlobot:BaseUrl` if needed; the default is `https://api.svitlobot.in.ua`.
 
-## ⚙️ Налаштування
+## ⚙️ Settings
 
-### Зміна частоти перевірки
+### Changing check frequency
 
-Відредагуй cron вираз у файлі `.github/workflows/monitor.yml`:
+Set `GitHub:MonitorIntervalMinutes` on the backend for the primary personal-monitor dispatch interval. To change the backup cron, edit `.github/workflows/monitor.yml`:
 
 ```yaml
 schedule:
-  - cron: "*/30 * * * *" # кожні 30 хвилин
+  - cron: "*/30 * * * *" # Every 30 minutes
 ```
 
-Приклади:
+Examples:
 
-- `*/10 * * * *` - кожні 10 хвилин
-- `0 * * * *` - щогодини
-- `0 */2 * * *` - кожні 2 години
+- `*/10 * * * *` — every 10 minutes
+- `0 * * * *` — hourly
+- `0 */2 * * *` — every 2 hours
 
-GitHub не гарантує точного часу запуску: при навантаженні запуски за розкладом можуть затримуватися або пропускатися (на практиці — інтервали в кілька годин).
+GitHub does not guarantee exact start times: scheduled runs can be delayed or dropped under load, leaving gaps of several hours in observed run history.
 
-Типовий розклад у репозиторії — `7 * * * *` (щогодини) як резерв: регулярні запуски кожні 15 хвилин надсилає спільний бот подією `check-emergency` (`GitHub:MonitorIntervalMinutes`), або будь-який зовнішній планувальник тим самим запитом, що й у розділі про запуск із телефону. Запуски за розкладом і `check-emergency` перевіряють лише регіональне попередження; перевірка за адресою виконується при ручному запуску та події `check-dtek`.
+The default personal-monitor backup is `7 * * * *` (hourly). The shared backend dispatches `check-emergency` every 15 minutes (`GitHub:MonitorIntervalMinutes`); an external scheduler can use the same request described in the phone-trigger section. Scheduled runs and `check-emergency` check only the regional popup; manual workflow runs and `check-dtek` also check the configured address.
 
-## ⚠️ Обмеження
+## ⚠️ Limitations
 
-Моніторинг не зможе працювати у разі недоступності сторінки `/shutdowns` або форми на ній. Під час масштабних екстрених відключень сайт ДТЕК часто перевантажений: у такому разі запуск завершується з помилкою нічого не публікуючи, а наступний запуск (через 15 хвилин) спробує ще раз. Скасування екстрених відключень ніколи не публікується, якщо сторінку не вдалося підтвердити як справжню сторінку ДТЕК.
+The standalone monitor cannot collect data if `/shutdowns` or its form is unavailable. DTEK may be overloaded during widespread emergencies; a failed collection publishes nothing and a subsequent run retries. The backend normally dispatches every 15 minutes, but GitHub runner timing is not guaranteed. Emergency clearance is never published unless the page is confirmed to be a genuine DTEK page.
 
-## 🔧 Повторні спроби
+## 🔧 Retries
 
-Проєкт автоматично намагається виконати операцію повторно у випадку помилки:
+The standalone script retries failed operations:
 
-- Максимум 5 повторних спроб для отримання даних та відправлення повідомлень.
-- Затримка між спробами: 5 секунд.
-- Скасування екстрених відключень підтверджується повторною перевіркою через 30 секунд у тому ж запуску.
-- Якщо всі спроби невдалі, запуск у GitHub Actions завершується з помилкою.
+- Up to five retries for collection and message delivery.
+- A five-second delay between retries.
+- Emergency clearance requires a second check after 30 seconds in the same run.
+- If all attempts fail, the GitHub Actions run fails.
 
-## 🆕 Оновлення
+## 🆕 Updates
 
-Список змін кожної версії та інструкції з оновлення дивись у [Releases](https://github.com/mr-devboy/dtek-monitor/releases).
+See [Releases](https://github.com/mr-devboy/dtek-monitor/releases) for upstream version changes and upgrade instructions.
 
-## 📄 Ліцензія
+## 📄 License
 
-MIT License - використовуй вільно для особистих та комерційних цілей.
+MIT License — free to use for personal and commercial purposes under its terms.
 
 
-### Шаблони повідомлень
+### Message templates
 
-У редакторі «Екстрені відключення» об’єднано початок, районну аварію та зняття:
-перемикач стану відкриває відповідний текст і налаштування. Старі шаблони
-кожного стану зберігаються; райони визначає бекенд.
+The “Екстрені відключення” editor combines emergency onset, district accidents,
+and clearance. A state selector opens the corresponding text and settings.
+Existing per-state templates are retained; the backend determines districts.
 
-Графік — один допис із секціями «сьогодні» та «завтра». Заголовок і дата
-показуються один раз на день, нижче — черги й адреси без повторів у межах дня.
-Якщо графік на завтра ще не оприлюднений, бот прямо пише про це.
-У редакторі графіка є дві частини: «Заголовок і дата» та «Інтервал {відключення}».
-Заголовок підтримує `{шапка}`, `{день_тижня}`, `{дата}`: дата й день тижня
-відповідають своїй секції. `{зміни}` показує додані й прибрані планові
-інтервали порівняно з попереднім графіком цього дня; його можна розмістити
-власноруч у заголовку. Типовий заголовок додає короткий підсумок автоматично;
-власні збережені заголовки не змінюються, доки ви не додасте `{зміни}`.
-Порівнюються планові інтервали тієї самої дати й черги, а не фактично виміряний
-час без світла. Значки та текст можна змінювати.
-Кнопка «Редагувати рядок графіка» на вкладці «Графік» одразу відкриває
-редактор інтервалу. «Керування» та видалення каналу розміщені на «Основне».
-У заголовку графіка та аварійних шаблонах доступні `{регіон}`, `{район}`,
-`{адреса}` із даних бекенду. Відсутні райони й адреси порожні; використовуйте
-`{#район} · {район}{/район}` та `{#адреса}\n📍 {адреса}{/адреса}`.
-Для районної аварії підставляються лише відповідні адреси.
-Старий загальний шаблон `schedule` залишається у збережених даних для
-сумісності, але більше не керує дописом: окремі дати, підсумки й час оновлення
-не додаються автоматично. Це стосується і однієї, і кількох черг.
+A schedule is one post with today and tomorrow sections. Each day's heading and
+date appear once, followed by groups and addresses without duplicates within that
+day. An unpublished tomorrow schedule is explicitly labelled unavailable.
+The editor has two parts: “Заголовок і дата” and “Інтервал {відключення}”.
+The heading supports `{шапка}`, `{день_тижня}`, and `{дата}`, using the date
+and weekday of its own section. `{зміни}` shows planned intervals added or
+removed since the previous schedule for that date and can be placed in a custom
+heading. The default heading includes a short change summary; existing custom
+headings are unchanged until you add `{зміни}`. Comparisons use planned
+intervals for the same date and group, not measured time without power.
+Icons and text are customizable.
+“Редагувати рядок графіка” under “Графік” opens the interval editor directly.
+Channel management and removal are under “Основне”.
+Schedule headings and accident templates support backend values `{регіон}`,
+`{район}`, and `{адреса}`. Missing districts and addresses are empty; use
+`{#район} · {район}{/район}` and `{#адреса}\n📍 {адреса}{/адреса}`.
+District accidents include only matching addresses.
+The legacy `schedule` template remains stored for compatibility but no longer
+controls the post. Separate dates, totals, and update timestamps are not appended
+automatically. This applies to both single-group and multi-group schedules.
 
-`{відключення}` — повторення одного інтервалу. Його вигляд задає
-«Інтервал {відключення}» (шаблон `schedule-line`), наприклад:
+`{відключення}` repeats one outage interval, formatted by
+“Інтервал {відключення}” (the `schedule-line` template), for example:
 `⚡ {початок} → {кінець} · {тривалість_інтервалу} · {частина_доби}`.
-Доступні також `{дата}` й `{день_тижня}`. Рядок підтримує текст і значки,
-без HTML; заголовок підтримує Telegram HTML. Пробіли й роздільники
-зберігаються для всіх інтервалів обох днів. Попередній перегляд та тест
-показують цілий допис. Для підстановок використовується наявний обробник
-фігурних дужок, а не регулярні вирази.
-Аварійні шаблони також мають
-`{дата}`, `{день_тижня}` й `{частина_доби}` (за київським часом).
+`{дата}` and `{день_тижня}` are also available. Interval lines support text
+and icons, not HTML; headings support Telegram HTML. Spaces and separators
+are preserved for every interval on both days. Preview and test actions show
+the complete post. Substitution uses the existing brace-template parser,
+not regular expressions.
+Accident templates also support `{дата}`, `{день_тижня}`, and `{частина_доби}`,
+all based on Kyiv time.
 
-### Перегляд і зрозумілі сповіщення
+### Schedule viewing and clear notifications
 
-- **Переглянути графік**: окремий режим читання в Mini App. Оберіть регіон і
-  чергу без підключення каналу, збереження підписки чи публікації повідомлень.
-  Показуються сьогодні й завтра; неопублікований день не є порожнім графіком.
-  Відлік до наступної зміни ґрунтується лише на плані. Під час відомих
-  екстрених обмежень є попередження, що план може не діяти.
-- **Лише аварійні та екстрені** й компактне оформлення застосовуються лише
-  після явного вибору та підтвердження, а потім зберігаються звичайною кнопкою.
-  Перегляд і пресети самі не надсилають повідомлень і не знімають паузу.
-- Коли ДТЕК прямо повідомляє про стабілізаційні графіки, типове завершальне
-  сповіщення пояснює перехід від екстрених до погодинних відключень. Просте
-  зникнення запису означає лише, що сайт більше його не показує.
-- Відсутність запису за адресою, відсутність відключення в плані та
-  повернення електроенергії — різні речі. Дані сайту й графіка не вимірюють
-  фактичну напругу. Власні шаблони й обраний спосіб завершення гілки
-  (редагування, відповідь, нове повідомлення) зберігаються.
+- **Schedule viewer (“Переглянути графік”):** A read-only Mini App mode.
+  Choose a region and group without connecting a channel, saving a subscription,
+  or posting messages. It shows today and tomorrow; an unpublished day is not
+  treated as an empty schedule. The next-transition countdown is plan-based.
+  Known emergency restrictions display a warning that the plan may not apply.
+- **Emergency/accident-only preset (“Лише аварійні та екстрені”) and compact
+  formatting:** Applied only after explicit selection and confirmation, then
+  persisted with the normal save button. Viewing and presets do not send messages
+  or unpause a chat.
+- When DTEK explicitly announces stabilization schedules, the default clearance
+  explains the transition from emergency to hourly planned outages. A record
+  simply disappearing means only that the website no longer displays it.
+- No address outage record, no planned outage, and actual restoration of power
+  are different things. Website and schedule data do not measure voltage.
+  Custom templates and the chosen thread-closing mode (edit, reply, new message)
+  are preserved.
 
 ### Live Telegram integration tests
 
@@ -516,46 +549,48 @@ directly; production bypasses the model for recognized deterministic notices.
 The offline city/oblast routing matrices additionally cover matching,
 nonmatching, region-wide subscriptions and both source arrival/clearance orders.
 
-### Кілька адрес і черг
+### Multiple addresses and groups
 
-У lite-редакторі можна зберегти до **3 адрес одного регіону**. Для кожної адреси можна
-вибрати кілька черг і підписати їх, наприклад «Під’їзд 1». Кнопка «Знайти адресу»
-відкриває пошук населеного пункту, вулиці й будинку (для Києва — вулиці й будинку).
-Зміна регіону потребує підтвердження видалення старих адрес і черг.
-Після перезавантаження відкривається останній канал і вкладка; єдиний чат
-відкривається без вибору зі списку. Старі клієнти можуть зберігати звичайні налаштування, не
-видаляючи новий список адрес; повний список змінюється через
-`PUT /api/chats/{chatId}/addresses` (`SaveAddressesRequest`). Нове поле `addresses`
-у DTO необов’язкове. Blazor залишається сумісним редактором загальних налаштувань;
-керування списком адрес доступне в lite Mini App.
+The lite editor stores up to **three addresses in one region**. Each address can
+have several groups and a label such as “Під’їзд 1”. “Знайти адресу” opens
+settlement, street, and building lookup (street and building only for Kyiv city).
+Changing region requires confirmation before removing the old addresses and groups.
+Reloading restores the last channel and tab; a single chat opens without a
+selection step. Older clients can save general settings without deleting the
+new address list. Replace the full list through
+`PUT /api/chats/{chatId}/addresses` (`SaveAddressesRequest`); the DTO's `addresses`
+field is optional. Blazor remains compatible for general settings, while
+address-list management is available in the lite Mini App.
 
-Графік усіх черг публікується **одним текстовим дописом** з розділами та підписами.
-Спільна черга кількох адрес показується один раз. Режими редагування, нового допису
-та заміни з видаленням збережені. Довгий допис ділиться на повідомлення в межах
-лімітів Telegram. Для однієї адреси з однією чергою формат і картинка не змінюються.
-Зведеного ANY/ALL графіка для будинку немає: кожна черга показується окремо.
-Попередження для однакового початку відключення надсилається один раз для всіх
-відповідних черг. Тихі години означають надсилання без звуку, а не відкладення.
+All groups are published in **one text post** with sections and labels.
+A group shared by several addresses appears once. Edit, new-message, and
+replace-with-deletion modes are preserved. Long posts are split to fit Telegram
+limits. A single address with one group retains its existing format and image.
+There is no building-wide ANY/ALL aggregate: each group is shown separately.
+An advance warning for a shared outage start is sent once for all matching
+groups. Quiet hours mean silent delivery, not delayed delivery.
 
-Світлобот отримує **один спільний тижневий розклад**: об’єднання півгодинних
-відключень усіх черг, включно з налаштуванням `includeMaybe` при ручному надсиланні.
-Якщо тижневих даних хоча б однієї черги немає, синхронізація чекає, а не відкидає її.
-Понеділкове оновлення зберігається. Із дописів Світлобота використовується **лише
-текст тригера** «Світло зникло» або власна фраза: час очікуваного повернення,
-тривалості та інші дані цих дописів не є джерелом графіка.
+Svitlobot receives **one combined weekly timetable**: the union of half-hour
+outage slots across all groups, respecting `includeMaybe` for manual uploads.
+If any group's weekly data is unavailable, synchronization waits rather than
+omitting that group. Monday refreshes are preserved. Svitlobot channel posts
+provide **only the trigger text**, “Світло зникло” or a custom phrase;
+their estimated restoration times, durations, and other content are not a
+schedule source.
 
-Тригер перевіряє всі адреси й відповідає стисло по кожній. Невизначені випадки
-перевіряються в ДТЕК одним пакетом у межах одного бюджету чату; готові результати
-пакета приходять одним повідомленням. Масив `sub_type_reason` передається перевіркою
-ДТЕК повністю; для адрес без обраних черг він заповнює знайдені черги. Вручну обрані
-черги не перезаписуються. Регіональне сповіщення залишається спільним, аварія черги
-має окремий потік і називає відповідні адреси.
+The trigger assesses every address and replies briefly for each. Unresolved
+cases are checked at DTEK as one batch within a single chat budget; completed
+batch results arrive in one message. The DTEK collector passes the full
+`sub_type_reason` array, filling detected groups for addresses without a group
+selection. Manually selected groups are not overwritten. Regional alerts remain
+shared, while group accidents have a separate stream naming matching addresses.
 
-Міграція `20261020213320_MultiAddressGroups` додає `ChatAddresses` і
-`ChatAddressGroups`, переносить стару адресу/чергу без очищення даних, залишає
-старі колонки читабельними та зберігає ідентифікатори повідомлень. Міграція створена,
-але не застосовується до production в межах розробки. Перед окремим розгортанням
-потрібні резервна копія й звичайний контрольований процес міграції.
+Migration `20261020213320_MultiAddressGroups` adds `ChatAddresses` and
+`ChatAddressGroups`, migrates the legacy address/group without clearing data,
+keeps legacy columns readable, and preserves message IDs. The migration is
+included in the repository; development work does not apply it to production.
+Back up the database and use the normal controlled migration process for a
+separately authorized deployment.
 
 ## Agent skills and engineering audit
 

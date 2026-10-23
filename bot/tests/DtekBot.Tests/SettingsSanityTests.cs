@@ -260,7 +260,7 @@ public class SettingsSanityTests
     public void SchedulesAndAddressChecks_KeepTheirValues()
     {
         Assert.Equal("https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/", Settings.Schedules.BaseUrl);
-        Assert.Equal(5, Settings.Schedules.CacheMinutes);
+        Assert.Equal(10, Settings.Schedules.CacheMinutes);
         Assert.Equal(120, Settings.Schedules.MaxStaleMinutes);
 
         var checks = Settings.AddressChecks;

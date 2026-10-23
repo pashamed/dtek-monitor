@@ -44,6 +44,9 @@ public sealed class MonitoringCycleTests
             Started.Add(regionId);
             return Result.Task;
         }
+
+        public Task<ScheduleSnapshot?> RefreshAsync(string regionId, CancellationToken ct) =>
+            throw new InvalidOperationException("Monitoring ticks must respect the shared schedule refresh window.");
     }
 
     [Fact]

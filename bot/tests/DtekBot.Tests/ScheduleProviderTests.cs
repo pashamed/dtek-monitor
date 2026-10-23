@@ -66,6 +66,7 @@ public sealed class ScheduleProviderTests : IDisposable
 
     public ScheduleProviderTests()
     {
+        _f.Settings.Schedules.CacheMinutes = 5;
         _factory = new FakeHttpClientFactory(_handler);
         _provider = new ScheduleProvider(_factory, _f.Options, _clock, NullLogger<ScheduleProvider>.Instance);
     }
@@ -96,6 +97,35 @@ public sealed class ScheduleProviderTests : IDisposable
         Json(version, "01.01.2026 10:00", (Day1, "45.1", Hours("no", 12)));
 
     // ---- basic fetching ----
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TenMinuteRefreshWindow_IsSharedByFiveMinuteTicksAndReaders(bool failedRefresh)
+    {
+        _f.Settings.Schedules.CacheMinutes = 10;
+        _handler.Enqueue(() => Ok());
+        _handler.Enqueue(() => failedRefresh
+            ? Status(HttpStatusCode.ServiceUnavailable)
+            : Status(HttpStatusCode.NotModified));
+        var first = await _provider.GetAsync("kyiv", CancellationToken.None);
+
+        _clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Same(first, await _provider.GetAsync("kyiv", CancellationToken.None));
+        _clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        Assert.Same(first, await _provider.GetAsync("kyiv", CancellationToken.None));
+        Assert.Single(_handler.Requests);
+
+        _clock.Advance(TimeSpan.FromTicks(1));
+        var refreshed = await _provider.GetAsync("kyiv", CancellationToken.None);
+        Assert.Equal(2, _handler.Requests.Count);
+        Assert.Equal("\"etag-1\"", _handler.Requests[1].IfNoneMatch);
+        Assert.Equal(failedRefresh ? first!.FetchedAt : _clock.Now, refreshed!.FetchedAt);
+
+        _clock.Advance(TimeSpan.FromMinutes(5));
+        await _provider.GetAsync("kyiv", CancellationToken.None);
+        Assert.Equal(2, _handler.Requests.Count);
+    }
 
     [Fact]
     public async Task RuntimeRefresh_BypassesCache_ButKeepsConditionalGet()

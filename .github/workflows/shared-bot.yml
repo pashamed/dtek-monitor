@@ -35,8 +35,8 @@ jobs:
           if [ -n "$INGEST_URL" ] && [ -n "$INGEST_SECRET" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
-            echo "INGEST_URL and INGEST_SECRET are not configured; nothing to do."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::error::INGEST_URL and INGEST_SECRET must be configured."
+            exit 1
           fi
 
       - name: Checkout code
@@ -75,7 +75,6 @@ jobs:
 
       - name: Check all regions
         if: steps.ingest.outputs.configured == 'true' && github.event.action != 'check-addresses'
-        continue-on-error: true
         timeout-minutes: 5
         env:
           # Optional: lets an LLM read which districts a popup names. Any OpenAI-compatible provider works;
@@ -88,14 +87,12 @@ jobs:
       # Cheap when nothing is queued (one HTTP request).
       - name: Check pending addresses
         if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
-        continue-on-error: true
         timeout-minutes: 5
         run: node ./src/check-addresses.js
 
       # Backup for the bot's own Ukrenergo poll: a region-wide emergency is posted at once.
       - name: Check the Ukrenergo status
         if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
-        continue-on-error: true
         timeout-minutes: 2
         run: |
           # IIS answers 411 to a POST that has no length at all, so the empty body announces its length.

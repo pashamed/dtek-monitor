@@ -310,7 +310,7 @@
     },
     "Schedules": {
       "BaseUrl": "https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/",
-      "CacheMinutes": 5,
+      "CacheMinutes": 10,
       "EnableEventNotifications": false,
       "MaxStaleMinutes": 120
     },

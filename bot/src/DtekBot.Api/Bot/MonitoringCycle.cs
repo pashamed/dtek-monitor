@@ -25,7 +25,7 @@ public sealed class MonitoringCycle(
         var popupTask = popups.CollectAsync(ct);
         var gridTask = grid.RefreshAsync(ct);
         var scheduleTasks = regions.Where(r => r.HasSchedules)
-            .Select(r => schedules.RefreshAsync(r.Id, ct)).ToArray();
+            .Select(r => schedules.GetAsync(r.Id, ct)).ToArray();
 
         // No database writes or notifications until every source has completed (or reported unavailable).
         await Task.WhenAll(scheduleTasks.Cast<Task>().Append(popupTask).Append(gridTask));

@@ -1,6 +1,6 @@
 name: Refresh power schedules
 
-# Backup for the bot's own loop, which already pulls the Baskerville schedules every Ticks:IntervalMinutes.
+# Backup schedule evaluation; Baskerville requests share the backend's ten-minute cache.
 on:
   schedule:
     - cron: "2,12,22,32,42,52 * * * *"

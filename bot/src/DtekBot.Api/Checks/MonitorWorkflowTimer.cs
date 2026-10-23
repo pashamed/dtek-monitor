@@ -5,6 +5,7 @@ namespace DtekBot.Api.Checks;
 public sealed class MonitorWorkflowTimer(
     IServiceScopeFactory scopes,
     IConfiguration config,
+    TimeProvider time,
     ILogger<MonitorWorkflowTimer> logger) : BackgroundService
 {
     // Regional popup check only; the per-address check stays with manual runs and check-dtek.
@@ -30,15 +31,15 @@ public sealed class MonitorWorkflowTimer(
 
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
-            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(minutes));
+            await Task.Delay(TimeSpan.FromSeconds(60), time, stoppingToken);
+            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(minutes), time);
             do
             {
                 await RunOnceAsync(stoppingToken);
             }
             while (await timer.WaitForNextTickAsync(stoppingToken));
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Shutting down.
         }

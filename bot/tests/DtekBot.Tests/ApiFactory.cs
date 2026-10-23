@@ -62,6 +62,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         // The built-in tick loop would post on its own in the middle of a test.
         builder.UseSetting("Ticks:Enabled", "false");
+        builder.UseSetting("GitHub:MonitorIntervalMinutes", "0");
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<BotDbContext>>();
