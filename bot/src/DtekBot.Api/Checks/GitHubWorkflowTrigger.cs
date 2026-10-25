@@ -40,8 +40,14 @@ public sealed class GitHubWorkflowTrigger(HttpClient http, IConfiguration config
                 return true;
             }
 
-            // Status only: the body and headers are never logged.
-            logger.LogWarning("Workflow dispatch was rejected with HTTP {Status}", (int)response.StatusCode);
+            // GitHub's error message and the required permissions explain a 401/403; neither contains the token.
+            var reason = (await ReadErrorMessageAsync(response, ct)).Replace(token, "***", StringComparison.Ordinal);
+            var required = response.Headers.TryGetValues("X-Accepted-GitHub-Permissions", out var permissions)
+                ? string.Join(",", permissions)
+                : "n/a";
+            logger.LogWarning(
+                "Workflow dispatch {Event} was rejected with HTTP {Status}: {Reason} (required permissions: {Required})",
+                eventType, (int)response.StatusCode, reason, required);
             return false;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
@@ -53,6 +59,21 @@ public sealed class GitHubWorkflowTrigger(HttpClient http, IConfiguration config
 
             logger.LogWarning("Workflow dispatch failed: {Message}", ex.Message);
             return false;
+        }
+    }
+
+    // Only GitHub's "message" field, truncated; the rest of the body is never logged.
+    private static async Task<string> ReadErrorMessageAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var message = json.RootElement.TryGetProperty("message", out var value) ? value.GetString() : null;
+            return string.IsNullOrWhiteSpace(message) ? "no message" : message.Length > 200 ? message[..200] : message;
+        }
+        catch (JsonException)
+        {
+            return "no message";
         }
     }
 }

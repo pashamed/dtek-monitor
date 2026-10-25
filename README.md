@@ -347,7 +347,9 @@ external keep-alive). In-process timers cannot run while the process is stopped.
 
 To verify timers after a redeploy, open `GET /health`. Its `background` section
 shows `startedAt`, the tick state with `lastCycleAt` and `cycles`, and the
-monitor workflow state with `lastDispatchAt` and `lastDispatchAccepted`. The same
+monitor workflow state with `lastDispatchAt` and `lastDispatchAccepted`. Times in
+`/health` and the log file are Kyiv time with the offset (`+02:00` or `+03:00`);
+log files roll over at Kyiv midnight. The same
 events appear in `logs/app-<date>.log`: `Application started` (with the build
 version), `Built-in ticks started`, `Monitor workflow timer started` (or why a
 timer is off), `First monitoring cycle finished`, one `Monitor workflow

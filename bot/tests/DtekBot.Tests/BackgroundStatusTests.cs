@@ -29,6 +29,24 @@ public sealed class BackgroundStatusTests
     }
 
     [Fact]
+    public void SnapshotUsesKyivTime()
+    {
+        var status = new BackgroundStatus(new FixedTime(new DateTimeOffset(2026, 10, 25, 18, 42, 11, TimeSpan.Zero)));
+        status.Dispatched(true);
+
+        var snapshot = JsonSerializer.SerializeToElement(status.Snapshot(), JsonSerializerOptions.Web);
+
+        Assert.Equal("2026-10-25T20:42:11+02:00", snapshot.GetProperty("startedAt").GetString());
+        Assert.Equal("2026-10-25T20:42:11+02:00",
+            snapshot.GetProperty("monitorWorkflow").GetProperty("lastDispatchAt").GetString());
+    }
+
+    private sealed class FixedTime(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    [Fact]
     public async Task MonitorDispatchIsRecorded()
     {
         var status = new BackgroundStatus(TimeProvider.System);

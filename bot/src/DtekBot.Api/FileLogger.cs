@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DtekBot.Shared;
 
 namespace DtekBot.Api;
 
@@ -20,7 +21,7 @@ public sealed class FileLoggerProvider(string directory) : ILoggerProvider
             lock (_gate)
             {
                 Directory.CreateDirectory(directory);
-                var path = Path.Combine(directory, $"app-{DateTime.UtcNow:yyyyMMdd}.log");
+                var path = Path.Combine(directory, $"app-{KyivTime.FromUtc(DateTimeOffset.UtcNow):yyyyMMdd}.log");
                 File.AppendAllText(path, line + Environment.NewLine);
             }
         }
@@ -50,7 +51,8 @@ public sealed class FileLoggerProvider(string directory) : ILoggerProvider
                 return;
             }
 
-            var line = $"{DateTime.UtcNow:O} [{logLevel}] {category}: {formatter(state, exception)}";
+            // Kyiv time with its offset, e.g. 2026-10-25T20:44:47.988+02:00.
+            var line = $"{KyivTime.FromUtc(DateTimeOffset.UtcNow):yyyy-MM-ddTHH:mm:ss.fffzzz} [{logLevel}] {category}: {formatter(state, exception)}";
             if (exception is not null)
             {
                 line += Environment.NewLine + exception;

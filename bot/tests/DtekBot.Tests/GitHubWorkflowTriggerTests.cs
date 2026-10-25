@@ -243,4 +243,19 @@ public class GitHubWorkflowTriggerTests
 
         Assert.Contains(log.Entries, e => e.Contains("401"));
     }
+
+    [Fact]
+    public async Task Trigger_LogsGitHubReasonAndRequiredPermissionsOnRejection()
+    {
+        var (trigger, _, log) = Create(() => new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent("""{"message":"Resource not accessible by personal access token"}"""),
+            Headers = { { "X-Accepted-GitHub-Permissions", "contents=write" } },
+        });
+
+        await trigger.TriggerAsync("check-emergency", CancellationToken.None);
+
+        Assert.Contains(log.Entries, e => e.Contains("403") && e.Contains("check-emergency")
+            && e.Contains("Resource not accessible by personal access token") && e.Contains("contents=write"));
+    }
 }

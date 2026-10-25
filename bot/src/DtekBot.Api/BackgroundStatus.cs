@@ -1,3 +1,5 @@
+using DtekBot.Shared;
+
 namespace DtekBot.Api;
 
 // In-memory state of the background timers, reported by /health so a redeploy can be verified without server logs.
@@ -41,21 +43,25 @@ public sealed class BackgroundStatus(TimeProvider time)
         }
     }
 
+    // Times are reported in Kyiv time (+02:00 or +03:00) so they match the operator's clock.
     public object Snapshot()
     {
         lock (_lock)
         {
             return new
             {
-                startedAt = StartedAt,
-                ticks = new { state = _ticks, lastCycleAt = _lastCycleAt, cycles = _cycles },
+                startedAt = KyivTime.FromUtc(StartedAt),
+                ticks = new { state = _ticks, lastCycleAt = ToKyiv(_lastCycleAt), cycles = _cycles },
                 monitorWorkflow = new
                 {
                     state = _monitorWorkflow,
-                    lastDispatchAt = _lastDispatchAt,
+                    lastDispatchAt = ToKyiv(_lastDispatchAt),
                     lastDispatchAccepted = _lastDispatchAccepted,
                 },
             };
         }
     }
+
+    private static DateTimeOffset? ToKyiv(DateTimeOffset? moment) =>
+        moment is { } value ? KyivTime.FromUtc(value) : null;
 }
