@@ -114,7 +114,27 @@ async function readRegion(browser, region) {
   }
 }
 
-async function ingestAddressDirectory(region, streets) {
+// DTEK lists some settlements (e.g. in occupied areas) with no streets; the API needs at least one street per city.
+function cleanAddressDirectory(directory) {
+  return Object.fromEntries(
+    Object.entries(directory)
+      .filter(([city]) => city.trim())
+      .map(([city, streets]) => [
+        city,
+        Array.isArray(streets)
+          ? streets.filter((street) => typeof street === "string" && street.trim())
+          : [],
+      ])
+      .filter(([, streets]) => streets.length > 0)
+  )
+}
+
+async function ingestAddressDirectory(region, directory) {
+  const streets = cleanAddressDirectory(directory)
+  const skipped = Object.keys(directory).length - Object.keys(streets).length
+  if (skipped > 0) console.log(`ℹ️ ${region.Id} address directory: skipped ${skipped} cities without streets`)
+  if (Object.keys(streets).length === 0) throw new Error("address directory has no streets")
+
   const response = await fetch(ingestEndpoint("address-directory"), {
     method: "POST",
     headers: {

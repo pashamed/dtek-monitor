@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -31,6 +32,7 @@ builder.Services.AddDbContext<BotDbContext>(o =>
     o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<BackgroundStatus>();
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IYasnoClient, YasnoClient>(client =>
 {
@@ -178,7 +180,18 @@ if (app.Configuration.GetValue("Database:AutoMigrate", false))
     scope.ServiceProvider.GetRequiredService<BotDbContext>().Database.Migrate();
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// Shows in logs/app-<date>.log when IIS starts, recycles or idles out the process; background timers run only in between.
+var lifetimeLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DtekBot.Lifetime");
+app.Lifetime.ApplicationStarted.Register(() => lifetimeLogger.LogInformation(
+    "Application started: version {Version}, environment {Environment}, process {ProcessId}",
+    typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion, app.Environment.EnvironmentName, Environment.ProcessId));
+app.Lifetime.ApplicationStopping.Register(() => lifetimeLogger.LogWarning(
+    "Application stopping (redeploy, IIS recycle or idle timeout); background timers pause until the next start"));
+
+// Plain web JSON: the Telegram options would drop zero/false values such as a rejected last dispatch.
+var healthJson = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+app.MapGet("/health", (BackgroundStatus status) =>
+    Results.Json(new { status = "ok", background = status.Snapshot() }, healthJson));
 
 app.MapMiniAppApi();
 app.MapGroupIngest();

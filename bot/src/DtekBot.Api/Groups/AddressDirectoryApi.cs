@@ -45,20 +45,22 @@ public static class AddressDirectoryApi
 
             var streetCount = 0;
             var normalized = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            var skipped = 0;
             foreach (var (city, streets) in body.Streets)
             {
-                if (string.IsNullOrWhiteSpace(city) || city.Length > MaxNameLength
-                    || streets is null)
+                if (city.Length > MaxNameLength)
                 {
                     return Results.BadRequest(new { error = "invalid address directory entry" });
                 }
 
-                var validStreets = streets
+                var validStreets = streets?
                     .Where(street => !string.IsNullOrWhiteSpace(street))
-                    .ToArray();
-                if (validStreets.Length == 0)
+                    .ToArray() ?? [];
+                // DTEK lists some settlements (e.g. in occupied areas) without streets; they cannot be looked up anyway.
+                if (string.IsNullOrWhiteSpace(city) || validStreets.Length == 0)
                 {
-                    return Results.BadRequest(new { error = "invalid address directory entry" });
+                    skipped++;
+                    continue;
                 }
 
                 streetCount += validStreets.Length;
@@ -73,11 +75,22 @@ public static class AddressDirectoryApi
                 }
             }
 
+            if (normalized.Count == 0)
+            {
+                return Results.BadRequest(new { error = "address directory has no streets" });
+            }
+
             await addresses.ImportDirectoryAsync(region, normalized, ct);
             logger.LogInformation(
-                "Address directory refreshed for {RegionId}: {Cities} cities, {Streets} streets",
-                region.Id, normalized.Count, streetCount);
-            return Results.Ok(new { regionId = region.Id, cities = normalized.Count, streets = streetCount });
+                "Address directory refreshed for {RegionId}: {Cities} cities, {Streets} streets, {Skipped} skipped",
+                region.Id, normalized.Count, streetCount, skipped);
+            return Results.Ok(new
+            {
+                regionId = region.Id,
+                cities = normalized.Count,
+                streets = streetCount,
+                skipped,
+            });
         });
     }
 }

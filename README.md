@@ -345,6 +345,16 @@ finish rather than publishing intermediate state.
 **IIS must keep the application running** (Always On, no idle timeout, or an
 external keep-alive). In-process timers cannot run while the process is stopped.
 
+To verify timers after a redeploy, open `GET /health`. Its `background` section
+shows `startedAt`, the tick state with `lastCycleAt` and `cycles`, and the
+monitor workflow state with `lastDispatchAt` and `lastDispatchAccepted`. The same
+events appear in `logs/app-<date>.log`: `Application started` (with the build
+version), `Built-in ticks started`, `Monitor workflow timer started` (or why a
+timer is off), `First monitoring cycle finished`, one `Monitor workflow
+dispatched` line per dispatch, and an hourly `Monitoring cycles alive` line.
+`Application stopping` marks a redeploy, recycle, or idle shutdown. A gap after
+it means the timers were not running.
+
 When a chat is enabled or changed during an active emergency, the bot delivers the applicable current alert immediately instead of waiting for another website change.
 
 **Deployment**
