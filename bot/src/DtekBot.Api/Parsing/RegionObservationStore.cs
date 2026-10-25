@@ -11,7 +11,9 @@ public sealed class RegionObservationStore(BotDbContext db, PopupClassifier clas
         var result = classifier.Classify(observation.RegionId, observation.PopupText, observation.Structured);
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == observation.RegionId, ct);
         if (state is not null && observation.ObservedAt < state.ObservedAt) return (false, result);
-        var changed = state is null || state.Hash != result.Hash;
+        // Same text can classify differently after a rule or settings change; that must reach the stored state too.
+        var changed = state is null || state.Hash != result.Hash || state.Kind != result.Kind
+            || !(state.PartIdList ?? []).SequenceEqual(result.PartIds, StringComparer.Ordinal);
         if (state is null)
         {
             state = new RegionState { RegionId = observation.RegionId };

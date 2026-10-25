@@ -115,4 +115,44 @@ public sealed class MonitoringCycleTests
         await cycle.RunAsync(CancellationToken.None);
         Assert.Equal(PopupKind.Emergency, factory.WithDb(db => db.RegionStates.Single().Kind));
     }
+
+    [Fact]
+    public async Task SameText_StoredWithAnOlderClassification_IsReclassifiedAndAlertsTheNamedDistrict()
+    {
+        const string popup = "<h6>Шановні клієнти!</h6><p>За наказом НЕК Укренерго <strong>25.10</strong> діють<strong> стабілізаційні </strong>відключення електроенергії.</p>"
+            + "<p>У <strong>Бучанському, Обухівському та Фастівському</strong> районів зникло світло через аварію в мережі.</p>";
+        using var factory = new ApiFactory();
+        using var client = factory.CreateClient();
+        using var scope = factory.Services.CreateScope();
+        var sp = scope.ServiceProvider;
+        var current = sp.GetRequiredService<PopupClassifier>().Classify("kyiv-oblast", popup);
+        // What a build that ranked stabilization above accidents stored for the very same text.
+        factory.WithDb(db =>
+        {
+            db.RegionStates.Add(new RegionState
+            {
+                RegionId = "kyiv-oblast", Kind = PopupKind.Stabilization, Hash = current.Hash, PartIdList = current.PartIds,
+                PopupText = popup, NormalizedText = current.NormalizedText,
+                ObservedAt = factory.Clock.Now.AddMinutes(-5), UpdatedAt = factory.Clock.Now.AddMinutes(-5),
+            });
+            db.Channels.Add(new Channel { ChatId = 321, RegionId = "kyiv-oblast", PartIdList = ["bucha"], IsActive = true });
+            db.Channels.Add(new Channel { ChatId = 322, RegionId = "kyiv-oblast", PartIdList = ["brovary"], IsActive = true });
+        });
+        var popups = new Popups();
+        var grid = new Grid();
+        var schedules = new Schedules();
+        popups.Result.SetResult([new("kyiv-oblast", popup, factory.Clock.Now)]);
+        grid.Result.SetResult(null);
+        schedules.Result.SetResult(null);
+        var cycle = new MonitoringCycle(popups, grid, schedules, sp.GetRequiredService<GridTickService>(),
+            sp.GetRequiredService<RegionObservationStore>(), sp.GetRequiredService<RegionAlertCoordinator>(),
+            sp.GetRequiredService<ScheduleNotifier>(), sp.GetRequiredService<SvitlobotScheduleSyncService>(),
+            sp.GetRequiredService<IOptionsMonitor<DtekSettings>>(), NullLogger<MonitoringCycle>.Instance);
+
+        await cycle.RunAsync(CancellationToken.None);
+
+        Assert.Equal(PopupKind.Accident, factory.WithDb(db => db.RegionStates.Single(s => s.RegionId == "kyiv-oblast").Kind));
+        Assert.Single(factory.Bot.SentTo(321));
+        Assert.Empty(factory.Bot.SentTo(322));
+    }
 }
