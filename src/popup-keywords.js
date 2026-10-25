@@ -33,9 +33,10 @@ function containsNotNegated(text, phrase) {
 
 export function classifyKind(text, rules) {
   if (containsAny(text, rules.Cancelled)) return "cancelled"
+  // A stabilization notice can also report an accident in some districts; the accident is the alert.
+  if (containsAny(text, rules.Accident)) return "accident"
   if ((rules.Stabilization ?? []).some((p) => containsNotNegated(text, p)))
     return "stabilization"
-  if (containsAny(text, rules.Accident)) return "accident"
   if (containsAny(text, rules.Emergency)) return "emergency"
   return "unknown"
 }

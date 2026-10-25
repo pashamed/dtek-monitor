@@ -22,6 +22,10 @@ public class PopupClassifierTests
     private const string EmergencyOrder =
         "<p>За наказом НЕК Укренерго введені<strong> екстрені відключення</strong> <strong>електроенергії</strong>.<br>Графіки відключень при цьому не діють. Будь ласка, розумно споживайте електроенергію.</p>";
 
+    private const string OblastStabilizationWithDistrictAccident =
+        "<h6>Шановні клієнти!</h6><p>За наказом НЕК Укренерго <strong>25.10</strong> діють<strong> стабілізаційні </strong>відключення електроенергії.&nbsp;&nbsp;</p>"
+        + "<p>У <strong>Бучанському, Обухівському та Фастівському</strong> районів зникло світло через аварію в мережі. Фахівці вже працюють над відновленням електропостачання.</p>";
+
     private static PopupClassifier CreateClassifier()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "dtek-settings.json");
@@ -37,6 +41,34 @@ public class PopupClassifierTests
 
         Assert.Equal(PopupKind.Stabilization, result.Kind);
         Assert.False(result.IsAlert);
+    }
+
+    [Fact]
+    public void StabilizationPopup_WithADistrictAccident_IsAnAccidentForThoseDistricts()
+    {
+        var result = CreateClassifier().Classify("kyiv-oblast", OblastStabilizationWithDistrictAccident);
+
+        Assert.Equal(PopupKind.Accident, result.Kind);
+        Assert.True(result.IsAlert);
+        Assert.Equal(["bucha", "obukhiv", "fastiv"], result.PartIds);
+    }
+
+    public static IEnumerable<object[]> AllDistricts() =>
+        RealSettings.Load().Regions.SelectMany(r => r.Parts.Select(p => new object[] { r.Id, p.Id }));
+
+    [Theory]
+    [MemberData(nameof(AllDistricts))]
+    public void StabilizationPopup_WithAnAccident_IsAnAccidentForAnyNamedDistrict(string regionId, string partId)
+    {
+        var part = RealSettings.Load().Regions.Single(r => r.Id == regionId).Parts.Single(p => p.Id == partId);
+        var text = "<p>За наказом НЕК Укренерго діють стабілізаційні відключення електроенергії.</p>"
+            + $"<p>{part.Name}: зникло світло через аварію в мережі.</p>";
+
+        var result = CreateClassifier().Classify(regionId, text);
+
+        Assert.Equal(PopupKind.Accident, result.Kind);
+        // A district also covers its configured child parts (towns inside it).
+        Assert.Equal([partId, .. part.Children ?? []], result.PartIds);
     }
 
     [Fact]

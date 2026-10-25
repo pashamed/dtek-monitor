@@ -127,15 +127,16 @@ public sealed partial class PopupClassifier(IOptionsMonitor<DtekSettings> option
             return PopupKind.Cancelled;
         }
 
+        // A stabilization notice can also report an accident in some districts; the accident is the alert.
+        if (ContainsAny(text, rules.Accident))
+        {
+            return PopupKind.Accident;
+        }
+
         // "діють стабілізаційні…" is stabilization, but "не діють стабілізаційні…" is not.
         if (rules.Stabilization.Any(phrase => ContainsNotNegated(text, phrase)))
         {
             return PopupKind.Stabilization;
-        }
-
-        if (ContainsAny(text, rules.Accident))
-        {
-            return PopupKind.Accident;
         }
 
         if (ContainsAny(text, rules.Emergency))

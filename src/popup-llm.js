@@ -238,8 +238,9 @@ export async function structurePopup(region, popupText, rules) {
 
   if (!popupText?.trim() || !region.Parts?.length) return null
 
-  // Stabilization notices carry no district alerts, so they never need the model.
-  if (isStabilizationNotice(popupText)) return null
+  // Plain stabilization notices carry no district alerts. With rules, keywordsUnderstand decides, so a
+  // stabilization notice that also reports an accident still reaches the model when its districts are unknown.
+  if (!rules && isStabilizationNotice(popupText)) return null
 
   // Only an unfamiliar popup is sent to the model: when the keywords already understood it there is nothing to add.
   if (rules && keywordsUnderstand(popupText, region, rules)) {

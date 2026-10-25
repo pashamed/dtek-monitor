@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import { keywordsUnderstand } from "./popup-keywords.js"
+import { classifyKind, findParts, keywordsUnderstand, normalize } from "./popup-keywords.js"
 
 const settings = JSON.parse(
   readFileSync(
@@ -51,4 +51,28 @@ test("stabilization and cancellation notices never need the model", () => {
 
 test("an empty popup is understood (nothing to ask)", () => {
   assert.equal(keywordsUnderstand("", region("kyiv"), rules), true)
+})
+
+test("a stabilization notice reporting a district accident is an accident for those districts", () => {
+  const popup =
+    "<h6>Шановні клієнти!</h6><p>За наказом НЕК Укренерго <strong>25.10</strong> діють<strong> стабілізаційні </strong>відключення електроенергії.&nbsp;&nbsp;</p>" +
+    "<p>У <strong>Бучанському, Обухівському та Фастівському</strong> районів зникло світло через аварію в мережі. Фахівці вже працюють над відновленням електропостачання.</p>"
+  const text = normalize(popup)
+  assert.equal(classifyKind(text, rules), "accident")
+  assert.deepEqual(findParts(text, region("kyiv-oblast")), ["bucha", "obukhiv", "fastiv"])
+  assert.equal(keywordsUnderstand(popup, region("kyiv-oblast"), rules), true)
+})
+
+test("a stabilization notice reporting an accident applies to any named district", () => {
+  for (const r of settings.Dtek.Regions) {
+    for (const part of r.Parts) {
+      const popup =
+        "<p>За наказом НЕК Укренерго діють стабілізаційні відключення електроенергії.</p>" +
+        `<p>${part.Name}: зникло світло через аварію в мережі.</p>`
+      const text = normalize(popup)
+      assert.equal(classifyKind(text, rules), "accident", `${r.Id}/${part.Id}`)
+      assert.deepEqual(findParts(text, r), [part.Id], `${r.Id}/${part.Id}`)
+      assert.equal(keywordsUnderstand(popup, r, rules), true, `${r.Id}/${part.Id}`)
+    }
+  }
 })

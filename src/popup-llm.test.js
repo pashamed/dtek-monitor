@@ -118,3 +118,24 @@ test("a poisoned cache entry is not trusted", async () => {
   // The poisoned "all" contradicts the text, so it is ignored; the model (unreachable here) then fails -> keywords.
   assert.equal(await structurePopup(oblast, unfamiliar, rules), null)
 })
+
+test("a stabilization notice that also reports an accident in unrecognised districts reaches the model", async () => {
+  const popup =
+    "За наказом НЕК Укренерго діють стабілізаційні відключення. На Обухівщині та в сусідніх районах зникло світло через аварію в мережі."
+  const normalized = popup.replace(/\s+/g, " ").trim().toLowerCase()
+  const key = crypto.createHash("sha256").update(`${oblast.Id}\n${normalized}`).digest("hex")
+  mkdirSync(path.join(scratch, "artifacts"), { recursive: true })
+  writeFileSync(
+    path.join(scratch, "artifacts", "popup-structure.json"),
+    JSON.stringify({ [oblast.Id]: { key, result: { scope: "districts", districts: ["obukhiv"] } } })
+  )
+
+  assert.deepEqual(await structurePopup(oblast, popup, rules), {
+    scope: "districts",
+    districts: ["obukhiv"],
+  })
+  assert.equal(
+    await structurePopup(oblast, "За наказом НЕК Укренерго діють стабілізаційні відключення.", rules),
+    null
+  )
+})

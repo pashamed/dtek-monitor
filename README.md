@@ -138,7 +138,7 @@ npm run watch
 2. **Assessment:** The script reads the outage cause, start time, and end time. It sends no address notification if there is no outage or the outage is scheduled.
 3. **Delivery:** An accidental or emergency outage produces a Telegram notification, sent silently at night (22:00–08:00).
 4. **Message updates:**
-   - A regional emergency/accident notice is sent as **one message**. Changes to the notice or grid status **edit that message**; stabilization notices are not treated as new emergencies.
+   - A regional emergency/accident notice is sent as **one message**. Changes to the notice or grid status **edit that message**; stabilization notices are not treated as new emergencies, unless the same notice also reports an accident (“через аварію”), which is then sent to the named districts.
    - Clearance is sent as a **reply** only after two checks of a genuine DTEK page in the same run, 30 seconds apart. It **closes the thread**; the next emergency starts a new message.
    - After clearance, the grid-status line in the clearance message continues to be edited until a new emergency starts.
    - Address outages edit the current message while time and cause are unchanged; otherwise they reply to the previous message. The first message of a new day is separate.
