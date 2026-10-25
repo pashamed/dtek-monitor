@@ -132,6 +132,11 @@ foreach (var assetName in liteAssetNames)
 var liteAssetVersion = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(liteAssetContent.ToString())))
     .ToLowerInvariant()[..16];
 
+// The informational version carries a "+commit" suffix from the SDK; the release number is enough here.
+var appVersion = (typeof(Program).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "dev")
+    .Split('+')[0];
+
 // The Mini App (plain HTML/JS) lives in wwwroot/lite.
 app.Use(async (context, next) =>
 {
@@ -154,7 +159,8 @@ app.Use(async (context, next) =>
 
     using var reader = new StreamReader(index.CreateReadStream());
     var html = (await reader.ReadToEndAsync(context.RequestAborted))
-        .Replace("__ASSET_VERSION__", liteAssetVersion, StringComparison.Ordinal);
+        .Replace("__ASSET_VERSION__", liteAssetVersion, StringComparison.Ordinal)
+        .Replace("__APP_VERSION__", appVersion, StringComparison.Ordinal);
     context.Response.ContentType = "text/html; charset=utf-8";
     context.Response.Headers.CacheControl = "no-store";
     if (context.Request.Method == HttpMethods.Get)

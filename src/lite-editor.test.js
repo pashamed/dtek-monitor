@@ -43,7 +43,7 @@ test('read-only viewer, saved diagnostics and opt-in presets preserve subscripti
     ].map(s => ({ ...s, description: '', defaultTemplate: 'Типовий текст' }));
     await page.route('https://lite.test/**', async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname;
-      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<meta name="app-version" content="3.0.0"><div id="app"></div><script type="module" src="/app.js"></script>' });
       if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
       if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() });
       let data = {};
@@ -89,6 +89,7 @@ test('read-only viewer, saved diagnostics and opt-in presets preserve subscripti
       await route.fulfill({ json: data });
     });
     await page.goto('https://lite.test/');
+    await page.getByText('Версія застосунку: 3.0.0 · Версія інтерфейсу: dev', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Переглянути графік', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Переглянути графік', exact: true });
     await dialog.getByText('Джерело недоступне Спробуйте ще раз', { exact: true }).waitFor();

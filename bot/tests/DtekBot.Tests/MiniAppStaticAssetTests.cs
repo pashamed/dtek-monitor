@@ -32,4 +32,31 @@ public sealed class MiniAppStaticAssetTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
         Assert.Contains("no-cache", asset.Headers.CacheControl?.ToString());
     }
+
+    [Fact]
+    public async Task MiniAppDocument_CarriesTheReleasedAppVersion()
+    {
+        using var client = _factory.CreateClient();
+
+        var html = await client.GetStringAsync("/lite");
+
+        var appVersion = Regex.Match(html, """<meta name="app-version" content="([^"]*)">""").Groups[1].Value;
+        Assert.Matches("""^\d+\.\d+\.\d+$""", appVersion);
+        Assert.DoesNotContain("__APP_VERSION__", html);
+
+        using var manifest = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(RepositoryRoot(), ".release-please-manifest.json")));
+        Assert.Equal(manifest.RootElement.GetProperty(".").GetString(), appVersion);
+    }
+
+    private static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, ".release-please-manifest.json")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root was not found.");
+    }
 }

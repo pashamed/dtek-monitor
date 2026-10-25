@@ -3,6 +3,10 @@ const tg = window.Telegram && window.Telegram.WebApp;
 const app = document.getElementById('app');
 const initData = tg ? tg.initData : '';
 const UI_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
+const APP_VERSION = (() => {
+  const value = document.querySelector('meta[name="app-version"]')?.content || '';
+  return value && !value.startsWith('__') ? value : 'dev';
+})();
 
 const SLOT_GROUPS = [['alerts', 'Екстрені відключення'], ['local', 'Локальні відключення'], ['stabilization', 'Графік (стабілізація)']];
 const KIND_OF = { emergency: 'Emergency', regional: 'Accident', local: 'Emergency', ended: 'Ended' };
@@ -101,7 +105,7 @@ function show(...nodes) {
 }
 
 function versionFooter() {
-  return h('footer', { class: 'ui-version', text: 'Версія інтерфейсу: ' + UI_VERSION });
+  return h('footer', { class: 'ui-version', text: 'Версія застосунку: ' + APP_VERSION + ' · Версія інтерфейсу: ' + UI_VERSION });
 }
 
 async function api(method, path, body) {

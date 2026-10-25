@@ -11,6 +11,8 @@
     { "type": "ci", "section": "Continuous Integration" }
   ],
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": ["bot/src/DtekBot.Api/DtekBot.Api.csproj"]
+    }
   }
 }

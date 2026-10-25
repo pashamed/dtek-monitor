@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Kept in sync with .release-please-manifest.json by release-please. -->
+    <Version>3.0.0</Version> <!-- x-release-please-version -->
   </PropertyGroup>
 
   <ItemGroup>

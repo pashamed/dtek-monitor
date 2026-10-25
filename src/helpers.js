@@ -2,18 +2,34 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { LAST_MESSAGE_FILE } from "./constants.js"
+import { normalize } from "./popup-keywords.js"
 
 export function capitalize(str) {
   if (typeof str !== "string") return ""
   return str[0].toUpperCase() + str.slice(1).toLowerCase()
 }
 
+// The same accident phrases the shared bot uses (Dtek.Classification.Accident).
+const ACCIDENT_PHRASES = JSON.parse(
+  fs.readFileSync(
+    new URL("../bot/src/DtekBot.Api/dtek-settings.json", import.meta.url),
+    "utf8"
+  )
+).Dtek.Classification.Accident
+
 export function isEmergencyNotice(notice) {
   return (
     typeof notice === "string" &&
     notice.length > 0 &&
-    !isStabilizationNotice(notice)
+    // A stabilization notice can also report an accident; the accident is the alert.
+    (!isStabilizationNotice(notice) || isAccidentNotice(notice))
   )
+}
+
+export function isAccidentNotice(notice) {
+  if (typeof notice !== "string") return false
+  const text = normalize(notice)
+  return ACCIDENT_PHRASES.some((phrase) => text.includes(phrase.toLowerCase()))
 }
 
 export function isStabilizationNotice(notice) {
