@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -62,7 +63,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         // The built-in tick loop would post on its own in the middle of a test.
         builder.UseSetting("Ticks:Enabled", "false");
-        builder.UseSetting("GitHub:MonitorIntervalMinutes", "0");
+        builder.ConfigureAppConfiguration(config => config.AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Dtek:Timers:MonitorWorkflowIntervalMinutes"] = "0" }));
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<BotDbContext>>();

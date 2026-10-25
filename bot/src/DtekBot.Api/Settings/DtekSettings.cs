@@ -10,6 +10,32 @@ public sealed class DtekSettings
     public AddressCheckSettings AddressChecks { get; set; } = new();
     public ScheduleSettings Schedules { get; set; } = new();
     public GridSettings Grid { get; set; } = new();
+    public TimerSettings Timers { get; set; } = new();
+}
+
+// Background timings. Interval changes apply from the next tick; turning a timer on or off needs a restart.
+public sealed class TimerSettings
+{
+    // Monitoring cycle: DTEK popups, Ukrenergo, schedules (Baskerville per Schedules:CacheMinutes) and notifications.
+    public int MonitoringIntervalMinutes { get; set; } = 5;
+    public int MonitoringStartDelaySeconds { get; set; } = 30;
+
+    // check-emergency dispatch of the standalone monitor workflow; 0 turns it off.
+    public int MonitorWorkflowIntervalMinutes { get; set; } = 15;
+    public int MonitorWorkflowStartDelaySeconds { get; set; } = 60;
+
+    // How long a monitoring cycle waits for the check-regions browser fallback.
+    public int BrowserWaitSeconds { get; set; } = 180;
+
+    // Kyiv day and time of the weekly forced Svitlobot rewrite, so the new week is drawn from fresh data.
+    public DayOfWeek SvitlobotWeeklyRefreshDay { get; set; } = DayOfWeek.Monday;
+    public TimeSpan SvitlobotWeeklyRefreshTime { get; set; } = new(3, 0, 0);
+
+    public TimeSpan MonitoringInterval => TimeSpan.FromMinutes(Math.Clamp(MonitoringIntervalMinutes, 1, 60));
+    public TimeSpan MonitoringStartDelay => TimeSpan.FromSeconds(Math.Clamp(MonitoringStartDelaySeconds, 0, 600));
+    public TimeSpan MonitorWorkflowInterval => TimeSpan.FromMinutes(Math.Clamp(MonitorWorkflowIntervalMinutes, 5, 60));
+    public TimeSpan MonitorWorkflowStartDelay => TimeSpan.FromSeconds(Math.Clamp(MonitorWorkflowStartDelaySeconds, 0, 600));
+    public TimeSpan BrowserWait => TimeSpan.FromSeconds(Math.Clamp(BrowserWaitSeconds, 1, 240));
 }
 
 public sealed class RegionSettings
@@ -106,6 +132,9 @@ public sealed class PollingSettings
 public sealed class ScheduleSettings
 {
     public string BaseUrl { get; set; } = "https://raw.githubusercontent.com/Baskerville42/outage-data-ua/main/";
+
+    // How often Baskerville is checked for new schedules; checks run on monitoring cycles, so use a multiple of
+    // Timers:MonitoringIntervalMinutes.
     public int CacheMinutes { get; set; } = 10;
     public bool EnableEventNotifications { get; set; }
 

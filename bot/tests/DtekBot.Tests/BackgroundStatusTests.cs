@@ -21,7 +21,7 @@ public sealed class BackgroundStatusTests
 
         Assert.Equal("ok", json.RootElement.GetProperty("status").GetString());
         Assert.Equal("off: Ticks:Enabled=false", background.GetProperty("ticks").GetProperty("state").GetString());
-        Assert.Equal("off: GitHub:MonitorIntervalMinutes=0",
+        Assert.Equal("off: Timers:MonitorWorkflowIntervalMinutes=0",
             background.GetProperty("monitorWorkflow").GetProperty("state").GetString());
         Assert.Equal(0, background.GetProperty("ticks").GetProperty("cycles").GetInt64());
         Assert.Equal(JsonValueKind.Null, background.GetProperty("monitorWorkflow").GetProperty("lastDispatchAt").ValueKind);
@@ -53,7 +53,8 @@ public sealed class BackgroundStatusTests
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowTrigger>(new FakeWorkflowTrigger { Result = true });
         var timer = new MonitorWorkflowTimer(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
-            new ConfigurationBuilder().Build(), TimeProvider.System, NullLogger<MonitorWorkflowTimer>.Instance, status);
+            new ConfigurationBuilder().Build(), new StaticOptions(new DtekBot.Api.Settings.DtekSettings()),
+            TimeProvider.System, NullLogger<MonitorWorkflowTimer>.Instance, status);
 
         await timer.RunOnceAsync(CancellationToken.None);
 

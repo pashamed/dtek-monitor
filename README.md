@@ -282,7 +282,7 @@ The **Mini App** opens from the bot's private-chat menu at `/lite/`. It uses pla
   "Bot": { "Token": "…", "WebhookSecret": "…" },
   "Ingest": { "Secret": "…" },
   "App": { "PublicUrl": "https://your-host.example" },
-  "GitHub": { "Repository": "owner/dtek-monitor", "DispatchToken": "…", "MonitorIntervalMinutes": 15 }
+  "GitHub": { "Repository": "owner/dtek-monitor", "DispatchToken": "…" }
 }
 ```
 
@@ -294,32 +294,50 @@ The default provider is Google Gemini Flash-Lite. Obtain a key from [Google AI S
 
 This step runs in **GitHub Actions**, not the web application. Set `LLM_API_KEY` and, if needed, `LLM_BASE_URL` / `LLM_MODEL` under the workflow repository's **Settings → Secrets and variables → Actions**. The API does not use an `LLM_API_KEY` value from `appsettings.Production.json`.
 
-`GitHub:DispatchToken` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new) restricted to this repository with **Contents: Read and write**, as in the external-trigger setup. It dispatches `check-addresses` to `shared-bot.yml`. Without it, queued requests depend on a later backup run; the hourly cron is not a guaranteed deadline. The same token dispatches `check-emergency` to the standalone `monitor.yml` every `GitHub:MonitorIntervalMinutes` (default 15, `0` disables it). Keep the token only in private hosting configuration, such as `appsettings.Production.json`; never log it.
+`GitHub:DispatchToken` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new) restricted to this repository with **Contents: Read and write**, as in the external-trigger setup. It dispatches `check-addresses` to `shared-bot.yml`. Without it, queued requests depend on a later backup run; the hourly cron is not a guaranteed deadline. The same token dispatches `check-emergency` to the standalone `monitor.yml` every `Dtek:Timers:MonitorWorkflowIntervalMinutes` (default 15, `0` disables it). Keep the token only in private hosting configuration, such as `appsettings.Production.json`; never log it.
 
 To limit GitHub Actions and DTEK load, `AddressChecks` in `dtek-settings.json` defines per-chat cooldowns, daily budgets, result caching, a minimum dispatch interval, shared checks per street, and a maximum number of streets per run.
 
-The backend runs a coordinated cycle every 5 minutes (`Ticks:IntervalMinutes`;
-disable with `Ticks:Enabled=false`). DTEK popups and the Ukrenergo feed are
-collected in parallel with schedule reads. Baskerville requests use a shared
-10-minute refresh window (`Dtek:Schedules:CacheMinutes` in
-`bot/src/DtekBot.Api/dtek-settings.json`); intervening cycles and Mini App reads
+Backend timings live in the `Timers` section of
+`bot/src/DtekBot.Api/dtek-settings.json`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Timers:MonitoringIntervalMinutes` | 5 | Coordinated monitoring cycle (1–60) |
+| `Timers:MonitoringStartDelaySeconds` | 30 | Delay before the first cycle after startup |
+| `Timers:MonitorWorkflowIntervalMinutes` | 15 | `check-emergency` dispatch to `monitor.yml` (5–60; `0` disables it) |
+| `Timers:MonitorWorkflowStartDelaySeconds` | 60 | Delay before the first dispatch after startup |
+| `Timers:BrowserWaitSeconds` | 180 | Wait for the `check-regions` browser fallback (1–240) |
+| `Timers:SvitlobotWeeklyRefreshDay` | `Monday` | Kyiv day of the weekly forced Svitlobot rewrite |
+| `Timers:SvitlobotWeeklyRefreshTime` | `03:00` | Kyiv time of that rewrite; it runs on the first cycle at or after it |
+| `Schedules:CacheMinutes` | 10 | How often Baskerville is checked for new schedules |
+
+The file reloads on save: a changed interval applies from the next tick and is
+shown in `/health`. Turning a timer on or off (`0`) and `Ticks:Enabled`, which is
+a hosting setting, need an application restart.
+
+The backend runs a coordinated cycle every 5 minutes (disable with
+`Ticks:Enabled=false`). DTEK popups and the Ukrenergo feed are
+collected in parallel with schedule reads. Baskerville is checked every 10
+minutes (`Schedules:CacheMinutes`) on the cycle that reaches that interval;
+keep it a multiple of `MonitoringIntervalMinutes`. Intervening cycles and Mini App reads
 reuse that copy rather than forcing another network request. Due refreshes use
 ETag conditional requests. A failed request backs off for the same window and
 keeps the last usable copy, without treating unavailable data as an all-clear.
 The first cycle starts after 30 seconds; cycles do not overlap. Only after source
 collection completes does the backend reconcile alerts, evaluate schedule posts
 and reminders, and sync Svitlobot. Notification evaluation stays at 5 minutes;
-the 10-minute refresh window does not slow it down.
+the 10-minute Baskerville interval does not slow it down.
 
 | Function | Primary trigger | Separate GitHub workflow / backup |
 |---|---|---|
 | Personal regional-popup monitor (`src/monitor.js`) | Backend `MonitorWorkflowTimer`: every 15 minutes, first dispatch after 60 seconds | `monitor.yml`: `check-emergency`, manual / `check-dtek`, hourly cron |
-| Baskerville schedules and schedule notifications | Backend cycle: 5-minute evaluation, 10-minute shared source refresh window | `schedule-refresh.yml`: 10-minute best-effort cron |
+| Baskerville schedules and schedule notifications | Backend cycle: 5-minute evaluation, Baskerville checked every 10 minutes | `schedule-refresh.yml`: 10-minute best-effort cron |
 | Shared-bot regional browser fallback | Backend dispatches `check-regions` only when direct DTEK collection fails | `shared-bot.yml`: correlated region results; hourly backup |
 | Shared-bot address checks | On demand, after schedule and regional-emergency assessment | `shared-bot.yml`: `check-addresses`; hourly backup drains queued requests |
 
 The personal monitor timer needs `GitHub:Repository` and `GitHub:DispatchToken`.
-`GitHub:MonitorIntervalMinutes` defaults to 15; set it to `0` to disable personal
+`Timers:MonitorWorkflowIntervalMinutes` defaults to 15; set it to `0` to disable personal
 monitor dispatches without disabling shared-bot monitoring. An accepted dispatch
 does not guarantee an immediate GitHub runner start. Failed dispatches are logged
 and retried at the next interval. GitHub cron remains a best-effort backup, not a
@@ -331,7 +349,7 @@ If direct DTEK access is blocked, including HTTP 200 containing an Imperva page,
 the bot dispatches `check-regions` using `GitHub:DispatchToken`. The browser
 workflow (`shared-bot.yml`) checks only unavailable regions, in parallel;
 `collectionId` correlates replies with the current cycle. The wait is bounded by
-`Ticks:BrowserWaitSeconds` (default 180 seconds, maximum 240). Failed dispatches,
+`Timers:BrowserWaitSeconds` (default 180 seconds, maximum 240). Failed dispatches,
 timeouts, and unavailable sources are logged; previous state is preserved,
 not interpreted as an all-clear. Late replies pass through normal ingest,
 and older observations cannot overwrite newer ones. GitHub Actions does not
@@ -368,9 +386,9 @@ When a chat is enabled or changed during an active emergency, the bot delivers t
 
 The bot writes logs to `logs/app-<date>.log` beside the application.
 
-**Svitlobot (optional).** Each connected Telegram channel using [svitlobot.in.ua](https://svitlobot.in.ua) can have its own `channel_key` in the Mini App. One user can manage several channels; keys, groups, and automatic sync belong to the selected channel only. A button uploads its typical weekly outage plan from the source data. Possible outages count as outages by default; `includeMaybe: false` includes only definite ones. A matching group preset is selected when available and can be changed. This updates Svitlobot schedule data, not an immediate Telegram message; Svitlobot controls its own posting and pinning. To post immediately through this bot, use “Надіслати графік у канал зараз”. The delete action removes the Svitlobot schedule and its channel post. Because a key authorizes schedule changes, it is stored only encrypted with AES-GCM, never returned or logged. Writes are limited to six per minute per chat and require management access. “Забути ключ” removes the key from this bot only, leaving the Svitlobot schedule intact. The key is also erased when the last manager removes the chat.
+**Svitlobot (optional).** Each connected Telegram channel using [svitlobot.in.ua](https://svitlobot.in.ua) can have its own `channel_key` in the Mini App. One user can manage several channels; keys, groups, and automatic sync belong to the selected channel only. A button uploads its typical weekly outage plan from the source data. Possible outages count as outages by default; `includeMaybe: false` includes only definite ones. A matching group preset is selected when available and can be changed. This updates Svitlobot schedule data, not an immediate Telegram message; Svitlobot controls its own posting and pinning. To post immediately through this bot, use “Надіслати графік у канал зараз”. The delete action removes the Svitlobot schedule and its channel post. Because a key authorizes schedule changes, it is stored only encrypted with AES-GCM, never returned or logged. Requests to Svitlobot are limited to one per minute per chat, following Svitlobot's integration rules; channel reads are cached for 5 minutes. All actions require management access. “Забути ключ” removes the key from this bot only, leaving the Svitlobot schedule intact. The key is also erased when the last manager removes the chat.
 
-Schedules for saved keys synchronize automatically after source changes. Each Monday after 02:05 Kyiv time, the bot resends an available weekly plan containing outages to restore it after Svitlobot redraws its schedule. Empty plans are not sent.
+Schedules for saved keys synchronize automatically after source changes. Each week at `Timers:SvitlobotWeeklyRefreshDay`/`SvitlobotWeeklyRefreshTime` (Monday 03:00 Kyiv time by default), the bot resends the weekly plan so Svitlobot draws the new week from fresh data. When the plan becomes empty, the bot clears a schedule it wrote earlier with `removeChannelTimetable`, which also removes Svitlobot's schedule post from the channel; schedules the bot never wrote are left alone. Svitlobot only accepts a plan with at least one full outage hour, so a plan with only half-hour outages is skipped. A plan Svitlobot rejects (`invalid data`, unknown key) is not resent until the plan or key changes; network errors are retried after 30 s, 1, 2, then 5 minutes.
 
 Configure an encryption key in the server's `appsettings.Production.json`; without it, the UI reports “Світлобот не налаштований на сервері”:
 
@@ -390,7 +408,7 @@ Keep the encryption key safe. Changing it makes previously stored channel keys u
 
 ### Changing check frequency
 
-Set `GitHub:MonitorIntervalMinutes` on the backend for the primary personal-monitor dispatch interval. To change the backup cron, edit `.github/workflows/monitor.yml`:
+Set `Timers:MonitorWorkflowIntervalMinutes` in `dtek-settings.json` for the primary personal-monitor dispatch interval. To change the backup cron, edit `.github/workflows/monitor.yml`:
 
 ```yaml
 schedule:
@@ -405,7 +423,7 @@ Examples:
 
 GitHub does not guarantee exact start times: scheduled runs can be delayed or dropped under load, leaving gaps of several hours in observed run history.
 
-The default personal-monitor backup is `7 * * * *` (hourly). The shared backend dispatches `check-emergency` every 15 minutes (`GitHub:MonitorIntervalMinutes`); an external scheduler can use the same request described in the phone-trigger section. Scheduled runs and `check-emergency` check only the regional popup; manual workflow runs and `check-dtek` also check the configured address.
+The default personal-monitor backup is `7 * * * *` (hourly). The shared backend dispatches `check-emergency` every 15 minutes (`Timers:MonitorWorkflowIntervalMinutes`); an external scheduler can use the same request described in the phone-trigger section. Scheduled runs and `check-emergency` check only the regional popup; manual workflow runs and `check-dtek` also check the configured address.
 
 ## ⚠️ Limitations
 

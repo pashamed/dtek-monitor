@@ -88,7 +88,7 @@ public sealed class DtekPopupCollectorTests
         });
         using var services = new ServiceCollection().AddSingleton<IWorkflowTrigger>(trigger).BuildServiceProvider();
         collector = new(new Factory(), services.GetRequiredService<IServiceScopeFactory>(), fixture.Options,
-            new ConfigurationBuilder().Build(), TimeProvider.System, NullLogger<DtekPopupCollector>.Instance);
+            TimeProvider.System, NullLogger<DtekPopupCollector>.Instance);
         var result = await collector.CollectAsync(CancellationToken.None);
         Assert.Equal(fixture.Options.CurrentValue.Regions.Count(r => !string.IsNullOrEmpty(r.SiteUrl)), result.Count);
         Assert.Contains(result, r => r.RegionId == "odesa" && r.PopupText!.Contains("Графіки"));
@@ -101,7 +101,7 @@ public sealed class DtekPopupCollectorTests
         using var fixture = new DispatcherFixture();
         using var services = new ServiceCollection().AddSingleton<IWorkflowTrigger>(new Trigger(_ => false)).BuildServiceProvider();
         var collector = new DtekPopupCollector(new Factory(), services.GetRequiredService<IServiceScopeFactory>(), fixture.Options,
-            new ConfigurationBuilder().Build(), TimeProvider.System, NullLogger<DtekPopupCollector>.Instance);
+            TimeProvider.System, NullLogger<DtekPopupCollector>.Instance);
         var result = await collector.CollectAsync(CancellationToken.None);
         Assert.Equal("odesa", Assert.Single(result).RegionId);
     }
@@ -117,10 +117,9 @@ public sealed class DtekPopupCollectorTests
             return true;
         });
         using var services = new ServiceCollection().AddSingleton<IWorkflowTrigger>(trigger).BuildServiceProvider();
-        var config = new ConfigurationBuilder().AddInMemoryCollection(
-            new Dictionary<string, string?> { ["Ticks:BrowserWaitSeconds"] = "1" }).Build();
+        fixture.Settings.Timers.BrowserWaitSeconds = 1;
         var collector = new DtekPopupCollector(new Factory(), services.GetRequiredService<IServiceScopeFactory>(), fixture.Options,
-            config, TimeProvider.System, NullLogger<DtekPopupCollector>.Instance);
+            TimeProvider.System, NullLogger<DtekPopupCollector>.Instance);
         var result = await collector.CollectAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("odesa", Assert.Single(result).RegionId);
         Assert.False(collector.Accept(collectionId, new("kyiv", null, DateTimeOffset.UtcNow)));

@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using DtekBot.Api.Checks;
+using DtekBot.Api.Settings;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,13 +11,14 @@ namespace DtekBot.Tests;
 public class MonitorWorkflowTimerTests
 {
     private static MonitorWorkflowTimer Create(IWorkflowTrigger? trigger, Dictionary<string, string?>? settings = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null, int minutes = 15)
     {
         var services = new ServiceCollection();
         if (trigger is not null) services.AddSingleton(trigger);
         var config = new ConfigurationBuilder().AddInMemoryCollection(settings ?? []).Build();
+        var options = new StaticOptions(new DtekSettings { Timers = { MonitorWorkflowIntervalMinutes = minutes } });
         return new MonitorWorkflowTimer(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
-            config, time ?? TimeProvider.System, NullLogger<MonitorWorkflowTimer>.Instance);
+            config, options, time ?? TimeProvider.System, NullLogger<MonitorWorkflowTimer>.Instance);
     }
 
     private sealed class ControlledTime : TimeProvider
@@ -33,14 +35,20 @@ public class MonitorWorkflowTimerTests
 
     private sealed class ControlledTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) : ITimer
     {
-        public TimeSpan DueTime { get; } = dueTime;
-        public TimeSpan Period { get; } = period;
+        public TimeSpan DueTime { get; private set; } = dueTime;
+        public TimeSpan Period { get; private set; } = period;
+        public TaskCompletionSource Changed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Disposed { get; private set; }
         public void Fire()
         {
             if (!Disposed) callback(state);
         }
-        public bool Change(TimeSpan dueTime, TimeSpan period) => throw new NotSupportedException();
+        public bool Change(TimeSpan dueTime, TimeSpan period)
+        {
+            (DueTime, Period) = (dueTime, period);
+            Changed.TrySetResult();
+            return true;
+        }
         public void Dispose() => Disposed = true;
         public ValueTask DisposeAsync()
         {
@@ -92,6 +100,36 @@ public class MonitorWorkflowTimerTests
     }
 
     [Fact]
+    public async Task AnEditedInterval_AppliesFromTheNextDispatch()
+    {
+        var time = new ControlledTime();
+        var trigger = new RecordingTrigger();
+        var settings = new DtekSettings();
+        using var timer = new MonitorWorkflowTimer(
+            new ServiceCollection().AddSingleton<IWorkflowTrigger>(trigger).BuildServiceProvider()
+                .GetRequiredService<IServiceScopeFactory>(),
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GitHub:Repository"] = "owner/repo",
+                ["GitHub:DispatchToken"] = "test-token",
+            }).Build(),
+            new StaticOptions(settings), time, NullLogger<MonitorWorkflowTimer>.Instance);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await timer.StartAsync(timeout.Token);
+        (await time.Timers.Reader.ReadAsync(timeout.Token)).Fire();
+        var periodic = await time.Timers.Reader.ReadAsync(timeout.Token);
+        await trigger.Events.Reader.ReadAsync(timeout.Token);
+
+        settings.Timers.MonitorWorkflowIntervalMinutes = 30;
+        periodic.Fire();
+        await trigger.Events.Reader.ReadAsync(timeout.Token);
+        await periodic.Changed.Task.WaitAsync(timeout.Token);
+
+        Assert.Equal(TimeSpan.FromMinutes(30), periodic.Period);
+        await timer.StopAsync(timeout.Token);
+    }
+
+    [Fact]
     public async Task ATick_DispatchesTheEmergencyOnlyMonitorEvent()
     {
         var trigger = new FakeWorkflowTrigger();
@@ -111,18 +149,17 @@ public class MonitorWorkflowTimerTests
     }
 
     [Theory]
-    [InlineData("0", "owner/repo", "token")]
-    [InlineData("15", null, "token")]
-    [InlineData("15", "owner/repo", null)]
-    public async Task WhenOffOrNotConfigured_NothingIsDispatched(string minutes, string? repository, string? token)
+    [InlineData(0, "owner/repo", "token")]
+    [InlineData(15, null, "token")]
+    [InlineData(15, "owner/repo", null)]
+    public async Task WhenOffOrNotConfigured_NothingIsDispatched(int minutes, string? repository, string? token)
     {
         var trigger = new FakeWorkflowTrigger();
         var timer = Create(trigger, new()
         {
-            ["GitHub:MonitorIntervalMinutes"] = minutes,
             ["GitHub:Repository"] = repository,
             ["GitHub:DispatchToken"] = token,
-        });
+        }, minutes: minutes);
 
         await timer.StartAsync(CancellationToken.None);
         await timer.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5));

@@ -20,7 +20,6 @@ public sealed class DtekPopupCollector(
     IHttpClientFactory http,
     IServiceScopeFactory scopes,
     IOptionsMonitor<DtekSettings> options,
-    IConfiguration config,
     TimeProvider time,
     ILogger<DtekPopupCollector> logger) : IDtekPopupCollector
 {
@@ -58,7 +57,7 @@ public sealed class DtekPopupCollector(
                 return results;
             }
 
-            var timeout = TimeSpan.FromSeconds(Math.Clamp(config.GetValue("Ticks:BrowserWaitSeconds", 180), 1, 240));
+            var timeout = options.CurrentValue.Timers.BrowserWait;
             try
             {
                 await Task.WhenAll(replies.Values.Select(r => r.Task)).WaitAsync(timeout, time, ct);

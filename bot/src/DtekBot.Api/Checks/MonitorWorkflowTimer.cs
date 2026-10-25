@@ -1,3 +1,6 @@
+using DtekBot.Api.Settings;
+using Microsoft.Extensions.Options;
+
 namespace DtekBot.Api.Checks;
 
 // GitHub's own cron is best-effort and often skips hours, so the backend dispatches the personal monitor workflow
@@ -5,6 +8,7 @@ namespace DtekBot.Api.Checks;
 public sealed class MonitorWorkflowTimer(
     IServiceScopeFactory scopes,
     IConfiguration config,
+    IOptionsMonitor<DtekSettings> options,
     TimeProvider time,
     ILogger<MonitorWorkflowTimer> logger,
     BackgroundStatus? status = null) : BackgroundService
@@ -14,11 +18,11 @@ public sealed class MonitorWorkflowTimer(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var minutes = config.GetValue("GitHub:MonitorIntervalMinutes", 15);
-        if (minutes <= 0)
+        var timers = options.CurrentValue.Timers;
+        if (timers.MonitorWorkflowIntervalMinutes <= 0)
         {
-            status?.SetMonitorWorkflow("off: GitHub:MonitorIntervalMinutes=0");
-            logger.LogInformation("Monitor workflow timer is off (GitHub:MonitorIntervalMinutes=0)");
+            status?.SetMonitorWorkflow("off: Timers:MonitorWorkflowIntervalMinutes=0");
+            logger.LogInformation("Monitor workflow timer is off (Timers:MonitorWorkflowIntervalMinutes=0)");
             return;
         }
 
@@ -29,18 +33,19 @@ public sealed class MonitorWorkflowTimer(
             return;
         }
 
-        minutes = Math.Clamp(minutes, 5, 60);
-        status?.SetMonitorWorkflow($"running: every {minutes} min");
-        logger.LogInformation("Monitor workflow timer started: first {Event} dispatch in 60 s, then every {Minutes} min",
-            WorkflowEvent, minutes);
+        var interval = timers.MonitorWorkflowInterval;
+        status?.SetMonitorWorkflow($"running: every {interval.TotalMinutes:0} min");
+        logger.LogInformation("Monitor workflow timer started: first {Event} dispatch in {Seconds} s, then every {Minutes} min",
+            WorkflowEvent, timers.MonitorWorkflowStartDelay.TotalSeconds, interval.TotalMinutes);
 
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(60), time, stoppingToken);
-            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(minutes), time);
+            await Task.Delay(timers.MonitorWorkflowStartDelay, time, stoppingToken);
+            using var timer = new PeriodicTimer(interval, time);
             do
             {
                 await RunOnceAsync(stoppingToken);
+                interval = ApplyInterval(timer, interval);
             }
             while (await timer.WaitForNextTickAsync(stoppingToken));
         }
@@ -49,6 +54,17 @@ public sealed class MonitorWorkflowTimer(
             status?.SetMonitorWorkflow("stopped");
             logger.LogInformation("Monitor workflow timer stopped");
         }
+    }
+
+    // dtek-settings.json reloads on change, so a new interval applies from the next dispatch. 0 needs a restart.
+    private TimeSpan ApplyInterval(PeriodicTimer timer, TimeSpan current)
+    {
+        var timers = options.CurrentValue.Timers;
+        if (timers.MonitorWorkflowIntervalMinutes <= 0 || timers.MonitorWorkflowInterval == current) return current;
+        timer.Period = timers.MonitorWorkflowInterval;
+        status?.SetMonitorWorkflow($"running: every {timer.Period.TotalMinutes:0} min");
+        logger.LogInformation("Monitor workflow interval changed to {Minutes} min", timer.Period.TotalMinutes);
+        return timer.Period;
     }
 
     public async Task RunOnceAsync(CancellationToken ct)

@@ -112,10 +112,11 @@ public sealed class ScheduleProviderTests : IDisposable
 
         _clock.Advance(TimeSpan.FromMinutes(5));
         Assert.Same(first, await _provider.GetAsync("kyiv", CancellationToken.None));
-        _clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        _clock.Advance(TimeSpan.FromMinutes(5) - ScheduleProvider.TickJitter - TimeSpan.FromTicks(1));
         Assert.Same(first, await _provider.GetAsync("kyiv", CancellationToken.None));
         Assert.Single(_handler.Requests);
 
+        // A five-minute tick that fires a moment before the ten-minute mark still checks Baskerville.
         _clock.Advance(TimeSpan.FromTicks(1));
         var refreshed = await _provider.GetAsync("kyiv", CancellationToken.None);
         Assert.Equal(2, _handler.Requests.Count);
@@ -184,7 +185,7 @@ public sealed class ScheduleProviderTests : IDisposable
         _handler.Enqueue(() => Ok());
         var first = await _provider.GetAsync("kyiv", CancellationToken.None);
 
-        _clock.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(59));
+        _clock.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(54));
         var second = await _provider.GetAsync("kyiv", CancellationToken.None);
 
         Assert.Single(_handler.Requests);

@@ -19,8 +19,11 @@ public sealed class SvitlobotScheduleSyncService(
     ILogger<SvitlobotScheduleSyncService> logger)
 {
     private const string StateKeyPrefix = "svitlobot-schedule:";
+    private const string FailedStateKeyPrefix = "svitlobot-schedule-failed:";
     private const string WeeklyRefreshStateKeyPrefix = "svitlobot-weekly-refresh:";
-    private static readonly TimeSpan WeeklyRefreshTime = new(2, 5, 0);
+
+    // Stored instead of a signature after the backend cleared the schedule it had written.
+    private const string RemovedMarker = "removed";
     private static readonly TimeSpan WriteSpacing = TimeSpan.FromMilliseconds(100);
 
     public async Task<int> TickAsync(CancellationToken ct)
@@ -40,13 +43,18 @@ public sealed class SvitlobotScheduleSyncService(
 
         var regionSettings = options.CurrentValue;
         var states = await db.KeyValues
-            .Where(state => state.Key.StartsWith(StateKeyPrefix) || state.Key.StartsWith(WeeklyRefreshStateKeyPrefix))
+            .Where(state => state.Key.StartsWith(StateKeyPrefix)
+                || state.Key.StartsWith(FailedStateKeyPrefix)
+                || state.Key.StartsWith(WeeklyRefreshStateKeyPrefix))
             .ToDictionaryAsync(state => state.Key, ct);
         var localNow = KyivTime.FromUtc(time.GetUtcNow());
-        var weeklyRefreshDate = localNow.DayOfWeek == DayOfWeek.Monday && localNow.TimeOfDay >= WeeklyRefreshTime
+        var timers = regionSettings.Timers;
+        var weeklyRefreshDate = localNow.DayOfWeek == timers.SvitlobotWeeklyRefreshDay
+            && localNow.TimeOfDay >= timers.SvitlobotWeeklyRefreshTime
             ? localNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
             : null;
         var updated = 0;
+        var dirty = false;
 
         foreach (var regionChannels in channels.GroupBy(channel => channel.RegionId))
         {
@@ -82,75 +90,120 @@ public sealed class SvitlobotScheduleSyncService(
                 }
 
                 var stateKey = StateKey(channel.ChatId);
-                var signature = Signature(region.Id, string.Join(",", channel.GroupIds()), timetable);
+                var failedKey = FailedStateKey(channel.ChatId);
                 var refreshKey = WeeklyRefreshStateKey(channel.ChatId);
-                var refreshDue = weeklyRefreshDate is not null
-                    && (!states.TryGetValue(refreshKey, out var previousRefresh) || previousRefresh.Value != weeklyRefreshDate);
-                var signatureChanged = !states.TryGetValue(stateKey, out var previous) || previous.Value != signature;
-                if (!signatureChanged && !refreshDue)
+                var signature = Signature(region.Id, string.Join(",", channel.GroupIds()), timetable);
+                states.TryGetValue(stateKey, out var previous);
+                states.TryGetValue(failedKey, out var failed);
+                var remove = !WeeklyPreset.HasOutages(timetable);
+                var refreshDue = false;
+                if (remove)
                 {
-                    continue;
-                }
-
-                if (!WeeklyPreset.HasOutages(timetable))
-                {
-                    continue;
-                }
-
-                if (SvitlobotWriteLimiter.IsLimited(channel.ChatId, time.GetUtcNow()))
-                {
-                    logger.LogInformation("Svitlobot schedule sync deferred by write limit for chat {ChatId}", channel.ChatId);
-                    continue;
-                }
-
-                var result = await svitlobot.SetTimetableAsync(key, timetable, ct);
-                if (!result.Ok)
-                {
-                    logger.LogWarning(
-                        "Svitlobot schedule sync failed for chat {ChatId}: {Failure}",
-                        channel.ChatId, result.Failure);
-                    continue;
-                }
-
-                if (previous is null)
-                {
-                    previous = new KeyValue { Key = stateKey, Value = signature };
-                    db.KeyValues.Add(previous);
-                    states[stateKey] = previous;
+                    // Only a schedule this backend wrote is cleared; removal also deletes the channel's schedule post.
+                    if (previous is null || previous.Value == RemovedMarker)
+                    {
+                        continue;
+                    }
                 }
                 else
                 {
-                    previous.Value = signature;
+                    refreshDue = weeklyRefreshDate is not null
+                        && (!states.TryGetValue(refreshKey, out var previousRefresh) || previousRefresh.Value != weeklyRefreshDate);
+                    if (previous?.Value == signature && !refreshDue)
+                    {
+                        continue;
+                    }
                 }
 
-                if (refreshDue)
+                if (failed?.Value == signature)
                 {
-                    if (states.TryGetValue(refreshKey, out var refreshState))
+                    continue;
+                }
+
+                if (!remove && !WeeklyPreset.IsStorable(timetable))
+                {
+                    logger.LogWarning(
+                        "Svitlobot schedule sync skipped for chat {ChatId}: the week has only half-hour outages, which Svitlobot does not accept",
+                        channel.ChatId);
+                    SetState(states, failedKey, signature);
+                    dirty = true;
+                    continue;
+                }
+
+                var now = time.GetUtcNow();
+                if (SvitlobotRequestLimiter.IsBackingOff(channel.ChatId, now))
+                {
+                    continue;
+                }
+
+                if (SvitlobotRequestLimiter.IsLimited(channel.ChatId, now))
+                {
+                    logger.LogInformation("Svitlobot schedule sync deferred by request limit for chat {ChatId}", channel.ChatId);
+                    continue;
+                }
+
+                var result = remove
+                    ? await svitlobot.RemoveAsync(key, ct)
+                    : await svitlobot.SetTimetableAsync(key, timetable, ct);
+                SvitlobotRequestLimiter.Invalidate(channel.ChatId);
+                if (!result.Ok)
+                {
+                    if (result.Failure == SvitlobotFailure.Unavailable)
                     {
-                        refreshState.Value = weeklyRefreshDate!;
+                        var pause = SvitlobotRequestLimiter.RecordFailure(channel.ChatId, time.GetUtcNow());
+                        logger.LogWarning(
+                            "Svitlobot schedule sync failed for chat {ChatId}: {Failure}; next attempt in {Pause}",
+                            channel.ChatId, result.Failure, pause);
                     }
                     else
                     {
-                        refreshState = new KeyValue { Key = refreshKey, Value = weeklyRefreshDate! };
-                        db.KeyValues.Add(refreshState);
-                        states[refreshKey] = refreshState;
+                        // Repeating the same request would get the same answer; wait for a new schedule or key.
+                        SetState(states, failedKey, signature);
+                        dirty = true;
+                        logger.LogWarning(
+                            "Svitlobot schedule sync failed for chat {ChatId}: {Failure}; waiting for a schedule or key change",
+                            channel.ChatId, result.Failure);
                     }
+
+                    continue;
+                }
+
+                SvitlobotRequestLimiter.RecordSuccess(channel.ChatId);
+                if (failed is not null)
+                {
+                    db.KeyValues.Remove(failed);
+                    states.Remove(failedKey);
+                }
+
+                SetState(states, stateKey, remove ? RemovedMarker : signature);
+                if (refreshDue)
+                {
+                    SetState(states, refreshKey, weeklyRefreshDate!);
+                }
+
+                if (remove)
+                {
+                    logger.LogInformation("Svitlobot schedule removed for chat {ChatId}: the week has no planned outages", channel.ChatId);
                 }
 
                 updated++;
+                dirty = true;
                 await Task.Delay(WriteSpacing, ct);
             }
         }
 
-        if (updated > 0)
+        if (dirty)
         {
             await db.SaveChangesAsync(ct);
+        }
+
+        if (updated > 0)
+        {
             logger.LogInformation("Svitlobot weekly schedules synchronized for {Count} channels", updated);
         }
 
         return updated;
     }
-
     public async Task MarkSyncedAsync(long chatId, string regionId, string groupId, string timetable, CancellationToken ct)
     {
         var key = StateKey(chatId);
@@ -164,18 +217,41 @@ public sealed class SvitlobotScheduleSyncService(
         {
             state.Value = signature;
         }
+
+        var failedKey = FailedStateKey(chatId);
+        var failed = await db.KeyValues.FirstOrDefaultAsync(item => item.Key == failedKey, ct);
+        if (failed is not null)
+        {
+            db.KeyValues.Remove(failed);
+        }
+
+        SvitlobotRequestLimiter.RecordSuccess(chatId);
     }
 
     public async Task ResetAsync(long chatId, CancellationToken ct)
     {
-        var state = await db.KeyValues.FirstOrDefaultAsync(item => item.Key == StateKey(chatId), ct);
-        if (state is not null)
+        var keys = new[] { StateKey(chatId), FailedStateKey(chatId) };
+        var states = await db.KeyValues.Where(item => keys.Contains(item.Key)).ToListAsync(ct);
+        db.KeyValues.RemoveRange(states);
+        SvitlobotRequestLimiter.RecordSuccess(chatId);
+        SvitlobotRequestLimiter.Invalidate(chatId);
+    }
+
+    private void SetState(Dictionary<string, KeyValue> states, string key, string value)
+    {
+        if (states.TryGetValue(key, out var state))
         {
-            db.KeyValues.Remove(state);
+            state.Value = value;
+            return;
         }
+
+        state = new KeyValue { Key = key, Value = value };
+        db.KeyValues.Add(state);
+        states[key] = state;
     }
 
     private static string StateKey(long chatId) => $"{StateKeyPrefix}{chatId}";
+    private static string FailedStateKey(long chatId) => $"{FailedStateKeyPrefix}{chatId}";
     private static string WeeklyRefreshStateKey(long chatId) => $"{WeeklyRefreshStateKeyPrefix}{chatId}";
 
     private static string Signature(string regionId, string groupId, string timetable)

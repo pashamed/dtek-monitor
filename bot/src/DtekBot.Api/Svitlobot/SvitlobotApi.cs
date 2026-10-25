@@ -65,17 +65,26 @@ public static class SvitlobotApi
                 return Json(new ApiError("Ключ має неправильний формат."), 400);
             }
 
-            if (SvitlobotWriteLimiter.IsLimited(chatId, time.GetUtcNow()))
+            SvitlobotResult<SvitlobotChannelInfo> info;
+            if (SvitlobotRequestLimiter.TryGetCached(chatId, key, time.GetUtcNow(), out var cached))
+            {
+                info = SvitlobotResult<SvitlobotChannelInfo>.Success(cached);
+            }
+            else if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
             {
                 return TooMany();
             }
+            else
+            {
+                info = await svitlobot.GetChannelAsync(key, ct);
+            }
 
-            var info = await svitlobot.GetChannelAsync(key, ct);
             if (!info.Ok)
             {
                 return Failed(info);
             }
 
+            SvitlobotRequestLimiter.Cache(chatId, key, info.Value!, time.GetUtcNow());
             var stored = protector.Protect(key);
             if (stored is null)
             {
@@ -127,6 +136,7 @@ public static class SvitlobotApi
             ChatAccessService access,
             SvitlobotKeyProtector protector,
             ISvitlobotClient svitlobot,
+            TimeProvider time,
             CancellationToken ct) =>
         {
             if (!protector.IsConfigured)
@@ -154,8 +164,24 @@ public static class SvitlobotApi
                 return Json(UnreadableKey, 400);
             }
 
+            if (SvitlobotRequestLimiter.TryGetCached(chatId, key, time.GetUtcNow(), out var cached))
+            {
+                return Json(State(cached), 200);
+            }
+
+            if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
+            {
+                return TooMany();
+            }
+
             var info = await svitlobot.GetChannelAsync(key, ct);
-            return info.Ok ? Json(State(info.Value!), 200) : Failed(info);
+            if (!info.Ok)
+            {
+                return Failed(info);
+            }
+
+            SvitlobotRequestLimiter.Cache(chatId, key, info.Value!, time.GetUtcNow());
+            return Json(State(info.Value!), 200);
         });
 
         // A masked check value, so the user can tell which key is saved; the key itself is never returned.
@@ -236,12 +262,13 @@ public static class SvitlobotApi
                 return error!;
             }
 
-            if (SvitlobotWriteLimiter.IsLimited(chatId, time.GetUtcNow()))
+            if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
             {
                 return TooMany();
             }
 
             var result = await svitlobot.SetTemplateAsync(key, request.TemplateId, ct);
+            SvitlobotRequestLimiter.Invalidate(chatId);
             return result.Ok
                 ? Json(new SvitlobotResultDto("Шаблон графіка встановлено у Світлоботі.", true), 200)
                 : Failed(result);
@@ -325,12 +352,18 @@ public static class SvitlobotApi
                 return Json(new ApiError($"У тижневому графіку черги {channel.GroupId} немає запланованих відключень, надсилати нічого.{hint}"), 400);
             }
 
-            if (SvitlobotWriteLimiter.IsLimited(chatId, time.GetUtcNow()))
+            if (!WeeklyPreset.IsStorable(timetable))
+            {
+                return Json(new ApiError($"Світлобот приймає графік лише з повною годиною відключення, а в черзі {channel.GroupId} є тільки півгодинні."), 400);
+            }
+
+            if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
             {
                 return TooMany();
             }
 
             var result = await svitlobot.SetTimetableAsync(key, timetable, ct);
+            SvitlobotRequestLimiter.Invalidate(chatId);
             if (!result.Ok)
             {
                 return Failed(result);
@@ -371,12 +404,13 @@ public static class SvitlobotApi
                 return error!;
             }
 
-            if (SvitlobotWriteLimiter.IsLimited(chatId, time.GetUtcNow()))
+            if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
             {
                 return TooMany();
             }
 
             var result = await svitlobot.RemoveAsync(key, ct);
+            SvitlobotRequestLimiter.Invalidate(chatId);
             return result.Ok
                 ? Json(new SvitlobotResultDto("Графік видалено зі Світлобота.", false), 200)
                 : Failed(result);

@@ -326,6 +326,15 @@
       "DispatchMinIntervalMinutes": 3,
       "MaxStreetsPerRun": 20,
       "RequestTimeoutMinutes": 15
+    },
+    "Timers": {
+      "MonitoringIntervalMinutes": 5,
+      "MonitoringStartDelaySeconds": 30,
+      "MonitorWorkflowIntervalMinutes": 15,
+      "MonitorWorkflowStartDelaySeconds": 60,
+      "BrowserWaitSeconds": 180,
+      "SvitlobotWeeklyRefreshDay": "Monday",
+      "SvitlobotWeeklyRefreshTime": "03:00"
     }
   }
 }

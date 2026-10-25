@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using DtekBot.Api.Settings;
+using Microsoft.Extensions.Options;
 
 namespace DtekBot.Api.Bot;
 
@@ -6,6 +8,7 @@ namespace DtekBot.Api.Bot;
 public sealed class TickLoop(
     IServiceScopeFactory scopes,
     IConfiguration config,
+    IOptionsMonitor<DtekSettings> options,
     ILogger<TickLoop> logger,
     BackgroundStatus? status = null) : BackgroundService
 {
@@ -23,17 +26,20 @@ public sealed class TickLoop(
             return;
         }
 
-        var minutes = Math.Clamp(config.GetValue("Ticks:IntervalMinutes", 5), 1, 60);
-        status?.SetTicks($"running: every {minutes} min");
-        logger.LogInformation("Built-in ticks started: first cycle in 30 s, then every {Minutes} min", minutes);
+        var timers = options.CurrentValue.Timers;
+        var interval = timers.MonitoringInterval;
+        status?.SetTicks($"running: every {interval.TotalMinutes:0} min");
+        logger.LogInformation("Built-in ticks started: first cycle in {Seconds} s, then every {Minutes} min",
+            timers.MonitoringStartDelay.TotalSeconds, interval.TotalMinutes);
 
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
-            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(minutes));
+            await Task.Delay(timers.MonitoringStartDelay, stoppingToken);
+            using var timer = new PeriodicTimer(interval);
             do
             {
                 await RunOnceAsync(stoppingToken);
+                interval = ApplyInterval(timer, interval);
             }
             while (await timer.WaitForNextTickAsync(stoppingToken));
         }
@@ -42,6 +48,17 @@ public sealed class TickLoop(
             status?.SetTicks("stopped");
             logger.LogInformation("Built-in ticks stopped");
         }
+    }
+
+    // dtek-settings.json reloads on change, so a new interval applies from the next tick.
+    private TimeSpan ApplyInterval(PeriodicTimer timer, TimeSpan current)
+    {
+        var wanted = options.CurrentValue.Timers.MonitoringInterval;
+        if (wanted == current) return current;
+        timer.Period = wanted;
+        status?.SetTicks($"running: every {wanted.TotalMinutes:0} min");
+        logger.LogInformation("Monitoring interval changed to {Minutes} min", wanted.TotalMinutes);
+        return wanted;
     }
 
     public async Task RunOnceAsync(CancellationToken ct)

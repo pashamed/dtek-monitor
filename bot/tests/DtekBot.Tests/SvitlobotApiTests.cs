@@ -343,6 +343,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         var (chatId, client) = UserWithKey(c => c.GroupId = "45.1");
 
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/chats/{chatId}/svitlobot/push", null)).StatusCode);
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
         Assert.Equal(HttpStatusCode.OK, (await client.PostJsonAsync($"/api/chats/{chatId}/svitlobot/push", new { })).StatusCode);
 
         var sent = _factory.Svitlobot.Requests.Select(r => r.PathAndQuery).ToList();
@@ -432,6 +433,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
             WeeklyPresets = new Dictionary<string, string> { ["45.1"] = Week },
             WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Week },
         };
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
 
         var changed = await service.TickAsync(CancellationToken.None);
 
@@ -444,28 +446,22 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task AutomaticScheduleSync_ResendsAfterMondaySvitlobotRedraw_OnlyOncePerWeek()
+    public async Task AutomaticScheduleSync_ResendsAtTheConfiguredMondayTime_OnlyOncePerWeek()
     {
-        _factory.WithDb(db =>
-        {
-            foreach (var channel in db.Channels)
-            {
-                channel.SvitlobotKey = null;
-            }
-
-            db.KeyValues.RemoveRange(db.KeyValues.Where(value =>
-                value.Key.StartsWith("svitlobot-schedule:")
-                || value.Key.StartsWith("svitlobot-weekly-refresh:")));
-        });
+        ClearSyncState();
         UserWithKey(c => c.GroupId = "45.1");
-        _factory.Clock.Now = new DateTimeOffset(2026, 10, 18, 23, 4, 0, TimeSpan.Zero); // Monday 02:04 in Kyiv.
+        _factory.Clock.Now = new DateTimeOffset(2026, 10, 18, 23, 58, 0, TimeSpan.Zero); // Monday 02:58 in Kyiv.
         using var scope = _factory.Services.CreateScope();
         var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
 
         Assert.Equal(1, await service.TickAsync(CancellationToken.None));
         Assert.Single(_factory.Svitlobot.Requests);
 
-        _factory.Clock.Advance(TimeSpan.FromMinutes(1));
+        _factory.Clock.Advance(TimeSpan.FromMinutes(1)); // 02:59: the old 02:05 refresh would have fired already.
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+        Assert.Single(_factory.Svitlobot.Requests);
+
+        _factory.Clock.Advance(TimeSpan.FromMinutes(1)); // 03:00
         Assert.Equal(1, await service.TickAsync(CancellationToken.None));
         Assert.Equal(2, _factory.Svitlobot.Requests.Count);
 
@@ -473,6 +469,116 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         Assert.Equal(0, await service.TickAsync(CancellationToken.None));
         Assert.Equal(2, _factory.Svitlobot.Requests.Count);
     }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_RemovesItsOwnScheduleOnce_WhenTheWeekBecomesEmpty()
+    {
+        ClearSyncState();
+        UserWithKey(c => c.GroupId = "45.1");
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Quiet },
+        };
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+
+        Assert.Equal(
+            [$"/website/timetableEditEvent?channel_key={EncodedKey}&timetableData={Uri.EscapeDataString(WeekMaybe)}",
+             $"/website/removeChannelTimetable?channel_key={EncodedKey}"],
+            _factory.Svitlobot.Requests.Select(r => r.PathAndQuery));
+
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = WeekMaybe },
+        };
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(3, _factory.Svitlobot.Requests.Count);
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_DoesNotRepeatARejectedSchedule_UntilItChanges()
+    {
+        ClearSyncState();
+        UserWithKey(c => c.GroupId = "45.1");
+        _factory.Svitlobot.Responder = _ => FakeSvitlobotHandler.Text("invalid data");
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+        _factory.Clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+        Assert.Single(_factory.Svitlobot.Requests);
+
+        _factory.Svitlobot.Responder = _ => FakeSvitlobotHandler.Text("ok");
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = Week },
+        };
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_BacksOffAfterNetworkErrors()
+    {
+        ClearSyncState();
+        UserWithKey(c => c.GroupId = "45.1");
+        _factory.Svitlobot.Responder = _ => FakeSvitlobotHandler.Text("", HttpStatusCode.BadGateway);
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        await service.TickAsync(CancellationToken.None); // fails; next attempt in 30 s
+        _factory.Clock.Advance(TimeSpan.FromSeconds(29));
+        await service.TickAsync(CancellationToken.None);
+        Assert.Single(_factory.Svitlobot.Requests);
+
+        _factory.Clock.Advance(TimeSpan.FromSeconds(31)); // 1 min after the first request
+        await service.TickAsync(CancellationToken.None); // fails; next attempt in 1 min
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+        _factory.Clock.Advance(TimeSpan.FromSeconds(59));
+        await service.TickAsync(CancellationToken.None);
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+
+        _factory.Svitlobot.Responder = _ => FakeSvitlobotHandler.Text("ok");
+        _factory.Clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(3, _factory.Svitlobot.Requests.Count);
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_SkipsAWeekWithOnlyHalfHourOutages()
+    {
+        ClearSyncState();
+        UserWithKey(c => c.GroupId = "45.1");
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            WeeklyPresetsWithMaybe = new Dictionary<string, string>
+            {
+                ["45.1"] = string.Join(';', Enumerable.Repeat("200000000000000000000003", 7)),
+            },
+        };
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+        Assert.Empty(_factory.Svitlobot.Requests);
+    }
+
+    private void ClearSyncState() => _factory.WithDb(db =>
+    {
+        foreach (var channel in db.Channels)
+        {
+            channel.SvitlobotKey = null;
+        }
+
+        db.KeyValues.RemoveRange(db.KeyValues.Where(value => value.Key.StartsWith("svitlobot-")));
+    });
 
     [Fact]
     public async Task AutomaticScheduleSync_DoesNotSendWhenWeeklyTimetableHasNoOutages()
@@ -543,6 +649,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         Assert.True(Assert.Single(chats, chat => chat.ChatId == secondChatId).Settings.HasSvitlobotKey);
 
         _factory.Svitlobot.Reset();
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
         using var scope = _factory.Services.CreateScope();
         var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
         Assert.Equal(2, await service.TickAsync(CancellationToken.None));
@@ -658,23 +765,26 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task WriteCalls_AreLimitedToSixPerMinute_PerChat()
+    public async Task Requests_AreLimitedToOnePerMinute_PerChat_AndReadsAreCached()
     {
         var (chatId, client) = UserWithKey();
         var (otherChat, otherClient) = UserWithKey();
 
-        for (var i = 0; i < SvitlobotWriteLimiter.MaxPerWindow; i++)
-        {
-            Assert.Equal(HttpStatusCode.OK, (await client.DeleteAsync($"/api/chats/{chatId}/svitlobot/schedule")).StatusCode);
-        }
+        Assert.Equal(HttpStatusCode.OK, (await client.DeleteAsync($"/api/chats/{chatId}/svitlobot/schedule")).StatusCode);
 
         var limited = await client.PostJsonAsync($"/api/chats/{chatId}/svitlobot/template", new SetSvitlobotTemplateRequest(1));
 
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.Contains("Забагато", await ErrorAsync(limited));
-        Assert.Equal(SvitlobotWriteLimiter.MaxPerWindow, _factory.Svitlobot.Requests.Count);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync($"/api/chats/{chatId}/svitlobot")).StatusCode);
+        Assert.Single(_factory.Svitlobot.Requests);
         Assert.Equal(HttpStatusCode.OK, (await otherClient.DeleteAsync($"/api/chats/{otherChat}/svitlobot/schedule")).StatusCode);
+
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/chats/{chatId}/svitlobot")).StatusCode);
+        _factory.Clock.Advance(TimeSpan.FromMinutes(4));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/chats/{chatId}/svitlobot")).StatusCode);
+        Assert.Equal(3, _factory.Svitlobot.Requests.Count);
     }
 
     [Fact]
@@ -719,6 +829,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         Assert.Equal(0, await service.TickAsync(default));
         _factory.WithDb(db => db.Channels.Single(c => c.ChatId == chatId).Addresses.Single().Groups.Add(new ChatAddressGroup { GroupId = "2.1" }));
         scope.ServiceProvider.GetRequiredService<BotDbContext>().ChangeTracker.Clear();
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
         Assert.Equal(1, await service.TickAsync(default));
         Assert.Equal(2, _factory.Svitlobot.Requests.Count);
     }

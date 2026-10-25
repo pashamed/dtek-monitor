@@ -272,4 +272,20 @@ public class SettingsSanityTests
         Assert.Equal(15, checks.RequestTimeoutMinutes);
         Assert.Equal(30, Settings.Polling.CancelRecheckDelaySeconds);
     }
+
+    [Fact]
+    public void Timers_KeepTheirValues()
+    {
+        var timers = Settings.Timers;
+        Assert.Equal(5, timers.MonitoringIntervalMinutes);
+        Assert.Equal(30, timers.MonitoringStartDelaySeconds);
+        Assert.Equal(15, timers.MonitorWorkflowIntervalMinutes);
+        Assert.Equal(60, timers.MonitorWorkflowStartDelaySeconds);
+        Assert.Equal(180, timers.BrowserWaitSeconds);
+        Assert.Equal(DayOfWeek.Monday, timers.SvitlobotWeeklyRefreshDay);
+        Assert.Equal(new TimeSpan(3, 0, 0), timers.SvitlobotWeeklyRefreshTime);
+
+        // Baskerville is checked on monitoring cycles, so its interval must land on one.
+        Assert.Equal(0, Settings.Schedules.CacheMinutes % timers.MonitoringIntervalMinutes);
+    }
 }

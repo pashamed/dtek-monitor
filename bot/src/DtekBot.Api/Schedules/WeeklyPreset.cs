@@ -98,4 +98,7 @@ public static class WeeklyPreset
     }
 
     public static bool HasOutages(string timetable) => timetable.Any(c => c is '1' or '2' or '3');
+
+    // Svitlobot stores a matrix only when it has at least one full outage hour.
+    public static bool IsStorable(string timetable) => timetable.Contains('1');
 }

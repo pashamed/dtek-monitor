@@ -91,6 +91,15 @@ public sealed class WeeklyPresetTests
         Assert.False(WeeklyPreset.HasOutages(Empty));
     }
 
+    [Theory]
+    [InlineData("000000001100000000000000", true)]
+    [InlineData("200000000000000000000003", false)]
+    [InlineData("000000000000000000000000", false)]
+    public void IsStorable_NeedsAFullOutageHour(string day, bool expected)
+    {
+        Assert.Equal(expected, WeeklyPreset.IsStorable(string.Join(';', Enumerable.Repeat(day, 7))));
+    }
+
     private static string InjectPreset(string json)
     {
         var node = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();

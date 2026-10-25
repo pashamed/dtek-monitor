@@ -75,7 +75,11 @@ public sealed class ScheduleProvider(
     }
 
     private static bool WithinWindow(Entry entry, DateTimeOffset now, TimeSpan ttl) =>
-        entry.CheckedAt != default && now - entry.CheckedAt < ttl;
+        entry.CheckedAt != default && now - entry.CheckedAt < ttl - TickJitter;
+
+    // Monitoring cycles start a few milliseconds early or late; without this slack a cycle that lands just
+    // before the window ends would skip the check and push it to the following cycle.
+    public static readonly TimeSpan TickJitter = TimeSpan.FromSeconds(5);
 
     // The last good copy, unless it is older than the limit.
     private static ScheduleSnapshot? Usable(Entry entry, DateTimeOffset now, TimeSpan maxStale) =>
