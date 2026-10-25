@@ -274,6 +274,10 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("SlotSettings")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("SvitlobotGroupId")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
                     b.Property<string>("SvitlobotKey")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");

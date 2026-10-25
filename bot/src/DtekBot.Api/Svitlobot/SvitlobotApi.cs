@@ -304,7 +304,8 @@ public static class SvitlobotApi
                 return Json(NoKey, 400);
             }
 
-            if (string.IsNullOrEmpty(channel.GroupId))
+            var group = channel.SvitlobotGroup();
+            if (string.IsNullOrEmpty(group))
             {
                 return Json(new ApiError("Спершу оберіть чергу для цього чату."), 400);
             }
@@ -340,21 +341,21 @@ public static class SvitlobotApi
                 }
             }
 
-            var timetable = WeeklyPreset.Union(snapshot, channel.GroupIds(), includeMaybe);
+            var timetable = WeeklyPreset.Union(snapshot, [group], includeMaybe);
             if (timetable is null)
             {
-                return Json(new ApiError($"У джерелі даних немає тижневого графіка для черги {channel.GroupId}."), 400);
+                return Json(new ApiError($"У джерелі даних немає тижневого графіка для черги {group}."), 400);
             }
 
             if (!WeeklyPreset.HasOutages(timetable))
             {
                 var hint = includeMaybe ? "" : " Можна ввімкнути «можливі» відключення.";
-                return Json(new ApiError($"У тижневому графіку черги {channel.GroupId} немає запланованих відключень, надсилати нічого.{hint}"), 400);
+                return Json(new ApiError($"У тижневому графіку черги {group} немає запланованих відключень, надсилати нічого.{hint}"), 400);
             }
 
             if (!WeeklyPreset.IsStorable(timetable))
             {
-                return Json(new ApiError($"Світлобот приймає графік лише з повною годиною відключення, а в черзі {channel.GroupId} є тільки півгодинні."), 400);
+                return Json(new ApiError($"Світлобот приймає графік лише з повною годиною відключення, а в черзі {group} є тільки півгодинні."), 400);
             }
 
             if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
@@ -369,12 +370,54 @@ public static class SvitlobotApi
                 return Failed(result);
             }
 
-            await scheduleSync.MarkSyncedAsync(chatId, region.Id, string.Join(",", channel.GroupIds()), timetable, ct);
+            await scheduleSync.MarkSyncedAsync(chatId, region.Id, group, timetable, ct);
             await db.SaveChangesAsync(ct);
             return Json(new SvitlobotResultDto(
-                channel.IsCombined() ? "Спільний тижневий графік збережено у Світлоботі."
-                    : $"Тижневі планові відключення черги {channel.GroupId} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
+                $"Тижневі планові відключення черги {group} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
                 true), 200);
+        });
+
+        // Svitlobot keeps one weekly schedule per channel, so a chat with several groups picks the one it follows.
+        // The next sync tick writes the new group's week; no Svitlobot request is made here.
+        api.MapPut("/chats/{chatId:long}/svitlobot/group", async (
+            long chatId,
+            HttpContext http,
+            BotDbContext db,
+            ChatAccessService access,
+            CancellationToken ct) =>
+        {
+            SetSvitlobotGroupRequest? request;
+            try
+            {
+                request = await http.Request.ReadFromJsonAsync<SetSvitlobotGroupRequest>(ApiJson.Options, ct);
+            }
+            catch (JsonException)
+            {
+                return Json(new ApiError("Некоректний запит."), 400);
+            }
+
+            if (!await access.CanManageAsync(chatId, UserId(http), ct))
+            {
+                return Json(Forbidden, 403);
+            }
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+            if (channel is null || channel.GroupIds().Count == 0)
+            {
+                return Json(new ApiError("Спершу оберіть чергу для цього чату."), 400);
+            }
+
+            var groupId = string.IsNullOrWhiteSpace(request?.GroupId) ? null : request.GroupId.Trim();
+            if (groupId is not null && !channel.GroupIds().Contains(groupId, StringComparer.Ordinal))
+            {
+                return Json(new ApiError($"Черги {groupId} немає серед адрес цього чату."), 400);
+            }
+
+            channel.SvitlobotGroupId = groupId;
+            await db.SaveChangesAsync(ct);
+            var effective = channel.SvitlobotGroup();
+            return Json(new SvitlobotGroupDto(effective,
+                $"Світлобот тепер отримує графік черги {effective}. Оновимо його під час наступної перевірки."), 200);
         });
 
         // Removes the schedule in Svitlobot and its message in the Telegram channel.

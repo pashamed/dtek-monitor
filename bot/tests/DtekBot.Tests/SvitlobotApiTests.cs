@@ -580,6 +580,92 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         db.KeyValues.RemoveRange(db.KeyValues.Where(value => value.Key.StartsWith("svitlobot-")));
     });
 
+    // ================= main group of a multi-address chat =================
+
+    private static void TwoAddresses(Channel c)
+    {
+        c.GroupId = "45.1";
+        c.Addresses =
+        [
+            new ChatAddress { RegionId = "kyiv", Name = "Дім", Groups = [new ChatAddressGroup { GroupId = "45.1" }] },
+            new ChatAddress { RegionId = "kyiv", Name = "Офіс", Groups = [new ChatAddressGroup { GroupId = "2.2" }] },
+        ];
+    }
+
+    private static string TimetableOf(string week) =>
+        $"/website/timetableEditEvent?channel_key={EncodedKey}&timetableData={Uri.EscapeDataString(week)}";
+
+    [Fact]
+    public async Task MainGroup_DefaultsToTheFirstAddressGroup_AndAChosenGroupIsWhatPushSends()
+    {
+        var (chatId, client) = UserWithKey(TwoAddresses);
+
+        var summary = (await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!
+            .Single(c => c.ChatId == chatId);
+        Assert.Equal("45.1", summary.Settings.SvitlobotGroupId);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/chats/{chatId}/svitlobot/push", null)).StatusCode);
+        Assert.Equal(TimetableOf(WeekMaybe), _factory.Svitlobot.Requests.Last().PathAndQuery);
+
+        var set = await client.PutJsonAsync($"/api/chats/{chatId}/svitlobot/group", new SetSvitlobotGroupRequest("2.2"));
+
+        Assert.Equal(HttpStatusCode.OK, set.StatusCode);
+        Assert.Equal("2.2", (await set.ReadAsync<SvitlobotGroupDto>())!.GroupId);
+        Assert.Single(_factory.Svitlobot.Requests);
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/chats/{chatId}/svitlobot/push", null)).StatusCode);
+        Assert.Equal(TimetableOf(Week), _factory.Svitlobot.Requests.Last().PathAndQuery);
+    }
+
+    [Fact]
+    public async Task MainGroup_UnknownGroupIs400_AndSomeoneElsesChatIs403()
+    {
+        var (chatId, client) = UserWithKey(TwoAddresses);
+
+        var unknown = await client.PutJsonAsync($"/api/chats/{chatId}/svitlobot/group", new SetSvitlobotGroupRequest("9.9"));
+        var foreign = await _factory.ClientFor(_factory.NextId())
+            .PutJsonAsync($"/api/chats/{chatId}/svitlobot/group", new SetSvitlobotGroupRequest("2.2"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+        Assert.Null(_factory.WithDb(db => db.Channels.AsNoTracking().Single(c => c.ChatId == chatId).SvitlobotGroupId));
+    }
+
+    [Fact]
+    public async Task AutomaticScheduleSync_FollowsTheMainGroup_AndRewritesWhenItChanges()
+    {
+        ClearSyncState();
+        var (chatId, client) = UserWithKey(TwoAddresses);
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(TimetableOf(WeekMaybe), Assert.Single(_factory.Svitlobot.Requests).PathAndQuery);
+
+        await client.PutJsonAsync($"/api/chats/{chatId}/svitlobot/group", new SetSvitlobotGroupRequest("2.2"));
+        scope.ServiceProvider.GetRequiredService<BotDbContext>().ChangeTracker.Clear();
+        _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
+
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        Assert.Equal(TimetableOf(Week), _factory.Svitlobot.Requests.Last().PathAndQuery);
+        Assert.Equal(0, await service.TickAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public void MainGroup_FallsBackToTheFirstAddressGroup_WhenTheChosenGroupIsGone()
+    {
+        var channel = new Channel { RegionId = "kyiv", SvitlobotGroupId = "2.2" };
+        TwoAddresses(channel);
+        channel.Addresses[0].Id = 1;
+        channel.Addresses[1].Id = 2;
+        Assert.Equal("2.2", channel.SvitlobotGroup());
+
+        channel.Addresses.RemoveAt(1);
+
+        Assert.Equal("45.1", channel.SvitlobotGroup());
+        Assert.Equal("45.1", new Channel { GroupId = "45.1" }.SvitlobotGroup());
+        Assert.Null(new Channel().SvitlobotGroup());
+    }
+
     [Fact]
     public async Task AutomaticScheduleSync_DoesNotSendWhenWeeklyTimetableHasNoOutages()
     {
@@ -809,29 +895,32 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         Assert.Empty(_factory.Svitlobot.Requests);
     }
     [Fact]
-    public async Task MultipleGroups_ManualAndAutomaticPushUseOneHalfHourUnionAndMembershipSignature()
+    public async Task MultipleGroups_PushAndSyncUseOnlyTheMainGroup_AndRewriteOnlyWhenItChanges()
     {
         _factory.WithDb(db => { foreach (var channel in db.Channels) channel.SvitlobotKey = null; });
         var (chatId, client) = UserWithKey(c => {
-            c.GroupId = "45.1";
+            c.GroupId = "2.2";
             c.Addresses = [new ChatAddress { Name = "Дім", RegionId = "kyiv", Groups = [
                 new ChatAddressGroup { GroupId = "45.1" }, new ChatAddressGroup { GroupId = "2.2" }] }];
         });
-        var first = string.Join(';', Enumerable.Repeat(new string('2', 24), 7));
-        var second = string.Join(';', Enumerable.Repeat(new string('3', 24), 7));
-        var expected = string.Join(';', Enumerable.Repeat(new string('1', 24), 7));
-        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with {
-            WeeklyPresetsWithMaybe = new Dictionary<string, string> { ["45.1"] = first, ["2.2"] = second, ["2.1"] = expected } };
         (await client.PostAsync($"/api/chats/{chatId}/svitlobot/push", null)).EnsureSuccessStatusCode();
-        Assert.Contains(Uri.EscapeDataString(expected), Assert.Single(_factory.Svitlobot.Requests).PathAndQuery);
+        Assert.Equal(TimetableOf(Week), Assert.Single(_factory.Svitlobot.Requests).PathAndQuery);
         using var scope = _factory.Services.CreateScope();
         var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+        var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
         Assert.Equal(0, await service.TickAsync(default));
-        _factory.WithDb(db => db.Channels.Single(c => c.ChatId == chatId).Addresses.Single().Groups.Add(new ChatAddressGroup { GroupId = "2.1" }));
-        scope.ServiceProvider.GetRequiredService<BotDbContext>().ChangeTracker.Clear();
+
+        // Another group joining does not change what Svitlobot follows.
+        _factory.WithDb(d => d.Channels.Single(c => c.ChatId == chatId).Addresses.Single().Groups.Add(new ChatAddressGroup { GroupId = "45.2" }));
+        db.ChangeTracker.Clear();
         _factory.Clock.Advance(SvitlobotRequestLimiter.Window);
+        Assert.Equal(0, await service.TickAsync(default));
+
+        // Losing the main group falls back to the address's first remaining group.
+        _factory.WithDb(d => d.Channels.Single(c => c.ChatId == chatId).Addresses.Single().Groups.RemoveAll(g => g.GroupId == "2.2"));
+        db.ChangeTracker.Clear();
         Assert.Equal(1, await service.TickAsync(default));
-        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+        Assert.Equal(TimetableOf(WeekMaybe), _factory.Svitlobot.Requests.Last().PathAndQuery);
     }
 
 }

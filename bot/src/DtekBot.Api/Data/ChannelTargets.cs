@@ -10,6 +10,22 @@ public static class ChannelTargets
         : channel.Addresses.SelectMany(a => a.Groups).Select(g => g.GroupId)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
 
+    // The chosen main group while the chat still has it; otherwise the first group of the first address.
+    public static string? SvitlobotGroup(this Channel channel)
+    {
+        var groups = channel.GroupIds();
+        if (channel.SvitlobotGroupId is { } chosen && groups.Contains(chosen, StringComparer.Ordinal))
+        {
+            return chosen;
+        }
+
+        return channel.Addresses.Count == 0
+            ? groups.FirstOrDefault()
+            : channel.Addresses.OrderBy(a => a.Id == 0 ? long.MaxValue : a.Id)
+                .SelectMany(a => a.Groups.Select(g => g.GroupId).Order(StringComparer.Ordinal))
+                .FirstOrDefault();
+    }
+
     public static bool IsCombined(this Channel channel) => channel.Addresses.Count > 1 || channel.GroupIds().Count > 1;
 
     public static IReadOnlyList<string> DistrictIds(this Channel channel) =>

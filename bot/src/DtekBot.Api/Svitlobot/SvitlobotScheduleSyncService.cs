@@ -80,19 +80,20 @@ public sealed class SvitlobotScheduleSyncService(
                     continue;
                 }
 
-                var timetable = WeeklyPreset.Union(snapshot, channel.GroupIds(), includeMaybe: true);
+                var group = channel.SvitlobotGroup();
+                var timetable = group is null ? null : WeeklyPreset.Union(snapshot, [group], includeMaybe: true);
                 if (timetable is null)
                 {
                     logger.LogInformation(
                         "Svitlobot schedule sync waiting for weekly schedule: region={RegionId}, group={GroupId}",
-                        region.Id, channel.GroupId);
+                        region.Id, group);
                     continue;
                 }
 
                 var stateKey = StateKey(channel.ChatId);
                 var failedKey = FailedStateKey(channel.ChatId);
                 var refreshKey = WeeklyRefreshStateKey(channel.ChatId);
-                var signature = Signature(region.Id, string.Join(",", channel.GroupIds()), timetable);
+                var signature = Signature(region.Id, group!, timetable);
                 states.TryGetValue(stateKey, out var previous);
                 states.TryGetValue(failedKey, out var failed);
                 var remove = !WeeklyPreset.HasOutages(timetable);

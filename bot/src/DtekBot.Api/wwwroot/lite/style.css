@@ -311,6 +311,9 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 .svb-key-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .svb-key-actions .btn{width:100%;padding:8px 10px;font-size:14px}
 .svb-key-actions .btn.ghost{min-width:0;white-space:normal}
+.svb-group{justify-content:space-between;gap:8px;font-weight:500;font-size:14px;margin-bottom:6px}
+.svb-group>span:first-child{min-width:0;overflow-wrap:anywhere}
+.svb-group .btn{flex:none;padding:6px 10px;font-size:13px}
 #svb>.hint{margin:0}
 .stlines{display:flex;flex-direction:column;gap:6px}
 .stl{font-size:15px;overflow-wrap:anywhere}

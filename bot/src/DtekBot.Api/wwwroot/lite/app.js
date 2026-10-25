@@ -1320,9 +1320,29 @@ function renderEditor(chat) {
       return {
         ...d,
         message: groupOf()
-          ? 'Ключ збережено. Спільний тижневий графік усіх черг оновлюватиметься автоматично.'
+          ? 'Ключ збережено. Тижневий графік основної черги оновлюватиметься автоматично.'
           : 'Ключ збережено. Оберіть адресу або чергу — тоді бот зможе передавати графік Світлоботу.',
       };
+    });
+  }
+  // Saved groups of the chat with the addresses that use them; Svitlobot follows exactly one of them.
+  function svbGroups() {
+    const map = new Map();
+    for (const a of chat.settings.addresses || []) {
+      for (const g of a.groups || []) {
+        const name = [a.name, g.label].filter(Boolean).join(' · ');
+        const item = map.get(g.groupId) || { id: g.groupId, names: [] };
+        if (name && !item.names.includes(name)) item.names.push(name);
+        map.set(g.groupId, item);
+      }
+    }
+    return [...map.values()];
+  }
+  function svbSetGroup(groupId) {
+    svbRun('group:' + groupId, async () => {
+      const d = await api('PUT', svbBase() + '/group', { groupId });
+      chat.settings.svitlobotGroupId = d.groupId;
+      return d;
     });
   }
   async function svbCheck() {
@@ -1353,11 +1373,20 @@ function renderEditor(chat) {
         h('p', { class: 'hint', text: 'Ключ потрібен, щоб бот регулярно перевіряв нові графіки та передавав тижневий розклад у Світлобот. Знайдіть channel_key у налаштуваннях потрібного каналу в Світлоботі.' }),
       ];
     } else {
+      const groups = svbGroups();
+      const main = chat.settings.svitlobotGroupId;
       body = [
         h('div', { class: 'svb-key-status' }, h('span', { class: 'chip green', text: 'Ключ каналу підключено' })),
-        h('p', { class: 'hint', text: groupOf()
-          ? 'Спільний тижневий графік усіх черг надсилається Світлоботу автоматично.'
-          : 'Оберіть адресу або чергу на вкладці «Основне», щоб увімкнути автоматичне оновлення графіка.' }),
+        h('p', { class: 'hint', text: !groupOf()
+          ? 'Оберіть адресу або чергу на вкладці «Основне», щоб увімкнути автоматичне оновлення графіка.'
+          : main ? `Світлобот отримує тижневий графік черги ${main} автоматично.`
+            : 'Тижневий графік надсилається Світлоботу автоматично.' }),
+        groups.length > 1 ? h('p', { class: 'hint', text: 'Світлобот зберігає один графік на канал. Оберіть основну чергу:' }) : null,
+        ...(groups.length > 1 ? groups.map(g => h('div', { class: 'fl svb-group' },
+          h('span', { text: `Черга ${g.id}` + (g.names.length ? ` · ${g.names.join(', ')}` : '') }),
+          g.id === main
+            ? h('span', { class: 'chip green', text: 'Основна' })
+            : btn('group:' + g.id, 'ghost sm', 'Зробити основною', () => svbSetGroup(g.id)))) : []),
         h('div', { class: 'svb-key-actions' },
           btn('check', 'ghost sm', 'Перевірити ключ', svbCheck),
           btn('forget', 'ghost sm', 'Забути ключ', svbForget)),

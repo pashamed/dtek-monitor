@@ -296,3 +296,57 @@ test('address search, region changes and editor restoration', async () => {
     await browser.close();
   }
 });
+
+test('svitlobot main group buttons pick one group of a multi-address channel', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const errors = [], writes = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const addresses = [
+      { id: 1, regionId: 'kyiv', name: 'Дім', groups: [{ groupId: '45.1' }] },
+      { id: 2, regionId: 'kyiv', name: 'Офіс', groups: [{ groupId: '2.2', label: 'під’їзд 2' }] },
+    ];
+    const chat = {
+      chatId: -100777, title: 'Канал', isPrivate: false,
+      settings: { regionId: 'kyiv', groupId: '45.1', isActive: true, addresses, partIds: [], templates: {}, hasSvitlobotKey: true, svitlobotGroupId: '45.1' },
+    };
+    await page.addInitScript(() => {
+      window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick() {} } } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      if (request.method() !== 'GET') writes.push({ method: request.method(), path, body: request.postDataJSON() });
+      let data = {};
+      if (path === '/api/bootstrap') data = {
+        maxTemplateLength: 1000,
+        regions: [{ id: 'kyiv', name: 'Київ', hasSchedules: true, hasGroups: false, parts: [] }],
+        templateSlots: [['emergency', 'emergency'], ['ended', 'emergency']]
+          .map(([id, group]) => ({ id, group, title: id, description: '', defaultTemplate: '{текст}', placeholders: [] })),
+      };
+      else if (path === '/api/chats') data = [chat];
+      else if (path === '/api/schedules/groups') data = [{ id: '45.1', name: '45.1' }, { id: '2.2', name: '2.2' }];
+      else if (path === '/api/preview') data = { html: 'Приклад', errors: [] };
+      else if (path.endsWith('/svitlobot/group')) data = { groupId: '2.2', message: 'Світлобот тепер отримує графік черги 2.2. Оновимо його під час наступної перевірки.' };
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    const card = page.locator('#svb');
+    await card.getByText('Черга 45.1 · Дім', { exact: true }).waitFor();
+    await card.getByText('Черга 2.2 · Офіс · під’їзд 2', { exact: true }).waitFor();
+    assert.equal(await card.getByText('Основна', { exact: true }).count(), 1);
+    assert.equal(await card.getByRole('button', { name: 'Зробити основною', exact: true }).count(), 1);
+
+    await card.getByRole('button', { name: 'Зробити основною', exact: true }).click();
+    await card.getByText(/тепер отримує графік черги 2\.2/).waitFor();
+    assert.deepEqual(writes, [{ method: 'PUT', path: '/api/chats/-100777/svitlobot/group', body: { groupId: '2.2' } }]);
+    await card.getByText('Світлобот отримує тижневий графік черги 2.2 автоматично.', { exact: true }).waitFor();
+    assert.equal(await card.getByRole('button', { name: 'Зробити основною', exact: true }).count(), 1);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});

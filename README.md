@@ -600,10 +600,13 @@ There is no building-wide ANY/ALL aggregate: each group is shown separately.
 An advance warning for a shared outage start is sent once for all matching
 groups. Quiet hours mean silent delivery, not delayed delivery.
 
-Svitlobot receives **one combined weekly timetable**: the union of half-hour
-outage slots across all groups, respecting `includeMaybe` for manual uploads.
-If any group's weekly data is unavailable, synchronization waits rather than
-omitting that group. Monday refreshes are preserved. Svitlobot channel posts
+Svitlobot keeps **one weekly timetable per channel**, so it follows **one main
+group**. In the Mini App's Svitlobot card, a channel with several groups shows
+a «Зробити основною» button for each group. Until one is chosen, or if the
+chosen group is removed, the first group of the first address is used. Changing
+the main group writes that group's week on the next sync; manual uploads respect
+`includeMaybe`. If the main group's weekly data is unavailable, synchronization
+waits. Monday refreshes are preserved. Svitlobot channel posts
 provide **only the trigger text**, “Світло зникло” or a custom phrase;
 their estimated restoration times, durations, and other content are not a
 schedule source.

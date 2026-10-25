@@ -56,7 +56,9 @@ public sealed record ChatSettingsDto(
     int QuietHoursStartMinute = 1320,
     int QuietHoursEndMinute = 480,
     bool? DeletePreviousAlert = null,
-    IReadOnlyList<ChatAddressDto>? Addresses = null);
+    IReadOnlyList<ChatAddressDto>? Addresses = null,
+    // Read-only here: the group whose weekly schedule goes to Svitlobot; changed via PUT .../svitlobot/group.
+    string? SvitlobotGroupId = null);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
 // EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.

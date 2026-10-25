@@ -151,6 +151,9 @@ public sealed class Channel
 
     // The channel key of the chat's Svitlobot schedule, encrypted (see SvitlobotKeyProtector). Never leaves the server.
     public string? SvitlobotKey { get; set; }
+
+    // Svitlobot keeps one weekly schedule per channel; this is the group it follows (see ChannelTargets.SvitlobotGroup).
+    public string? SvitlobotGroupId { get; set; }
 }
 
 public sealed class ChatAddress
@@ -495,6 +498,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.AddressStreet).HasMaxLength(256);
             e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.Property(x => x.SvitlobotKey).HasMaxLength(512);
+            e.Property(x => x.SvitlobotGroupId).HasMaxLength(16);
             e.HasIndex(x => new { x.RegionId, x.IsActive });
             e.HasIndex(x => x.GroupId);
         });

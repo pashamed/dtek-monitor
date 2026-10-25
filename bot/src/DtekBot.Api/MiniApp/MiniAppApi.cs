@@ -1499,7 +1499,8 @@ public static class MiniAppApi
             c.Addresses.Count > 0 ? c.Addresses.OrderBy(a => a.Id).Select(a => a.ToDto()).ToArray()
                 : c.GroupId is not null || c.AddressLabel is not null || c.AddressStreet is not null
                     ? [new ChatAddressDto(0, c.RegionId, "Дім", c.AddressCity, c.AddressStreet, c.AddressHouse,
-                        c.GroupId is null ? [] : [new ChatAddressGroupDto(c.GroupId)], c.PartIds, c.AddressLabel)] : []);
+                        c.GroupId is null ? [] : [new ChatAddressGroupDto(c.GroupId)], c.PartIds, c.AddressLabel)] : [],
+            c.SvitlobotGroup());
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 
