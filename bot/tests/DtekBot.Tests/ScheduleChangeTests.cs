@@ -18,11 +18,15 @@ public sealed class ScheduleChangeTests : IDisposable
 
     private ScheduleNotifier Notifier() => new(f.Db, f.Bot, provider, f.Options, clock, NullLogger<ScheduleNotifier>.Instance);
 
+    // The default heading has no change summary; these tests opt in the way a custom template does.
+    private const string HeadingWithChanges = "❗️ {header}\n📅 {weekday} {date}{#changes}\n\n{changes}{/changes}";
+
     private Channel AddChannel(Action<Channel>? configure = null) => f.AddChannel(801, channel =>
     {
         channel.GroupId = "45.1";
         channel.SchedulePost = true;
         channel.SchedulePostImage = ScheduleImage.None;
+        channel.TemplateMap = new Dictionary<string, string> { [MessageSlots.ScheduleHeading] = HeadingWithChanges };
         configure?.Invoke(channel);
     });
 
@@ -158,6 +162,20 @@ public sealed class ScheduleChangeTests : IDisposable
         Assert.Contains("Мій 16.10.2026\n🔄 Зміни планового графіка:", text);
         Assert.Equal(1, text.Split("додано планове відключення").Length - 1);
         Assert.DoesNotContain("{changes}", text);
+    }
+
+    [Fact]
+    public async Task Tick_DefaultHeading_DoesNotShowTheChangeSummary()
+    {
+        AddChannel(channel => channel.TemplateMap = new Dictionary<string, string>());
+        provider.Snapshots["kyiv"] = Plan(("45.1", [Out(15, 11, 14)]));
+        await Tick();
+        provider.Snapshots["kyiv"] = Plan(("45.1", [Out(15, 11, 15)]));
+
+        Assert.Equal(1, (await Tick()).Sent);
+        Assert.DoesNotContain("Зміни планового графіка", f.Bot.Sent.Last().Text);
+        Assert.DoesNotContain("додано планове відключення", f.Bot.Sent.Last().Text);
+        Assert.Contains("11:00 - 15:00", f.Bot.Sent.Last().Text);
     }
 
     [Fact]

@@ -341,7 +341,7 @@ public static class SvitlobotApi
                 }
             }
 
-            var timetable = WeeklyPreset.Union(snapshot, [group], includeMaybe);
+            var timetable = await SvitlobotWeek.BuildAsync(db, snapshot, region.Id, group, includeMaybe, time.GetUtcNow(), ct);
             if (timetable is null)
             {
                 return Json(new ApiError($"У джерелі даних немає тижневого графіка для черги {group}."), 400);

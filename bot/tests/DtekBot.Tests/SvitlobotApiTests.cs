@@ -25,7 +25,8 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         _factory = factory;
         _factory.Svitlobot.Reset();
         _factory.SvitlobotEncryptionKey = Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray());
-        _factory.Clock.Now = Kyiv(15, 12);
+        // A week without published daily schedules, so these tests see the weekly preset alone.
+        _factory.Clock.Now = Kyiv(22, 12);
         _factory.Schedules.Snapshots.Clear();
         _factory.Schedules.Snapshots["kyiv"] = RealSnapshot() with
         {
@@ -579,6 +580,51 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
 
         db.KeyValues.RemoveRange(db.KeyValues.Where(value => value.Key.StartsWith("svitlobot-")));
     });
+
+    [Fact]
+    public async Task AutomaticScheduleSync_UsesPublishedDays_AndKeepsEarlierDaysOfTheWeek()
+    {
+        ClearSyncState();
+        UserWithKey(c => c.GroupId = "45.1");
+        var preset = new Dictionary<string, string> { ["45.1"] = WeekMaybe };
+        _factory.Clock.Now = Kyiv(15, 9); // Thursday, the fourth row.
+        _factory.Schedules.Snapshots["kyiv"] = RealSnapshot() with
+        {
+            CoverageStart = Kyiv(15, 0),
+            CoverageEnd = Kyiv(17, 0),
+            Groups = new Dictionary<string, GroupSchedule>
+            {
+                ["45.1"] = new("45.1", [new(Kyiv(15, 12, 30), Kyiv(15, 20))], [Kyiv(15, 0)]),
+            },
+            WeeklyPresets = preset,
+            WeeklyPresetsWithMaybe = preset,
+        };
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<SvitlobotScheduleSyncService>();
+
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        var rows = WeekMaybe.Split(';');
+        rows[3] = "000000000000311111110000";
+        Assert.EndsWith("timetableData=" + Uri.EscapeDataString(string.Join(';', rows)),
+            _factory.Svitlobot.Requests.Last().PathAndQuery);
+
+        // Friday: the feed now has only Friday, yet Thursday keeps its published schedule instead of the preset.
+        _factory.Clock.Now = Kyiv(16, 9);
+        _factory.Schedules.Snapshots["kyiv"] = _factory.Schedules.Snapshots["kyiv"]! with
+        {
+            CoverageStart = Kyiv(16, 0),
+            Groups = new Dictionary<string, GroupSchedule>
+            {
+                ["45.1"] = new("45.1", [new(Kyiv(16, 8), Kyiv(16, 10))], [Kyiv(16, 0)]),
+            },
+        };
+
+        Assert.Equal(1, await service.TickAsync(CancellationToken.None));
+        rows[4] = "000000001100000000000000";
+        Assert.EndsWith("timetableData=" + Uri.EscapeDataString(string.Join(';', rows)),
+            _factory.Svitlobot.Requests.Last().PathAndQuery);
+        Assert.Equal(2, _factory.Svitlobot.Requests.Count);
+    }
 
     // ================= main group of a multi-address chat =================
 

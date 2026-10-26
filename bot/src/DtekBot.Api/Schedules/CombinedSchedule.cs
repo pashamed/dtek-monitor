@@ -29,9 +29,6 @@ public static class CombinedSchedule
             var template = channel.TemplateFor(MessageSlots.ScheduleHeading);
             var fallback = MessageSlots.Find(MessageSlots.ScheduleHeading)!.DefaultTemplate;
             var heading = MessageTemplate.Render(template, values, fallback);
-            // Custom headings opt in explicitly; never rewrite a saved template.
-            if (template is null && values["changes"].Length > 0 && !fallback.Contains("{changes}", StringComparison.Ordinal))
-                heading += "\n\n" + WebUtility.HtmlEncode(values["changes"]);
             if (snapshot.CoverageStart > start || snapshot.CoverageEnd < end)
             {
                 sections.Add(heading + "\n\nГрафік ще не оприлюднено.");

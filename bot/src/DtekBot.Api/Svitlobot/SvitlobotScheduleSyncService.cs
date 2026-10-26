@@ -81,7 +81,8 @@ public sealed class SvitlobotScheduleSyncService(
                 }
 
                 var group = channel.SvitlobotGroup();
-                var timetable = group is null ? null : WeeklyPreset.Union(snapshot, [group], includeMaybe: true);
+                var timetable = group is null ? null
+                    : await SvitlobotWeek.BuildAsync(db, snapshot, region.Id, group, includeMaybe: true, time.GetUtcNow(), ct);
                 if (timetable is null)
                 {
                     logger.LogInformation(

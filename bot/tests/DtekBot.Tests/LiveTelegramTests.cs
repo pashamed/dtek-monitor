@@ -176,6 +176,11 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                 channel.SchedulePost = true;
                 channel.SchedulePostMode = PostMode.Edit;
                 channel.SchedulePostImage = ScheduleImage.None;
+                // The default heading has no change summary; opt in to check the planned delta.
+                channel.TemplateMap = new Dictionary<string, string>
+                {
+                    [MessageSlots.ScheduleHeading] = "❗️ {header}\n📅 {weekday} {date}{#changes}\n\n{changes}{/changes}",
+                };
             });
             var original = RealSnapshot(api.Clock.Now);
             api.Schedules.Snapshots["kyiv"] = original;

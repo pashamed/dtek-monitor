@@ -190,8 +190,9 @@ Use one backend instance; the timers and coordination gates are not distributed.
 3. Changed plans are posted/edited/replaced using saved templates; deterministic
    added/removed-interval summaries are available.
 4. Successful delivery advances the baseline. Unchanged content is deduplicated.
-5. If connected, the Svitlobot service pushes the weekly timetable of the chat's
-   main group with fingerprint checks, write limiting and a Monday refresh.
+5. If connected, the Svitlobot service pushes the chat's main group week
+   (published daily schedules where available, the weekly preset elsewhere)
+   with fingerprint checks, write limiting and a Monday refresh.
 
 ## 4. Boundaries and operational facts
 
