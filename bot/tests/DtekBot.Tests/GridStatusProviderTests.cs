@@ -199,7 +199,7 @@ public sealed class GridStatusProviderTests
         var trigger = new FakeWorkflowTrigger();
         var schedules = new FakeScheduleProvider();
         var clock = new TestClock(Kyiv(15, 15));
-        var checks = new AddressCheckService(f.Db, f.Bot, trigger, f.Options, clock, NullLogger<AddressCheckService>.Instance);
+        var checks = new AddressCheckService(f.Db, f.Bot, trigger, f.Options, clock, NullLogger<AddressCheckService>.Instance, f.CreateMirror(time: clock));
         var service = new OutageAssessmentService(f.Db, checks, schedules, f.Options, clock);
         f.Db.GridStates.Add(new GridState
         {

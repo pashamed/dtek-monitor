@@ -50,7 +50,7 @@ flowchart TB
         INGEST["/ingest*<br/>shared ingest secret"]
         TIMER["TickLoop, normally every 5 minutes<br/>MonitoringCycle + in-process gates"]
         MTIMER["MonitorWorkflowTimer, every 15 minutes<br/>dispatches the standalone monitor"]
-        COLLECT["Source providers<br/>parallel collection + caches<br/>HTTP first, browser fallback for DTEK"]
+        COLLECT["API source providers<br/>DTEK + grid + Yasno groups + schedules<br/>HTTP first, browser fallback for DTEK"]
         ROUTE["Classification and reconciliation<br/>region / district / address / group<br/>DTEK + Ukrenergo applicable-source logic"]
         SEND["Notification services<br/>templates, dedupe, quiet hours<br/>send / edit / reply / replace-delete"]
         CHECK["Address-check queue<br/>cache, cooldown and budgets"]
@@ -87,10 +87,10 @@ flowchart TB
 
     SVB["External Svitlobot API<br/>optional encrypted channel key"]
     DTEK --> SHARED
-    YASNO --> SHARED
+    YASNO --> COLLECT
     DTEK --> MON
     ROUTE -. "LLM first; deterministic fallback" .-> LLM
-    SHARED -->|"popup / group / directory / address results"| INGEST
+    SHARED -->|"popup / directory / address results; backup monitoring tick"| INGEST
     REFRESH -->|"POST /ingest/schedules/tick"| INGEST
     COLLECT -->|"repository_dispatch: check-regions"| SHARED
     CHECK -->|"repository_dispatch: check-addresses"| SHARED
@@ -116,11 +116,11 @@ the diagram groups the API boundary for readability.
 
 | Component | Responsibility | Trigger / persistence |
 |---|---|---|
-| Backend `TickLoop` | Collect DTEK popups and grid status alongside cache-aware schedule reads; reconcile after collection; evaluate schedule messages and Svitlobot | Default 5 minutes, after an initial 30-second delay; configurable / disableable |
+| Backend `TickLoop` | Collect DTEK popups, grid status and Yasno group status alongside cache-aware schedule reads; reconcile after collection; evaluate schedule messages and Svitlobot | Default 5 minutes, after an initial 30-second delay; configurable / disableable |
 | Baskerville schedule provider | Share one snapshot per source file across cycles, Mini App reads and backup schedule ticks; conditional GET when due; retain usable stale data on failure | 10-minute refresh window (`Dtek:Schedules:CacheMinutes`); intervening 5-minute cycles use cached data, including backoff after failed attempts |
 | Backend `MonitorWorkflowTimer` | Dispatch `check-emergency` to the standalone monitor workflow, because GitHub cron often skips runs | Every `Dtek:Timers:MonitorWorkflowIntervalMinutes` in `dtek-settings.json` (default 15, `0` = off); needs `GitHub:Repository` and `GitHub:DispatchToken` |
 | GitHub monitor workflow | Optional standalone monitor (`monitor.js`) | Backend dispatch every 15 minutes; hourly UTC cron backup at minute 7; manual, `check-dtek` (with address check) and `check-emergency` |
-| GitHub shared-bot workflow | Browser collection, group statuses, address directories, queued address checks; grid tick request | `check-regions` / `check-addresses` dispatch from the backend; hourly UTC cron backup at minute 37; manual |
+| GitHub shared-bot workflow | Browser observations, address directories and queued checks; asks the API to run a coordinated monitoring tick as backup | `check-regions` / `check-addresses` dispatch from the backend; hourly UTC cron backup at minute 37; manual |
 | GitHub schedule-refresh workflow | Ask backend to evaluate schedules and sync Svitlobot (backup for `TickLoop`) | UTC cron every 10 minutes, offset to minute 2 |
 | SQL Server | Shared product's durable state | EF Core; source state, subscriptions and delivery records survive restarts |
 | Backend memory | Source/model caches, coordination gates and pending correlated browser replies | Process lifetime only; not a distributed queue/lock; popup results cached up to 24 hours with 30-minute provider-failure cooldown |
@@ -135,6 +135,17 @@ The personal monitor first dispatches after 60 seconds; failed dispatches retry
 on the next interval. Dispatch acceptance is not proof of a completed run.
 Deploy the backend and merge workflows to the default branch to activate them.
 Use one backend instance; the timers and coordination gates are not distributed.
+
+Shared-bot group collection and popup interpretation are API-owned services.
+Browser workers supply raw source observations; the independent standalone
+private-channel monitor/parser remains unchanged. Legacy group ingest accepts
+optional `observedAt` for ordering, but untimestamped legacy callers cannot provide
+the same out-of-order protection.
+
+Accepted emergency records remain persisted when a source becomes unavailable.
+Some reconciliation and assessment paths still use those records without an
+evidence-age expiry; this known release gap is separate from rejecting stale or
+out-of-order incoming observations. No automatic clearance is inferred from age.
 
 ## 3. Main journeys
 

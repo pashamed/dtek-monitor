@@ -49,7 +49,18 @@ public sealed class GridTickService(
                 continue;
             }
 
+            if (!GridStatuses.IsKnown(status.Status))
+            {
+                logger.LogWarning("Ignoring unknown grid status for {Region}", region.Id);
+                continue;
+            }
+
             var row = await db.GridStates.FirstOrDefaultAsync(g => g.RegionId == region.Id, ct);
+            if (row is not null && feed.GeneratedAt < row.FeedGeneratedAt)
+            {
+                logger.LogWarning("Ignoring older grid observation for {Region}", region.Id);
+                continue;
+            }
             var previousKind = row?.Kind ?? Parsing.PopupKind.None;
             if (row is null)
             {

@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-test('browser fallback checks selected regions concurrently and returns correlated observations', async () => {
+for (const collectionId of ['cycle-test', '']) test(`shared collector returns raw observations without Yasno requests (${collectionId || 'backup'})`, async () => {
   const preload = `
     import { registerHooks } from 'node:module';
     const browser = \`
@@ -43,15 +43,15 @@ test('browser fallback checks selected regions concurrently and returns correlat
     env: {
       ...process.env,
       INGEST_URL: 'https://ingest.test/ingest', INGEST_SECRET: 'test',
-      DTEK_COLLECTION_ID: 'cycle-test', DTEK_REGION_IDS: '["kyiv","kyiv-oblast"]',
+      DTEK_COLLECTION_ID: collectionId, DTEK_REGION_IDS: '["kyiv","kyiv-oblast"]',
     },
     timeout: 10000,
   });
-  assert.match(stdout, /ACTIVE:2/);
+  if (collectionId) assert.match(stdout, /ACTIVE:2/);
   const observations = stdout.split('\n').filter(line => line.startsWith('OBSERVATION:'))
     .map(line => JSON.parse(line.slice('OBSERVATION:'.length)));
   assert.deepEqual(observations.map(r => r.regionId).sort(), ['kyiv', 'kyiv-oblast']);
-  assert.ok(observations.every(r => r.collectionId === 'cycle-test' && r.popupText === 'Екстрені відключення'));
+  assert.ok(observations.every(r => (r.collectionId ?? '') === collectionId && r.popupText === 'Екстрені відключення'));
   assert.ok(observations.every(r => !Object.hasOwn(r, 'structured')));
 });
 

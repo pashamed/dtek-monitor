@@ -31,7 +31,8 @@ public sealed partial class ScheduleNotifier(
     IScheduleProvider schedules,
     IOptionsMonitor<DtekSettings> options,
     TimeProvider time,
-    ILogger<ScheduleNotifier> logger)
+    ILogger<ScheduleNotifier> logger,
+    PrivateNotificationMirror mirror)
 {
     private const int MaxRetryAfterSeconds = 10;
     private const int MaxCaptionLength = 1024;
@@ -96,6 +97,7 @@ public sealed partial class ScheduleNotifier(
     {
         var settings = options.CurrentValue;
         var now = time.GetUtcNow();
+        await mirror.RetryPendingAsync(ct);
 
         var channels = await db.Channels
             .Where(c => c.IsActive && !c.IsPaused && c.GroupId != null
@@ -217,6 +219,7 @@ public sealed partial class ScheduleNotifier(
 
     public async Task<SchedulePostNowResult> SendScheduleNowAsync(Channel channel, CancellationToken ct)
     {
+        await mirror.RetryPendingAsync(ct);
         var settings = options.CurrentValue;
         var region = settings.Regions.FirstOrDefault(r => r.Id == channel.RegionId && r.HasSchedules);
         if (region is null || string.IsNullOrWhiteSpace(channel.GroupId))
@@ -286,10 +289,11 @@ public sealed partial class ScheduleNotifier(
                 text += "\n" + string.Join("; ", affected.Select(id => System.Net.WebUtility.HtmlEncode(channel.GroupNames(id)) + " · " + id));
             try
             {
-                await WithRetry(() => WithMarkupFallback(
+                var sent = await WithRetry(() => WithMarkupFallback(
                     text,
                     (t, mode) => bot.SendMessage(
                         channel.ChatId, t, parseMode: mode, disableNotification: disableNotification, cancellationToken: ct)), ct);
+                await mirror.SyncAsync(sent, ct, disableNotification: disableNotification);
                 db.ScheduleReminderDeliveries.Add(new ScheduleReminderDelivery
                 {
                     ChatId = channel.ChatId,
@@ -394,7 +398,7 @@ public sealed partial class ScheduleNotifier(
             if (newEpisode || pictureModeFlipped || (phaseChanged && mode != PostMode.Edit))
             {
                 var (messageId, isPhoto) = await SendNewAsync(
-                    channel.ChatId, desired.Text, desired.ImageUrl, ct, disableNotification);
+                    channel.ChatId, desired.Text, desired.ImageUrl, ct, disableNotification, mirrorToPrivate: true);
                 if (thread is not null && (mode == PostMode.ReplaceDelete || pictureModeFlipped))
                 {
                     await DeleteQuietlyAsync(channel.ChatId, thread.MessageId, ct);
@@ -415,7 +419,7 @@ public sealed partial class ScheduleNotifier(
             {
                 // The message is gone (deleted by an admin): post a fresh one.
                 var (messageId, isPhoto) = await SendNewAsync(
-                    channel.ChatId, desired.Text, desired.ImageUrl, ct, disableNotification);
+                    channel.ChatId, desired.Text, desired.ImageUrl, ct, disableNotification, mirrorToPrivate: true);
                 Save(channel, region, thread, desired, hash, messageId, isPhoto, threads, now);
                 return Outcome.Sent;
             }
@@ -533,13 +537,13 @@ public sealed partial class ScheduleNotifier(
                 else
                 {
                     (messageId, isPhoto) = await SendNewAsync(
-                        channel.ChatId, text, imageUrl, ct, disableNotification);
+                        channel.ChatId, text, imageUrl, ct, disableNotification, mirrorToPrivate: true);
                 }
             }
             else
             {
                 (messageId, isPhoto) = await SendNewAsync(
-                    channel.ChatId, text, imageUrl, ct, disableNotification);
+                    channel.ChatId, text, imageUrl, ct, disableNotification, mirrorToPrivate: true);
                 if (post is not null && (mode == PostMode.ReplaceDelete || (mode == PostMode.Edit && sameDay && flipped)))
                 {
                     await DeleteQuietlyAsync(channel.ChatId, post.MessageId, ct);
@@ -617,7 +621,7 @@ public sealed partial class ScheduleNotifier(
                 if (edit && i < oldIds.Count && await EditAsync(channel.ChatId, oldIds[i], false, "", ScheduleImage.None, desired, ct))
                     ids.Add(oldIds[i]);
                 else
-                    ids.Add((await SendNewAsync(channel.ChatId, parts[i], null, ct, disableNotification)).MessageId);
+                    ids.Add((await SendNewAsync(channel.ChatId, parts[i], null, ct, disableNotification, mirrorToPrivate: true)).MessageId);
             }
             if (channel.SchedulePostMode == PostMode.ReplaceDelete || (sameDay && channel.SchedulePostMode == PostMode.Edit))
                 foreach (var id in oldIds.Except(ids)) await DeleteQuietlyAsync(channel.ChatId, id, ct);
@@ -665,7 +669,8 @@ public sealed partial class ScheduleNotifier(
         string text,
         string? imageUrl,
         CancellationToken ct,
-        bool disableNotification = false)
+        bool disableNotification = false,
+        bool mirrorToPrivate = false)
     {
         if (imageUrl is not null && text.Length <= MaxCaptionLength)
         {
@@ -676,6 +681,7 @@ public sealed partial class ScheduleNotifier(
                     (t, mode) => bot.SendPhoto(
                         chatId, InputFile.FromString(imageUrl), caption: t, parseMode: mode,
                         disableNotification: disableNotification, cancellationToken: ct)), ct);
+                if (mirrorToPrivate) await mirror.SyncAsync(message, ct, disableNotification: disableNotification);
                 return (message.Id, true);
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400 && !IsChatProblem(ex))
@@ -689,6 +695,7 @@ public sealed partial class ScheduleNotifier(
             (t, mode) => bot.SendMessage(
                 chatId, t, parseMode: mode, linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true },
                 disableNotification: disableNotification, cancellationToken: ct)), ct);
+        if (mirrorToPrivate) await mirror.SyncAsync(sent, ct, disableNotification: disableNotification);
         return (sent.Id, false);
     }
 
@@ -706,9 +713,10 @@ public sealed partial class ScheduleNotifier(
         {
             if (!isPhoto || desired.ImageUrl is null)
             {
-                await WithRetry(() => WithMarkupFallback(
+                var edited = await WithRetry(() => WithMarkupFallback(
                     desired.Text,
                     (t, mode) => bot.EditMessageText(chatId, messageId, t, parseMode: mode, cancellationToken: ct)), ct);
+                await mirror.SyncAsync(edited, ct, disableNotification: true);
                 return true;
             }
 
@@ -716,13 +724,14 @@ public sealed partial class ScheduleNotifier(
             {
                 try
                 {
-                    await WithRetry(() => WithMarkupFallback(
+                    var edited = await WithRetry(() => WithMarkupFallback(
                         desired.Text,
                         (t, mode) => bot.EditMessageMedia(
                             chatId,
                             messageId,
                             new InputMediaPhoto(InputFile.FromString(desired.ImageUrl)) { Caption = t, ParseMode = mode },
                             cancellationToken: ct)), ct);
+                    await mirror.SyncAsync(edited, ct, disableNotification: true);
                     return true;
                 }
                 catch (ApiRequestException ex) when (ex.ErrorCode == 400 && !IsGone(ex) && !IsNotModified(ex))
@@ -731,9 +740,10 @@ public sealed partial class ScheduleNotifier(
                 }
             }
 
-            await WithRetry(() => WithMarkupFallback(
+            var captionEdited = await WithRetry(() => WithMarkupFallback(
                 desired.Text,
                 (t, mode) => bot.EditMessageCaption(chatId, messageId, t, parseMode: mode, cancellationToken: ct)), ct);
+            await mirror.SyncAsync(captionEdited, ct, disableNotification: true);
             return true;
         }
         catch (ApiRequestException ex) when (IsNotModified(ex))
@@ -752,6 +762,11 @@ public sealed partial class ScheduleNotifier(
         try
         {
             await bot.DeleteMessage(chatId, messageId, ct);
+            await mirror.DeleteAsync(chatId, messageId, ct);
+        }
+        catch (ApiRequestException ex) when (IsDeleteMissing(ex))
+        {
+            await mirror.DeleteAsync(chatId, messageId, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -798,6 +813,9 @@ public sealed partial class ScheduleNotifier(
 
     private static bool IsChatProblem(ApiRequestException ex) =>
         ex.Message.Contains("chat not found", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDeleteMissing(ApiRequestException ex) => ex.ErrorCode == 400
+        && ex.Message.Contains("message to delete not found", StringComparison.OrdinalIgnoreCase);
 
     private static string Hash(string text) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];

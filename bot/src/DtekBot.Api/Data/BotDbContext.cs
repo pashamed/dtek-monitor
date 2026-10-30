@@ -319,6 +319,14 @@ public sealed class ChannelAdmin
     public DateTimeOffset LinkedAt { get; set; }
 }
 
+public sealed class PrivateNotificationCopy
+{
+    public long SourceChatId { get; set; }
+    public int SourceMessageId { get; set; }
+    public long UserId { get; set; }
+    public int MessageId { get; set; }
+}
+
 public sealed class RegionState
 {
     public string RegionId { get; set; } = "";
@@ -366,6 +374,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<RegionState> RegionStates => Set<RegionState>();
     public DbSet<Delivery> Deliveries => Set<Delivery>();
     public DbSet<ChannelAdmin> ChannelAdmins => Set<ChannelAdmin>();
+    public DbSet<PrivateNotificationCopy> PrivateNotificationCopies => Set<PrivateNotificationCopy>();
     public DbSet<GroupState> GroupStates => Set<GroupState>();
     public DbSet<AddressCheck> AddressChecks => Set<AddressCheck>();
     public DbSet<AddressResult> AddressResults => Set<AddressResult>();
@@ -514,6 +523,14 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
         {
             e.HasKey(x => new { x.ChatId, x.UserId });
             e.HasIndex(x => x.UserId);
+        });
+
+        modelBuilder.Entity<PrivateNotificationCopy>(e =>
+        {
+            e.HasKey(x => new { x.SourceChatId, x.SourceMessageId, x.UserId });
+            e.HasOne<ChannelAdmin>().WithMany()
+                .HasForeignKey(x => new { x.SourceChatId, x.UserId })
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<RegionState>(e =>

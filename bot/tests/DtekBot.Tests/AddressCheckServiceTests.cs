@@ -25,7 +25,7 @@ public sealed class AddressCheckServiceTests : IDisposable
     public AddressCheckServiceTests()
     {
         _service = new AddressCheckService(
-            _f.Db, _f.Bot, _trigger, _f.Options, _clock, NullLogger<AddressCheckService>.Instance);
+            _f.Db, _f.Bot, _trigger, _f.Options, _clock, NullLogger<AddressCheckService>.Instance, _f.CreateMirror(time: _clock));
     }
 
     public void Dispose() => _f.Dispose();
@@ -627,6 +627,43 @@ public sealed class AddressCheckServiceTests : IDisposable
         var check = Assert.Single(Checks());
         Assert.Equal(AddressCheckStatus.Done, check.Status);
         Assert.Equal(Start, check.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Process_PausedAtCompletion_SuppressesQueuedReplyButMarksDone()
+    {
+        const long channelId = -303;
+        AddChannel(channelId, c => c.IsPaused = true);
+        AddCheck(channelId, AddressCheckStatus.Pending, TimeSpan.FromMinutes(2));
+
+        var answered = await _service.ProcessResultsAsync(
+            Results(houses: [("12", Entry())]), CancellationToken.None);
+
+        Assert.Equal(1, answered);
+        Assert.Empty(_f.Bot.SentTo(channelId));
+        Assert.Equal(AddressCheckStatus.Done, Assert.Single(Checks(channelId)).Status);
+    }
+
+    [Fact]
+    public async Task Process_QuietHoursSilenceQueuedReplyAndPrivateCopy()
+    {
+        const long channelId = -304;
+        const long admin = 9002;
+        AddChannel(channelId, c =>
+        {
+            c.QuietHoursEnabled = true;
+            c.QuietHoursStartMinute = 14 * 60;
+            c.QuietHoursEndMinute = 16 * 60;
+        });
+        _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = channelId, UserId = admin });
+        _f.Db.SaveChanges();
+        _f.Bot.SetStatus(admin, ChatMemberStatus.Administrator);
+        AddCheck(channelId, AddressCheckStatus.Pending, TimeSpan.FromMinutes(2));
+
+        await _service.ProcessResultsAsync(Results(houses: [("12", Entry())]), CancellationToken.None);
+
+        Assert.True(Assert.Single(_f.Bot.SentTo(channelId)).DisableNotification);
+        Assert.True(Assert.Single(_f.Bot.Requests.OfType<CopyMessageRequest>()).DisableNotification);
     }
 
     [Fact]

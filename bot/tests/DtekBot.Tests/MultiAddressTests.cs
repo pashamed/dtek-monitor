@@ -144,7 +144,7 @@ public sealed class MultiAddressTests : IDisposable
         var channel = f.AddChannel(21, c => { c.GroupId = "45.1"; c.ScheduleReminder = true; c.ScheduleReminderMinutes = 15;
             c.Addresses = [Address("Дім", "45.1"), Address("Офіс", "2.1")]; });
         var clock = new TestClock(Kyiv(15, 10, 45));
-        var notifier = new ScheduleNotifier(f.Db, f.Bot, provider, f.Options, clock, NullLogger<ScheduleNotifier>.Instance);
+        var notifier = new ScheduleNotifier(f.Db, f.Bot, provider, f.Options, clock, NullLogger<ScheduleNotifier>.Instance, f.CreateMirror(time: clock));
         await notifier.TickAsync(default); await notifier.TickAsync(default);
         var message = Assert.Single(f.Bot.Requests.OfType<SendMessageRequest>());
         Assert.Contains("45.1", message.Text); Assert.Contains("2.1", message.Text);
@@ -166,7 +166,7 @@ public sealed class MultiAddressTests : IDisposable
         var provider = new FakeScheduleProvider(); provider.Snapshots["kyiv"] = RealSnapshot();
         var channel = f.AddChannel(22, c => { c.GroupId = "45.1"; c.SchedulePost = true; c.SchedulePostMode = mode;
             c.Addresses = [Address("Дім", "45.1"), Address("Офіс", "2.1")]; });
-        var notifier = new ScheduleNotifier(f.Db, f.Bot, provider, f.Options, new TestClock(Kyiv(15, 12)), NullLogger<ScheduleNotifier>.Instance);
+        var notifier = new ScheduleNotifier(f.Db, f.Bot, provider, f.Options, new TestClock(Kyiv(15, 12)), NullLogger<ScheduleNotifier>.Instance, f.CreateMirror());
         Assert.Equal(1, (await notifier.TickAsync(default)).Sent);
         Assert.Equal(0, (await notifier.TickAsync(default)).Sent);
         Assert.Single(f.Db.SchedulePostThreads);
@@ -184,7 +184,7 @@ public sealed class MultiAddressTests : IDisposable
             c.Addresses = [Address("Дім", "45.1"), Address("Офіс"), Address("Гараж")]; });
         var clock = new TestClock(Kyiv(15, 12)); var trigger = new FakeWorkflowTrigger();
         var provider = new FakeScheduleProvider(); provider.Snapshots["kyiv"] = RealSnapshot();
-        var checks = new AddressCheckService(f.Db, f.Bot, trigger, f.Options, clock, NullLogger<AddressCheckService>.Instance);
+        var checks = new AddressCheckService(f.Db, f.Bot, trigger, f.Options, clock, NullLogger<AddressCheckService>.Instance, f.CreateMirror(time: clock));
         var assessment = new OutageAssessmentService(f.Db, checks, provider, f.Options, clock);
         var text = await assessment.AssessAsync(channel, default);
         Assert.Equal(3, text.Split('\n').Length);
@@ -208,7 +208,7 @@ public sealed class MultiAddressTests : IDisposable
     {
         var channel = f.AddChannel(32, c => c.Addresses = [Address("Дім"), Address("Офіс")]);
         var clock = new TestClock(Kyiv(15, 12));
-        var checks = new AddressCheckService(f.Db, f.Bot, new FakeWorkflowTrigger(), f.Options, clock, NullLogger<AddressCheckService>.Instance);
+        var checks = new AddressCheckService(f.Db, f.Bot, new FakeWorkflowTrigger(), f.Options, clock, NullLogger<AddressCheckService>.Instance, f.CreateMirror(time: clock));
         await checks.RequestBatchAsync(channel, channel.Addresses, default);
         var first = channel.Addresses[0]; var second = channel.Addresses[1];
         var result = new HouseResultEntry(true, "", "", "", "");
@@ -227,11 +227,11 @@ public sealed class MultiAddressTests : IDisposable
             c.Addresses = [Address("Дім", "45.1"), Address("Офіс", "45.1")]; });
         var clock = new TestClock(Kyiv(15, 12)); var provider = new FakeScheduleProvider();
         provider.Snapshots["kyiv"] = RealSnapshot();
-        var checks = new AddressCheckService(f.Db, f.Bot, new FakeWorkflowTrigger(), f.Options, clock, NullLogger<AddressCheckService>.Instance);
+        var checks = new AddressCheckService(f.Db, f.Bot, new FakeWorkflowTrigger(), f.Options, clock, NullLogger<AddressCheckService>.Instance, f.CreateMirror(time: clock));
         var assessment = new OutageAssessmentService(f.Db, checks, provider, f.Options, clock);
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
         var handler = new DtekBot.Api.Bot.BotUpdateHandler(f.Bot, f.Db, assessment, config, clock,
-            NullLogger<DtekBot.Api.Bot.BotUpdateHandler>.Instance);
+            NullLogger<DtekBot.Api.Bot.BotUpdateHandler>.Instance, f.CreateMirror(time: clock));
         await handler.HandleAsync(new Telegram.Bot.Types.Update { ChannelPost = new Telegram.Bot.Types.Message {
             Id = 123, Chat = new Telegram.Bot.Types.Chat { Id = channel.ChatId, Type = Telegram.Bot.Types.Enums.ChatType.Channel },
             Text = "🔴 20:06 Світло зникло\nОчікуємо за графіком о 23:59\nСвітло було 999 год" } }, default);

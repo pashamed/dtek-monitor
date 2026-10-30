@@ -17,7 +17,8 @@ public sealed class AlertDispatcher(
     ITelegramBotClient bot,
     BotDbContext db,
     TimeProvider time,
-    ILogger<AlertDispatcher> logger)
+    ILogger<AlertDispatcher> logger,
+    PrivateNotificationMirror mirror)
 {
     private const int MaxRetryAfterSeconds = 10;
     private static readonly TimeSpan TelegramDeleteWindow = TimeSpan.FromHours(48);
@@ -45,6 +46,7 @@ public sealed class AlertDispatcher(
     {
         int sent = 0, edited = 0, closed = 0, failed = 0;
         var now = time.GetUtcNow();
+        await mirror.RetryPendingAsync(ct);
 
         var channels = await db.Channels
             .Where(c => c.RegionId == region.Id && c.IsActive)
@@ -165,6 +167,7 @@ public sealed class AlertDispatcher(
         var now = time.GetUtcNow();
         var key = GroupDeliveryKey(region.Id, groupId);
         var hash = $"group:{groupId}:{(isEmergency ? "emergency" : "ok")}";
+        await mirror.RetryPendingAsync(ct);
 
         var channels = await db.Channels
             .Where(c => c.RegionId == region.Id && c.IsActive && (c.Addresses.Any(a => a.Groups.Any(g => g.GroupId == groupId)) || (!c.Addresses.Any() && c.GroupId == groupId)))
@@ -247,7 +250,7 @@ public sealed class AlertDispatcher(
 
         if (delivery is not null && !channel.DeletePreviousAlert && channel.SlotEditInPlace(slot))
         {
-            await WithMarkupFallback(
+            var edited = await WithMarkupFallback(
                 text,
                 t => bot.EditMessageText(
                     channel.ChatId,
@@ -257,6 +260,7 @@ public sealed class AlertDispatcher(
                     linkPreviewOptions: NoPreview,
                     cancellationToken: ct),
                 channel);
+            await mirror.SyncAsync(edited, ct, disableNotification: true);
             delivery.ContentHash = hash;
             delivery.UpdatedAt = now;
             return Outcome.Edited;
@@ -272,6 +276,7 @@ public sealed class AlertDispatcher(
                 disableNotification: QuietHours.IsQuiet(channel, now),
                 cancellationToken: ct),
             channel);
+        await mirror.SyncAsync(message, ct, disableNotification: QuietHours.IsQuiet(channel, now));
 
         if (delivery is not null && channel.DeletePreviousAlert)
         {
@@ -312,6 +317,11 @@ public sealed class AlertDispatcher(
         try
         {
             await bot.DeleteMessage(channel.ChatId, delivery.TelegramMessageId, ct);
+            await mirror.DeleteAsync(channel.ChatId, delivery.TelegramMessageId, ct);
+        }
+        catch (ApiRequestException ex) when (IsDeleteMissing(ex))
+        {
+            await mirror.DeleteAsync(channel.ChatId, delivery.TelegramMessageId, ct);
         }
         catch (ApiRequestException ex)
         {
@@ -353,7 +363,7 @@ public sealed class AlertDispatcher(
         {
             try
             {
-                await WithMarkupFallback(
+                var edited = await WithMarkupFallback(
                     text,
                     t => bot.EditMessageText(
                         delivery.ChatId,
@@ -363,6 +373,7 @@ public sealed class AlertDispatcher(
                         linkPreviewOptions: NoPreview,
                         cancellationToken: ct),
                     channel);
+                await mirror.SyncAsync(edited, ct, disableNotification: true);
                 return Outcome.Closed;
             }
             catch (ApiRequestException ex) when (ex.Message.Contains("message is not modified", StringComparison.OrdinalIgnoreCase))
@@ -378,7 +389,7 @@ public sealed class AlertDispatcher(
             }
         }
 
-        await WithMarkupFallback(
+        var sent = await WithMarkupFallback(
             text,
             t => bot.SendMessage(
                 delivery.ChatId,
@@ -395,6 +406,8 @@ public sealed class AlertDispatcher(
                 disableNotification: QuietHours.IsQuiet(channel, now),
                 cancellationToken: ct),
             channel);
+        await mirror.SyncAsync(sent, ct, style == EndStyle.New ? null : delivery.TelegramMessageId,
+            QuietHours.IsQuiet(channel, now));
         return Outcome.Closed;
     }
 
@@ -533,4 +546,7 @@ public sealed class AlertDispatcher(
     private static bool IsGone(ApiRequestException ex) =>
         ex.ErrorCode == 403
         || (ex.ErrorCode == 400 && ex.Message.Contains("chat not found", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsDeleteMissing(ApiRequestException ex) => ex.ErrorCode == 400
+        && ex.Message.Contains("message to delete not found", StringComparison.OrdinalIgnoreCase);
 }

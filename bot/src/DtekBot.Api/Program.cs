@@ -78,6 +78,14 @@ builder.Services.AddHostedService<BotMenuInitializer>();
 builder.Services.AddHostedService<TickLoop>();
 builder.Services.AddHostedService<MonitorWorkflowTimer>();
 builder.Services.AddScoped<MonitoringCycle>();
+builder.Services.AddScoped<GroupObservationStore>();
+builder.Services.AddSingleton<IGroupStatusCollector, GroupStatusCollector>();
+builder.Services.AddHttpClient(GroupStatusCollector.ClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.MaxResponseContentBufferSize = 1024 * 1024;
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("dtek-monitor-bot/1.0");
+});
 builder.Services.AddScoped<RegionObservationStore>();
 builder.Services.AddSingleton<DtekPopupCollector>();
 builder.Services.AddSingleton<IDtekPopupCollector>(sp => sp.GetRequiredService<DtekPopupCollector>());
@@ -88,6 +96,7 @@ builder.Services.AddHttpClient(DtekPopupCollector.ClientName, client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; dtek-monitor-bot/1.0)");
 });
 builder.Services.AddScoped<AlertDispatcher>();
+builder.Services.AddScoped<PrivateNotificationMirror>();
 builder.Services.AddScoped<RegionAlertCoordinator>();
 builder.Services.AddScoped<DtekBot.Api.Grid.GridTickService>();
 builder.Services.AddSingleton<DtekBot.Api.Grid.IGridStatusProvider, DtekBot.Api.Grid.GridStatusProvider>();
@@ -211,6 +220,7 @@ app.MapAddressDirectoryIngest();
 app.MapAddressCheckIngest();
 app.MapScheduleTick();
 app.MapGridTick();
+app.MapMonitoringTick();
 
 app.MapPost("/webhook", async (
     Update update,

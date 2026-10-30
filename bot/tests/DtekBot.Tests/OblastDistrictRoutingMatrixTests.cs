@@ -341,8 +341,8 @@ public sealed class OblastDistrictRoutingMatrixTests
             Assert.True(delivery.IsClosed);
             var end = Sent(chat).Last();
             Assert.StartsWith($"ENDED-{chat}|", end.Text);
-            Assert.Contains("екстрені відключення знято", end.Text);
-            Assert.Contains("Це не підтвердження", end.Text);
+            Assert.Contains("запис про екстрені відключення", end.Text);
+            Assert.Contains("Це не підтверджує", end.Text);
             Assert.Equal(delivery.TelegramMessageId, end.ReplyParameters?.MessageId);
             if (chat == Outside)
                 Assert.Contains($"parts=[{_outsideName}]", end.Text);

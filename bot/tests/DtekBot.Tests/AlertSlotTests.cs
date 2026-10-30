@@ -124,7 +124,8 @@ public sealed class AlertSlotTests : IDisposable
 
         var reply = _f.Bot.Sent.Last();
         Assert.StartsWith("ℹ️ ", reply.Text);
-        Assert.Contains("відключення знято", reply.Text);
+        Assert.Contains("запис про екстрені відключення більше не відображається", reply.Text);
+        Assert.Contains("не підтверджує, що електропостачання відновлено", reply.Text);
         Assert.DoesNotContain("✅", reply.Text);
         Assert.Contains("Деталі:", reply.Text);
     }

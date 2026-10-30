@@ -26,7 +26,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
     public OutageAssessmentServiceTests()
     {
         var checks = new AddressCheckService(
-            _f.Db, _f.Bot, _trigger, _f.Options, _clock, NullLogger<AddressCheckService>.Instance);
+            _f.Db, _f.Bot, _trigger, _f.Options, _clock, NullLogger<AddressCheckService>.Instance, _f.CreateMirror(time: _clock));
         _service = new OutageAssessmentService(_f.Db, checks, _schedules, _f.Options, _clock);
         _schedules.Snapshots["kyiv"] = RealSnapshot();
     }

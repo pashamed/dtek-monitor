@@ -1,6 +1,7 @@
 using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
 using DtekBot.Api.Grid;
+using DtekBot.Api.Groups;
 using DtekBot.Api.Parsing;
 using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
@@ -35,6 +36,17 @@ public sealed class MonitoringCycleTests
         }
     }
 
+    private sealed class Groups : IGroupStatusCollector
+    {
+        public bool Started { get; private set; }
+        public TaskCompletionSource<IReadOnlyList<GroupObservation>> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<IReadOnlyList<GroupObservation>> CollectAsync(CancellationToken ct)
+        {
+            Started = true;
+            return Result.Task;
+        }
+    }
+
     private sealed class Schedules : IScheduleProvider
     {
         public List<string> Started { get; } = [];
@@ -54,21 +66,23 @@ public sealed class MonitoringCycleTests
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateClient();
-        factory.WithDb(db => db.Channels.Add(new Channel { ChatId = 123, RegionId = "kyiv", IsActive = true }));
+        factory.WithDb(db => db.Channels.Add(new Channel { ChatId = 123, RegionId = "kyiv", GroupId = "45.1", IsActive = true }));
         using var scope = factory.Services.CreateScope();
         var sp = scope.ServiceProvider;
         var popups = new Popups();
         var grid = new Grid();
         var schedules = new Schedules();
+        var groups = new Groups();
         var options = sp.GetRequiredService<IOptionsMonitor<DtekSettings>>();
         var cycle = new MonitoringCycle(popups, grid, schedules, sp.GetRequiredService<GridTickService>(),
             sp.GetRequiredService<RegionObservationStore>(), sp.GetRequiredService<RegionAlertCoordinator>(),
             sp.GetRequiredService<ScheduleNotifier>(), sp.GetRequiredService<SvitlobotScheduleSyncService>(),
-            options, NullLogger<MonitoringCycle>.Instance);
+            options, NullLogger<MonitoringCycle>.Instance, groups, sp.GetRequiredService<GroupObservationStore>());
 
         var run = cycle.RunAsync(CancellationToken.None);
         Assert.True(popups.Started);
         Assert.True(grid.Started);
+        Assert.True(groups.Started);
         Assert.Equal(options.CurrentValue.Regions.Count(r => r.HasSchedules), schedules.Started.Count);
         Assert.False(run.IsCompleted);
 
@@ -82,11 +96,18 @@ public sealed class MonitoringCycleTests
         Assert.Empty(factory.Bot.SentTo(123));
 
         schedules.Result.SetResult(null);
+        Assert.False(run.IsCompleted);
+        Assert.Empty(factory.WithDb(db => db.GroupStates.ToArray()));
+        groups.Result.SetResult([new("kyiv", new Dictionary<string, GroupStatusEntry>
+        {
+            ["45.1"] = new(GroupStatuses.Emergency, ""),
+        }, factory.Clock.Now)]);
         await run.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Single(factory.WithDb(db => db.RegionStates.ToArray()));
         Assert.Single(factory.WithDb(db => db.GridStates.ToArray()));
-        var message = Assert.Single(factory.Bot.SentTo(123));
-        Assert.Contains("ДТЕК", message.Text); // No intermediate Ukrenergo-only post.
+        Assert.Single(factory.WithDb(db => db.GroupStates.ToArray()));
+        Assert.Equal(2, factory.Bot.SentTo(123).Count());
+        Assert.Contains("ДТЕК", factory.Bot.SentTo(123).First().Text); // No intermediate Ukrenergo-only post.
     }
 
     [Fact]
@@ -100,6 +121,10 @@ public sealed class MonitoringCycleTests
             PopupText = "Екстрені відключення", NormalizedText = "екстрені відключення",
             ObservedAt = factory.Clock.Now, UpdatedAt = factory.Clock.Now,
         }));
+        factory.WithDb(db => db.GroupStates.Add(new GroupState
+        {
+            RegionId = "kyiv", GroupId = "45.1", Today = GroupStatuses.Emergency, UpdatedAt = factory.Clock.Now,
+        }));
         using var scope = factory.Services.CreateScope();
         var sp = scope.ServiceProvider;
         var popups = new Popups();
@@ -111,9 +136,11 @@ public sealed class MonitoringCycleTests
         var cycle = new MonitoringCycle(popups, grid, schedules, sp.GetRequiredService<GridTickService>(),
             sp.GetRequiredService<RegionObservationStore>(), sp.GetRequiredService<RegionAlertCoordinator>(),
             sp.GetRequiredService<ScheduleNotifier>(), sp.GetRequiredService<SvitlobotScheduleSyncService>(),
-            sp.GetRequiredService<IOptionsMonitor<DtekSettings>>(), NullLogger<MonitoringCycle>.Instance);
+            sp.GetRequiredService<IOptionsMonitor<DtekSettings>>(), NullLogger<MonitoringCycle>.Instance,
+            factory.Groups, sp.GetRequiredService<GroupObservationStore>());
         await cycle.RunAsync(CancellationToken.None);
         Assert.Equal(PopupKind.Emergency, factory.WithDb(db => db.RegionStates.Single().Kind));
+        Assert.True(factory.WithDb(db => db.GroupStates.Single().IsEmergency));
     }
 
     [Fact]
@@ -147,7 +174,8 @@ public sealed class MonitoringCycleTests
         var cycle = new MonitoringCycle(popups, grid, schedules, sp.GetRequiredService<GridTickService>(),
             sp.GetRequiredService<RegionObservationStore>(), sp.GetRequiredService<RegionAlertCoordinator>(),
             sp.GetRequiredService<ScheduleNotifier>(), sp.GetRequiredService<SvitlobotScheduleSyncService>(),
-            sp.GetRequiredService<IOptionsMonitor<DtekSettings>>(), NullLogger<MonitoringCycle>.Instance);
+            sp.GetRequiredService<IOptionsMonitor<DtekSettings>>(), NullLogger<MonitoringCycle>.Instance,
+            factory.Groups, sp.GetRequiredService<GroupObservationStore>());
 
         await cycle.RunAsync(CancellationToken.None);
 

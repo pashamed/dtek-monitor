@@ -62,63 +62,11 @@ public static class MiniAppApi
                 var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
                 if (region is null) return Error("Оберіть регіон.");
                 var snapshot = region.HasSchedules ? await schedules.GetAsync(region.Id, ct) : null;
-                var ids = new HashSet<long>();
-                foreach (var item in request.Addresses)
-                {
-                    if (item is null || item.RegionId != channel.RegionId)
-                        return Error("Усі адреси мають бути в одному регіоні.");
-                    if (item.Id != 0 && (!ids.Add(item.Id) || !channel.Addresses.Any(a => a.Id == item.Id)))
-                        return Error("Адресу не знайдено.");
-                    if (string.IsNullOrWhiteSpace(item.Name) || item.Name.Length > 64 || item.Name.Any(char.IsControl)
-                        || item.City?.Length > 128 || item.Street?.Length > 256 || item.House?.Length > 64 || item.Label?.Length > 256
-                        || new[] { item.City, item.Street, item.House, item.Label }.Any(t => t?.Any(char.IsControl) == true)
-                        || item.Groups is null || item.Groups.Count > 12)
-                        return Error("Перевірте назву, адресу та черги.");
-                    if (item.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .Any(id => !region.Parts.Any(p => p.Id == id)) == true)
-                        return Error("Невідомий район.");
-                    foreach (var group in item.Groups)
-                    {
-                        if (group is null || !System.Text.RegularExpressions.Regex.IsMatch(group.GroupId ?? "", @"^\d{1,2}\.\d{1,2}$")
-                            || group.Label?.Length > 64 || group.Label?.Any(char.IsControl) == true
-                            || !region.HasSchedules || (snapshot is not null && snapshot.Find(group.GroupId!) is null))
-                            return Error("Перевірте черги обраного регіону.");
-                    }
-                }
-                var removedIds = channel.Addresses.Where(a => !ids.Contains(a.Id)).Select(a => a.Id).ToArray();
-                foreach (var removed in channel.Addresses.Where(a => removedIds.Contains(a.Id)).ToArray())
-                    channel.Addresses.Remove(removed);
-                foreach (var item in request.Addresses)
-                {
-                    var address = item.Id == 0 ? new ChatAddress { ChatId = chatId } : channel.Addresses.First(a => a.Id == item.Id);
-                    if (item.Id == 0) channel.Addresses.Add(address);
-                    address.RegionId = channel.RegionId; address.Name = item.Name.Trim();
-                    address.City = item.City?.Trim(); address.Street = item.Street?.Trim(); address.House = item.House?.Trim();
-                    address.Label = item.Label ?? string.Join(", ", new[] { address.City, address.Street, address.House }.Where(v => !string.IsNullOrEmpty(v)));
-                    address.PartIds = item.PartIds;
-                    var wanted = item.Groups.DistinctBy(g => g.GroupId).ToDictionary(g => g.GroupId);
-                    foreach (var old in address.Groups.Where(g => !wanted.ContainsKey(g.GroupId)).ToArray()) address.Groups.Remove(old);
-                    foreach (var group in wanted.Values)
-                    {
-                        var saved = address.Groups.FirstOrDefault(g => g.GroupId == group.GroupId);
-                        if (saved is null) { saved = new ChatAddressGroup { GroupId = group.GroupId }; address.Groups.Add(saved); }
-                        saved.Label = group.Label?.Trim();
-                    }
-                }
-                channel.MirrorPrimary();
-                var groupKeys = channel.GroupIds().Select(id => AlertDispatcher.GroupDeliveryKey(channel.RegionId, id)).ToArray();
-                var groupPrefix = channel.RegionId + ":group:";
-                foreach (var delivery in await db.Deliveries.Where(d => d.ChatId == chatId && !d.IsClosed
-                    && d.RegionId.StartsWith(groupPrefix) && !groupKeys.Contains(d.RegionId)).ToListAsync(ct))
-                    delivery.IsClosed = true;
+                var addressError = ValidateAddresses(request.Addresses, channel, region, snapshot);
+                if (addressError is not null) return Error(addressError);
+                ApplyAddresses(channel, request.Addresses);
                 if (channel.GroupId is null) { channel.SchedulePost = false; channel.ScheduleNotify = false; channel.ScheduleReminder = false; }
-                foreach (var check in await db.AddressChecks.Where(c => c.ChatId == chatId && c.Status == AddressCheckStatus.Pending).ToListAsync(ct))
-                {
-                    if (channel.Addresses.Any(a => (check.AddressId is null || a.Id == check.AddressId)
-                        && (a.City ?? "") == check.City && a.Street == check.Street && a.House == check.House)) continue;
-                    check.Status = AddressCheckStatus.Expired;
-                    check.CompletedAt = time.GetUtcNow();
-                }
+                await ReconcileAddressStateAsync(db, channel, time.GetUtcNow(), ct);
                 await db.SaveChangesAsync(ct);
                 await transaction.CommitAsync(ct);
                 await catchUp.RunAsync(channel, ct);
@@ -259,6 +207,7 @@ public static class MiniAppApi
             IOptionsMonitor<DtekSettings> settings,
             TimeProvider time,
             AlertCatchUp catchUp,
+            IScheduleProvider schedules,
             CancellationToken ct) =>
         {
             var userId = UserId(http);
@@ -353,130 +302,151 @@ public static class MiniAppApi
                 }
             }
 
-            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
-            var isNew = channel is null;
-            if (channel is null)
+            var gate = AddressGates.GetOrAdd(chatId, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(ct);
+            try
             {
-                channel = new Channel { ChatId = chatId, CreatedAt = time.GetUtcNow() };
-                db.Channels.Add(channel);
-            }
-
-            if (dto.ScheduleReminderMinutes is not (5 or 10 or 15 or 30 or 60))
-            {
-                return Error("Оберіть час попередження: 5, 10, 15, 30 або 60 хвилин.");
-            }
-            if (dto.QuietHoursStartMinute is < 0 or >= 1440
-                || dto.QuietHoursEndMinute is < 0 or >= 1440
-                || (dto.QuietHoursEnabled && dto.QuietHoursStartMinute == dto.QuietHoursEndMinute))
-            {
-                return Error("Оберіть коректний проміжок тихих годин.");
-            }
-
-            if (channel.Addresses.Count > 0 && region is not null && channel.RegionId != region.Id)
-            {
-                return Error("Спершу приберіть адреси поточного регіону.");
-            }
-
-            var before = (WasActive: !isNew && channel.IsActive, channel.IsPaused, channel.RegionId, channel.PartIds, channel.SlotSettings, channel.GroupId);
-
-            if (region is not null)
-            {
-                // A group belongs to one region's power network.
-                if (!string.Equals(channel.RegionId, region.Id, StringComparison.Ordinal))
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+                var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+                var isNew = channel is null;
+                if (channel is null)
                 {
+                    channel = new Channel { ChatId = chatId, CreatedAt = time.GetUtcNow() };
+                    db.Channels.Add(channel);
+                }
+
+                if (dto.ScheduleReminderMinutes is not (5 or 10 or 15 or 30 or 60))
+                {
+                    return Error("Оберіть час попередження: 5, 10, 15, 30 або 60 хвилин.");
+                }
+                if (dto.QuietHoursStartMinute is < 0 or >= 1440
+                    || dto.QuietHoursEndMinute is < 0 or >= 1440
+                    || (dto.QuietHoursEnabled && dto.QuietHoursStartMinute == dto.QuietHoursEndMinute))
+                {
+                    return Error("Оберіть коректний проміжок тихих годин.");
+                }
+
+                if (channel.Addresses.Count > 0 && region is not null && channel.RegionId != region.Id && dto.Addresses is null)
+                {
+                    return Error("Спершу приберіть адреси поточного регіону.");
+                }
+
+                var before = (WasActive: !isNew && channel.IsActive, channel.IsPaused, channel.RegionId, channel.PartIds, channel.SlotSettings, channel.GroupId);
+
+                if (dto.Addresses is not null)
+                {
+                    if (region is null) return Error("Оберіть регіон.");
+                    var snapshot = region.HasSchedules ? await schedules.GetAsync(region.Id, ct) : null;
+                    var addressError = ValidateAddresses(dto.Addresses, channel, region, snapshot);
+                    if (addressError is not null) return Error(addressError);
+                }
+
+                if (region is not null)
+                {
+                    // A group belongs to one region's power network.
+                    if (!string.Equals(channel.RegionId, region.Id, StringComparison.Ordinal))
+                    {
+                        channel.GroupId = null;
+                        channel.AddressLabel = null;
+                        channel.AddressCity = null;
+                        channel.AddressStreet = null;
+                        channel.AddressHouse = null;
+                        channel.ScheduleNotify = false;
+                        channel.ScheduleReminder = false;
+                    }
+
+                    channel.RegionId = region.Id;
+                    channel.PartId = null;
+                    channel.PartIdList = partIds;
+                }
+
+                if (dto.Addresses is not null)
+                    ApplyAddresses(channel, dto.Addresses);
+
+                // Switching the subscription off also removes the saved address and everything that depends on it.
+                if (channel.IsActive && !dto.IsActive)
+                {
+                    channel.Addresses.Clear();
                     channel.GroupId = null;
                     channel.AddressLabel = null;
                     channel.AddressCity = null;
                     channel.AddressStreet = null;
                     channel.AddressHouse = null;
+                    channel.OutageTrigger = false;
                     channel.ScheduleNotify = false;
                     channel.ScheduleReminder = false;
                 }
 
-                channel.RegionId = region.Id;
-                channel.PartId = null;
-                channel.PartIdList = partIds;
-            }
+                channel.IsActive = dto.IsActive;
+                channel.IsPaused = dto.IsPaused;
+                channel.Filter = dto.Filter;
+                channel.DeletePreviousAlert = dto.DeletePreviousAlert ?? channel.DeletePreviousAlert;
+                if (slotSettings is not null)
+                {
+                    // Mirrored into the older columns so clients that do not know the per-slot map still read sensible values.
+                    channel.SlotSettingMap = slotSettings;
+                    channel.NotifyOnEnd = slotSettings.TryGetValue(MessageSlots.Ended, out var ended) ? ended.Enabled : channel.NotifyOnEnd;
+                    channel.EditInPlace = slotSettings.TryGetValue(MessageSlots.Emergency, out var emergency) ? emergency.EditInPlace : channel.EditInPlace;
+                }
+                else
+                {
+                    channel.SlotSettingMap = new Dictionary<string, SlotSettingDto>();
+                    channel.NotifyOnEnd = dto.NotifyOnEnd;
+                    channel.EditInPlace = dto.EditInPlace;
+                }
+                if (templates is not null)
+                {
+                    channel.TemplateMap = templates;
+                    channel.Template = null;
+                }
+                else
+                {
+                    channel.Template = string.IsNullOrWhiteSpace(dto.Template) || PlaceholderNames.ToCanonical(dto.Template) == MessageTemplate.Default ? null : PlaceholderNames.ToCanonical(dto.Template);
+                }
 
-            // Switching the subscription off also removes the saved address and everything that depends on it.
-            if (channel.IsActive && !dto.IsActive)
-            {
-                channel.Addresses.Clear();
-                channel.GroupId = null;
-                channel.AddressLabel = null;
-                channel.AddressCity = null;
-                channel.AddressStreet = null;
-                channel.AddressHouse = null;
-                channel.OutageTrigger = false;
-                channel.ScheduleNotify = false;
-                channel.ScheduleReminder = false;
-            }
+                channel.OutageTrigger = dto.IsActive && dto.OutageTrigger;
+                var pattern = OutageTriggerMatcher.Normalize(dto.OutageTriggerPattern);
+                if (pattern is not null && pattern.Length > OutageTriggerMatcher.MaxLength)
+                {
+                    return Error($"Фраза задовга: максимум {OutageTriggerMatcher.MaxLength} символів.");
+                }
 
-            channel.IsActive = dto.IsActive;
-            channel.IsPaused = dto.IsPaused;
-            channel.Filter = dto.Filter;
-            channel.DeletePreviousAlert = dto.DeletePreviousAlert ?? channel.DeletePreviousAlert;
-            if (slotSettings is not null)
-            {
-                // Mirrored into the older columns so clients that do not know the per-slot map still read sensible values.
-                channel.SlotSettingMap = slotSettings;
-                channel.NotifyOnEnd = slotSettings.TryGetValue(MessageSlots.Ended, out var ended) ? ended.Enabled : channel.NotifyOnEnd;
-                channel.EditInPlace = slotSettings.TryGetValue(MessageSlots.Emergency, out var emergency) ? emergency.EditInPlace : channel.EditInPlace;
-            }
-            else
-            {
-                channel.SlotSettingMap = new Dictionary<string, SlotSettingDto>();
-                channel.NotifyOnEnd = dto.NotifyOnEnd;
-                channel.EditInPlace = dto.EditInPlace;
-            }
-            if (templates is not null)
-            {
-                channel.TemplateMap = templates;
-                channel.Template = null;
-            }
-            else
-            {
-                channel.Template = string.IsNullOrWhiteSpace(dto.Template) || PlaceholderNames.ToCanonical(dto.Template) == MessageTemplate.Default ? null : PlaceholderNames.ToCanonical(dto.Template);
-            }
+                channel.OutageTriggerPattern = pattern;
 
-            channel.OutageTrigger = dto.IsActive && dto.OutageTrigger;
-            var pattern = OutageTriggerMatcher.Normalize(dto.OutageTriggerPattern);
-            if (pattern is not null && pattern.Length > OutageTriggerMatcher.MaxLength)
-            {
-                return Error($"Фраза задовга: максимум {OutageTriggerMatcher.MaxLength} символів.");
+                // Schedule messages need a group and a region that has schedules.
+                var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
+                var canSchedule = dto.IsActive && channel.GroupId is not null && regionHasSchedules;
+                channel.ScheduleNotify = canSchedule && dto.ScheduleNotify;
+                channel.ScheduleReminder = canSchedule && dto.ScheduleReminder;
+                channel.ScheduleReminderMinutes = dto.ScheduleReminderMinutes;
+                channel.QuietHoursEnabled = dto.QuietHoursEnabled;
+                channel.QuietHoursStartMinute = dto.QuietHoursStartMinute;
+                channel.QuietHoursEndMinute = dto.QuietHoursEndMinute;
+                channel.ScheduleImage = dto.ScheduleImage;
+                channel.ScheduleEventMode = dto.ScheduleEventMode;
+                channel.SchedulePost = canSchedule && dto.SchedulePost;
+                channel.SchedulePostMode = dto.SchedulePostMode;
+                channel.SchedulePostImage = dto.SchedulePostImage;
+                if (dto.Addresses is not null || before.RegionId != channel.RegionId || (before.WasActive && !channel.IsActive))
+                    await ReconcileAddressStateAsync(db, channel, time.GetUtcNow(), ct);
+                await db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+
+                // Switched on, moved or re-tuned during an ongoing emergency: deliver what is already active.
+                if (channel.IsActive && (!before.WasActive
+                    || before.IsPaused != channel.IsPaused
+                    || before.RegionId != channel.RegionId
+                    || before.PartIds != channel.PartIds
+                    || before.SlotSettings != channel.SlotSettings
+                    || before.GroupId != channel.GroupId
+                    || dto.Addresses is not null))
+                {
+                    await catchUp.RunAsync(channel, ct);
+                }
+
+                return Json(ToSummary(channel, userId));
             }
-
-            channel.OutageTriggerPattern = pattern;
-
-            // Schedule messages need a group and a region that has schedules.
-            var regionHasSchedules = settings.CurrentValue.Regions.Any(r => r.Id == channel.RegionId && r.HasSchedules);
-            var canSchedule = dto.IsActive && channel.GroupId is not null && regionHasSchedules;
-            channel.ScheduleNotify = settings.CurrentValue.Schedules.EnableEventNotifications
-                && canSchedule && dto.ScheduleNotify;
-            channel.ScheduleReminder = canSchedule && dto.ScheduleReminder;
-            channel.ScheduleReminderMinutes = dto.ScheduleReminderMinutes;
-            channel.QuietHoursEnabled = dto.QuietHoursEnabled;
-            channel.QuietHoursStartMinute = dto.QuietHoursStartMinute;
-            channel.QuietHoursEndMinute = dto.QuietHoursEndMinute;
-            channel.ScheduleImage = dto.ScheduleImage;
-            channel.ScheduleEventMode = dto.ScheduleEventMode;
-            channel.SchedulePost = canSchedule && dto.SchedulePost;
-            channel.SchedulePostMode = dto.SchedulePostMode;
-            channel.SchedulePostImage = dto.SchedulePostImage;
-            await db.SaveChangesAsync(ct);
-
-            // Switched on, moved or re-tuned during an ongoing emergency: deliver what is already active.
-            if (channel.IsActive && (!before.WasActive
-                || before.IsPaused != channel.IsPaused
-                || before.RegionId != channel.RegionId
-                || before.PartIds != channel.PartIds
-                || before.SlotSettings != channel.SlotSettings
-                || before.GroupId != channel.GroupId))
-            {
-                await catchUp.RunAsync(channel, ct);
-            }
-
-            return Json(ToSummary(channel, userId));
+            finally { gate.Release(); }
         });
 
         api.MapPost("/preview", async (
@@ -1457,6 +1427,76 @@ public static class MiniAppApi
         return groupIds.Count == 1 ? groupIds[0] : null;
     }
 
+    private static string? ValidateAddresses(
+        IReadOnlyList<ChatAddressDto> addresses, Channel channel, RegionSettings region, ScheduleSnapshot? snapshot)
+    {
+        if (addresses.Count > 3) return "Можна зберегти до 3 адрес.";
+        var ids = new HashSet<long>();
+        foreach (var item in addresses)
+        {
+            if (item is null || item.RegionId != region.Id)
+                return "Усі адреси мають бути в одному регіоні.";
+            if (item.Id != 0 && (!ids.Add(item.Id) || !channel.Addresses.Any(a => a.Id == item.Id && a.RegionId == region.Id)))
+                return "Адресу не знайдено.";
+            if (string.IsNullOrWhiteSpace(item.Name) || item.Name.Length > 64 || item.Name.Any(char.IsControl)
+                || item.City?.Length > 128 || item.Street?.Length > 256 || item.House?.Length > 64 || item.Label?.Length > 256
+                || new[] { item.City, item.Street, item.House, item.Label }.Any(t => t?.Any(char.IsControl) == true)
+                || item.Groups is null || item.Groups.Count > 12)
+                return "Перевірте назву, адресу та черги.";
+            if (item.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(id => !region.Parts.Any(p => p.Id == id)) == true)
+                return "Невідомий район.";
+            foreach (var group in item.Groups)
+            {
+                if (group is null || !System.Text.RegularExpressions.Regex.IsMatch(group.GroupId ?? "", @"^\d{1,2}\.\d{1,2}$")
+                    || group.Label?.Length > 64 || group.Label?.Any(char.IsControl) == true
+                    || !region.HasSchedules || (snapshot is not null && snapshot.Find(group.GroupId!) is null))
+                    return "Перевірте черги обраного регіону.";
+            }
+        }
+        return null;
+    }
+
+    private static void ApplyAddresses(Channel channel, IReadOnlyList<ChatAddressDto> addresses)
+    {
+        var ids = addresses.Where(a => a.Id != 0).Select(a => a.Id).ToHashSet();
+        foreach (var removed in channel.Addresses.Where(a => !ids.Contains(a.Id)).ToArray())
+            channel.Addresses.Remove(removed);
+        foreach (var item in addresses)
+        {
+            var address = item.Id == 0 ? new ChatAddress { ChatId = channel.ChatId } : channel.Addresses.First(a => a.Id == item.Id);
+            if (item.Id == 0) channel.Addresses.Add(address);
+            address.RegionId = channel.RegionId; address.Name = item.Name.Trim();
+            address.City = item.City?.Trim(); address.Street = item.Street?.Trim(); address.House = item.House?.Trim();
+            address.Label = item.Label ?? string.Join(", ", new[] { address.City, address.Street, address.House }.Where(v => !string.IsNullOrEmpty(v)));
+            address.PartIds = item.PartIds;
+            var wanted = item.Groups.DistinctBy(g => g.GroupId).ToDictionary(g => g.GroupId);
+            foreach (var old in address.Groups.Where(g => !wanted.ContainsKey(g.GroupId)).ToArray()) address.Groups.Remove(old);
+            foreach (var group in wanted.Values)
+            {
+                var saved = address.Groups.FirstOrDefault(g => g.GroupId == group.GroupId);
+                if (saved is null) { saved = new ChatAddressGroup { GroupId = group.GroupId }; address.Groups.Add(saved); }
+                saved.Label = group.Label?.Trim();
+            }
+        }
+        channel.MirrorPrimary();
+    }
+
+    private static async Task ReconcileAddressStateAsync(BotDbContext db, Channel channel, DateTimeOffset now, CancellationToken ct)
+    {
+        var keys = channel.GroupIds().Select(id => AlertDispatcher.GroupDeliveryKey(channel.RegionId, id)).ToArray();
+        foreach (var delivery in await db.Deliveries.Where(d => d.ChatId == channel.ChatId && !d.IsClosed
+            && d.RegionId.Contains(":group:") && !keys.Contains(d.RegionId)).ToListAsync(ct))
+            delivery.IsClosed = true;
+        foreach (var check in await db.AddressChecks.Where(c => c.ChatId == channel.ChatId && c.Status == AddressCheckStatus.Pending).ToListAsync(ct))
+        {
+            if (check.RegionId == channel.RegionId && channel.Addresses.Any(a => (check.AddressId is null || a.Id == check.AddressId)
+                && (a.City ?? "") == check.City && a.Street == check.Street && a.House == check.House)) continue;
+            check.Status = AddressCheckStatus.Expired;
+            check.CompletedAt = now;
+        }
+    }
+
     private static long UserId(HttpContext http) => (long)http.Items[UserIdKey]!;
 
     private static IResult Json<T>(T value) => Results.Json(value, ApiJson.Options);
@@ -1479,7 +1519,7 @@ public static class MiniAppApi
             c.GroupId,
             c.AddressLabel,
             c.OutageTrigger,
-            false,
+            c.ScheduleNotify,
             c.ScheduleImage,
             c.PartIdList,
             c.SchedulePost,

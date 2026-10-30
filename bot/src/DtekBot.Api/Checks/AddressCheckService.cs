@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
 using DtekBot.Api.Parsing;
 using DtekBot.Api.Settings;
@@ -50,7 +51,8 @@ public sealed class AddressCheckService(
     IWorkflowTrigger trigger,
     IOptionsMonitor<DtekSettings> options,
     TimeProvider time,
-    ILogger<AddressCheckService> logger)
+    ILogger<AddressCheckService> logger,
+    PrivateNotificationMirror mirror)
 {
     public const string WorkflowEvent = "check-addresses";
     private const string LastDispatchKey = "last-dispatch";
@@ -243,6 +245,7 @@ public sealed class AddressCheckService(
     {
         var now = time.GetUtcNow();
         var answered = 0;
+        await mirror.RetryPendingAsync(ct);
 
         foreach (var street in request.Results ?? [])
         {
@@ -415,9 +418,15 @@ public sealed class AddressCheckService(
 
     private async Task TrySendAsync(long chatId, string text, CancellationToken ct)
     {
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
+        if (channel?.IsPaused == true)
+            return;
+
+        var disableNotification = channel is not null && QuietHours.IsQuiet(channel, time.GetUtcNow());
         try
         {
-            await bot.SendMessage(chatId, text, cancellationToken: ct);
+            var sent = await bot.SendMessage(chatId, text, disableNotification: disableNotification, cancellationToken: ct);
+            await mirror.SyncAsync(sent, ct, disableNotification: disableNotification);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

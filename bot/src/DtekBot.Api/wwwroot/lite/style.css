@@ -160,7 +160,9 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 .savebar{position:fixed;left:0;right:0;bottom:0;z-index:40;border-width:1px 0 0;border-radius:0;box-shadow:0 -10px 30px rgba(0,0,0,.35);background:rgba(10,15,32,.8)}
 .savein{max-width:680px;margin:0 auto;padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
 .saverow{display:flex;align-items:center;gap:12px}
-.saverow .btn{width:auto;flex:none;min-width:140px}
+.saverow .btn{width:auto;flex:none;min-width:110px}
+.saverow .btn.ghost{min-width:0;padding-inline:8px}
+@media(max-width:420px){.saverow{flex-wrap:wrap;gap:8px}.saverow .stat{flex-basis:100%}}
 .stat{flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
 .dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
 .savebar[data-mode=dirty] .dot{background:var(--amber);box-shadow:0 0 10px var(--amber)}

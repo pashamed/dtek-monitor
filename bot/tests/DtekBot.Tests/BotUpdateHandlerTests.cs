@@ -39,7 +39,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     private OutageAssessmentService NewAssessment() => new(
         _f.Db,
         new AddressCheckService(
-            _f.Db, _f.Bot, _trigger, _f.Options, TimeProvider.System, NullLogger<AddressCheckService>.Instance),
+            _f.Db, _f.Bot, _trigger, _f.Options, _clock, NullLogger<AddressCheckService>.Instance, _f.CreateMirror(time: _clock)),
         _schedules,
         _f.Options,
         _clock);
@@ -53,7 +53,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         }
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        return new BotUpdateHandler(_f.Bot, _f.Db, NewAssessment(), config, TimeProvider.System, NullLogger<BotUpdateHandler>.Instance);
+        return new BotUpdateHandler(_f.Bot, _f.Db, NewAssessment(), config, _clock, NullLogger<BotUpdateHandler>.Instance, _f.CreateMirror(time: _clock));
     }
 
     // ---- helpers ----
@@ -442,6 +442,38 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Equal(AddressCheckStatus.Pending, check.Status);
         Assert.Equal(["check-addresses"], _trigger.Events);
         AssertDoesNotSelfTrigger(reply.Text);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_PausedChannelDoesNotTriggerAddressCheck()
+    {
+        AddTriggerChannel(c => c.IsPaused = true);
+
+        await PostAsync(SamplePost);
+
+        Assert.Empty(_f.Bot.Sent);
+        Assert.Empty(_f.Db.AddressChecks);
+        Assert.Empty(_trigger.Events);
+    }
+
+    [Fact]
+    public async Task PowerOutPost_QuietHoursSilenceChannelReplyAndPrivateCopy()
+    {
+        const long admin = 9001;
+        AddTriggerChannel(c =>
+        {
+            c.QuietHoursEnabled = true;
+            c.QuietHoursStartMinute = 8 * 60;
+            c.QuietHoursEndMinute = 10 * 60;
+        });
+        _f.Db.ChannelAdmins.Add(new ChannelAdmin { ChatId = ChannelChat, UserId = admin });
+        _f.Db.SaveChanges();
+        _f.Bot.SetStatus(admin, ChatMemberStatus.Administrator);
+
+        await PostAsync(SamplePost);
+
+        Assert.True(Assert.Single(_f.Bot.SentTo(ChannelChat)).DisableNotification);
+        Assert.True(Assert.Single(_f.Bot.Requests.OfType<CopyMessageRequest>()).DisableNotification);
     }
 
     [Theory]

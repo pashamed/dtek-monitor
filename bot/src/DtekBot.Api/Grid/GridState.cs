@@ -12,6 +12,9 @@ public static class GridStatuses
     public const string EmergencyOutages = "emergency_outages";
     public const string GridDamage = "grid_damage";
 
+    public static bool IsKnown(string? status) => status is
+        Normal or Shortage or OutageSchedules or EmergencyOutages or GridDamage;
+
     public static PopupKind ToKind(string? status) => status switch
     {
         EmergencyOutages => PopupKind.Emergency,

@@ -208,14 +208,14 @@ The .NET application in [`bot/`](bot/) lets one bot serve multiple chats and cha
 Apart from `/start`, configuration is handled in the Mini App editor rather than Telegram commands. Open it with the “Редактор” menu button beside the input field, installed automatically by the bot, or the button under the `/start` greeting.
 
 - **Region and district subscriptions:** Select one or more districts in the editor. Notices naming only other districts are not delivered; region-wide notices reach every eligible subscriber in that region.
-- **Outage-group alerts (currently Kyiv only):** Select a street and building to resolve a group such as `45.1` and receive group emergency alerts. Group data comes from Yasno rather than the DTEK website and can differ from it.
+- **Outage-group alerts (currently Kyiv only):** Select a street and building to resolve a group such as `45.1` and receive group emergency alerts. The API collects group statuses from Yasno during its coordinated monitoring cycle, rather than relying on hourly browser collection. Group data can differ from the DTEK website. Legacy `POST /ingest/groups` remains available; collectors should include `observedAt` so delayed observations cannot overwrite newer accepted data.
 - **Current status and diagnostics:** The editor distinguishes DTEK notices, Ukrenergo status, and published plans from actual power availability. Diagnostics show the saved region (Kyiv city and Kyiv oblast are distinct), districts, addresses, groups, check timestamps, today's/tomorrow's schedule availability, and automatic publishing settings. Stale or unavailable data is labelled explicitly. A delivery record's update timestamp is state history, not a Telegram message verification or an error log.
 - **On-demand address checks:** In the private-chat editor, select “Перевірити зараз” under “Адреса і черга”. Kyiv addresses can be selected from a directory; elsewhere, enter the settlement, street, and building exactly as on DTEK. Playwright refreshes directories cached by the API, allowing searches even when direct server requests to DTEK are blocked. When needed, GitHub Actions checks the address and the bot reports scheduled or unscheduled outages alongside regional status. Addresses are retained only while subscribed.
 - **Automatic checks after “Світло зникло”:** If a power-monitoring app posts a message such as “🔴 14:24 Світло зникло…” to a channel, add this bot as an administrator, configure the address in the Mini App, and enable “Реагувати на «Світло зникло»”. The bot receives new channel posts, not historical messages. Assessment proceeds from cheapest to most expensive: the group's schedule first (a current planned stabilization outage is reported **without an address request to DTEK**, with a warning if a regional emergency may invalidate the plan), then the regional emergency/accident notice, and finally an address check.
 - **Optional schedule notifications per channel:** Select an address in Kyiv or choose a group manually for Kyiv, Dnipropetrovsk, or Odesa oblast, then enable “Сповіщення за графіком”. A detected group can be overridden manually while retaining the address for DTEK checks. Choose a two-day table image, a compact image, or no image. Schedule posts and outage-event messages have independent delivery modes: **new message**, **delete the old message and publish a replacement**, or **edit the same message**. Replacement requires permission to delete messages; otherwise the old message remains.
   - **Schedule posts:** A separate post shows the group's schedule, usually with an image: “❗️ Оновлений графік відключень на сьогодні / 📅 Четвер 15.10.2026 / 🔴 14:00 - 18:00 (~4 год)”. The first daily post starts with “Графік…”; changes use “Оновлений графік…”. “Надіслати графік у канал зараз” publishes immediately, even when automatic publishing is disabled.
   - **Advance warnings:** A separate message 5, 10, 15, 30, or 60 minutes before a planned group outage. Customize it in “Повідомлення”.
-  - **Planned power-off / power-on events:** Examples: “🔴 14:24 Світло вимкнено за графіком / 🕓 Воно було 17год 23хв / 🗓 Очікуємо за графіком о 18:00” and “🟢 18:07 Світло з'явилося за графіком / 🕓 Його не було 3год 42хв”. A return-of-power message is sent only for an outage previously reported by the bot; these are schedule-based events, not voltage measurements.
+  - **Planned power-off / power-on events:** Examples: “🔴 14:24 Світло вимкнено за графіком / 🕓 Воно було 17год 23хв / 🗓 Очікуємо за графіком о 18:00” and “🟢 18:07 Світло з'явилося за графіком / 🕓 Його не було 3год 42хв”. A return-of-power message is sent only for an outage previously reported by the bot; these are schedule-based events, not voltage measurements. This existing capability remains disabled by the checked-in `Dtek:Schedules:EnableEventNotifications` setting; timetable behavior is outside this review's implementation scope.
 
   Schedules and ready-made images come from the public MIT-licensed
   [outage-data-ua](https://github.com/Baskerville42/outage-data-ua) repository:
@@ -224,10 +224,32 @@ Apart from `/start`, configuration is handled in the Mini App editor rather than
   The backend shares a 10-minute source cache across all chats instead of
   generating images or requesting schedules directly from DTEK.
 - **Per-channel settings:** All alerts or emergencies/accidents only, clearance notifications, edit-versus-new delivery, and pause.
+- **Private copies of linked chats:** The bot copies real alert, schedule, reminder, and automatic address-check messages from every linked channel/group into each linked administrator's private conversation. Each source has a labelled reply thread; multiple channels and electricity groups remain separate, including combined multi-group schedule posts. Copies follow bot-driven edits, clearance replies, and successful deletions, with durable source-specific message IDs. Your private subscription remains independent and may send its own notifications too. Copies are silent when either the source's delivery or your private quiet hours requires it. Pausing your private subscription does not pause linked-chat copies; pause the source or unlink it to stop those copies. Test sends and previews are not mirrored, historical messages are not imported, and manual Telegram edits/deletions are not tracked. The bot rechecks administrator access before copying; unlinking removes that source's copy tracking. Start the bot privately and keep it unblocked to receive copies. Telegram copy failures are logged without disabling the source channel.
 - **Quiet hours:** Configure a daily Kyiv-time interval per chat or channel under “Повідомлення”. Automatic alerts and schedule messages arrive immediately but silently during that interval. Disabled by default; manual actions and test messages are not silenced.
 - **Clearance delivery:** Under “Повідомлення”, the “Зняття запису” template supports replying to the original alert (default), sending a new message, or editing the original. If the original has been deleted or cannot be edited, the bot falls back to a new reply message.
 - **Custom templates:** Each message type — emergency, clearance, regional accident, local outage, schedule, power-off, and power-on — supports placeholders, a Telegram-style preview, and “Надіслати тест у канал” (tests are marked 🧪).
 - **Authorization:** Only channel administrators can change channel settings.
+
+New Telegram destinations must be **channels**, not Telegram groups. Electricity
+groups/queues are subscription targets, not Telegram chat types. The existing
+standalone Node monitor and its private-channel parser are a separate optional
+mode; the shared application uses its own API-owned interpretation and delivery.
+Do not configure both modes to post to the same destination unless duplicate,
+independent streams are intentional.
+
+The lite editor saves settings, region, and address drafts in one API transaction.
+Changing region or cancelling a draft does not delete saved addresses. The
+settings request's optional `addresses` field preserves existing addresses when
+omitted or null; a list replaces them (an empty list clears them). Older clients
+retain their separate address endpoint. The alternative editor preserves
+settings it does not expose instead of replacing them with defaults.
+
+Private-copy failures are recorded for retry on later delivery/check ticks;
+unchanged source messages need not be reposted to retry their copies. These
+retries do not provide exactly-once Telegram delivery: cancellation or a crash
+between a source send and its database save can still leave an untracked send.
+Unlinking stops future copies and removes tracking, not historical Telegram
+messages already received.
 
 **Two emergency-outage sources**
 
@@ -240,9 +262,16 @@ Rules:
 
 - `emergency_outages` means an emergency; `grid_damage` means an accident. `normal`, `shortage`, and `outage_schedules` (stabilization schedules) are not emergency alerts. A feed older than 45 minutes is ignored: unknown status neither opens nor closes an alert, and fetch failures do not change state.
 - If Ukrenergo reports first, the alert is **region-wide**, without district filtering, so all eligible regional subscribers receive it, including those with district selections. The text ends with “(за даними Укренерго)”.
-- When DTEK later provides details or districts, the existing message is **edited**, or replaced by a new message in new-message mode. A chat outside DTEK's named districts does not receive a false clearance while Ukrenergo still reports a regional emergency; its thread closes silently.
+- When DTEK later provides details or districts, the existing message is **edited**, or replaced by a new message in new-message mode. A chat outside DTEK's named districts keeps the applicable region-wide Ukrenergo alert rather than receiving a false clearance.
 - Clearance is sent only when **both** sources are no longer in an emergency state. If DTEK clears while Ukrenergo remains active, the message switches to Ukrenergo text; if Ukrenergo clears while DTEK remains active, DTEK text remains.
 - Regional and district eligibility still applies. An address assessment treats an active Ukrenergo emergency as an explanation, just like a general DTEK notice, without an additional DTEK address request.
+
+**Known release limitation:** source fetch failures preserve accepted emergency
+records rather than clearing them. Some reconciliation and address-assessment
+paths can still use those persisted records without a current-evidence expiry.
+The ingest freshness/ordering checks do not prove that a retained alert describes
+the current situation. A stricter stale-evidence policy is deferred; no new
+freshness thresholds are introduced in this release.
 
 **Message templates** use Telegram HTML (`<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="https://…">`, `<tg-spoiler>`, `<blockquote>`) and placeholders:
 
@@ -272,6 +301,11 @@ Each message type has its own placeholders, shown in the editor. Additional plac
 | Power on               | `{час}`, `{світла_не_було}`, `{наступне}`, `{регіон}`, `{черга}`                                                            |
 
 The **Mini App** opens from the bot's private-chat menu at `/lite/`. It uses plain HTML and JavaScript without a build step and is lightweight for phones. To connect a **channel**, add the bot as an administrator with posting permission; the channel appears in the editor when the webhook receives `my_chat_member`. For public channels, entering the channel's `@username` in the editor is an alternative. Select a region and address, optionally override the group, and enable schedule images if desired. “Видалити зі списку” removes a channel from your list; if you are its last manager, alerts are disabled and saved address data is removed. The bot stays in the Telegram channel until manually removed. An alternative Blazor WebAssembly editor exists in `bot/src/DtekBot.WebApp` but is not connected to the bot.
+
+Deployments enabling private notification copies must apply the additive
+`PrivateNotificationCopies` migration before running the updated API. It creates
+copy tracking keyed by source chat, source message, and administrator; no existing
+subscriptions or Telegram messages are changed.
 
 **Server configuration** (`appsettings.Production.json` on the host, never committed):
 
@@ -313,6 +347,12 @@ The default endpoint is `https://generativelanguage.googleapis.com/v1beta/openai
 Deploy the additive `PopupInterpretation` EF migration alongside this API version. It adds nullable interpretation/provenance fields to regional state without resetting existing data; legacy rows remain readable. Prepare and review migrations locally, back up the database, and apply them only through the authorized deployment process.
 
 `GitHub:DispatchToken` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new) restricted to this repository with **Contents: Read and write**, as in the external-trigger setup. It dispatches `check-addresses` to `shared-bot.yml`. Without it, queued requests depend on a later backup run; the hourly cron is not a guaranteed deadline. The same token dispatches `check-emergency` to the standalone `monitor.yml` every `Dtek:Timers:MonitorWorkflowIntervalMinutes` (default 15, `0` disables it). Keep the token only in private hosting configuration, such as `appsettings.Production.json`; never log it.
+
+Shared-bot business decisions and source collection cadence belong to the API.
+The shared workflow's backup run requests the secret-protected
+`POST /ingest/monitoring/tick`; browser workers supply observations and queued
+address results, not classification or delivery decisions. Yasno group collection
+uses a separate API collector, never the standalone private-channel parser.
 
 To limit GitHub Actions and DTEK load, `AddressChecks` in `dtek-settings.json` defines per-chat cooldowns, daily budgets, result caching, a minimum dispatch interval, shared checks per street, and a maximum number of streets per run.
 

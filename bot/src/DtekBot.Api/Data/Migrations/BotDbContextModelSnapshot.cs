@@ -496,6 +496,27 @@ namespace DtekBot.Api.Data.Migrations
                     b.ToTable("KeyValues");
                 });
 
+            modelBuilder.Entity("DtekBot.Api.Data.PrivateNotificationCopy", b =>
+                {
+                    b.Property<long>("SourceChatId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("SourceMessageId")
+                        .HasColumnType("int");
+
+                    b.Property<long>("UserId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("MessageId")
+                        .HasColumnType("int");
+
+                    b.HasKey("SourceChatId", "SourceMessageId", "UserId");
+
+                    b.HasIndex("SourceChatId", "UserId");
+
+                    b.ToTable("PrivateNotificationCopies");
+                });
+
             modelBuilder.Entity("DtekBot.Api.Data.RegionState", b =>
                 {
                     b.Property<string>("RegionId")
@@ -683,6 +704,15 @@ namespace DtekBot.Api.Data.Migrations
                     b.HasOne("DtekBot.Api.Data.ChatAddress", null)
                         .WithMany("Groups")
                         .HasForeignKey("AddressId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("DtekBot.Api.Data.PrivateNotificationCopy", b =>
+                {
+                    b.HasOne("DtekBot.Api.Data.ChannelAdmin", null)
+                        .WithMany()
+                        .HasForeignKey("SourceChatId", "UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

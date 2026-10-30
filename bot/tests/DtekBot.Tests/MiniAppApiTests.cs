@@ -5,8 +5,11 @@ using System.Text.Json;
 using DtekBot.Api.Data;
 using DtekBot.Api.Groups;
 using DtekBot.Api.Schedules;
+using DtekBot.Api.Settings;
 using DtekBot.Shared;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Requests;
 using Telegram.Bot.Types.Enums;
@@ -276,7 +279,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var settings = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings;
 
         Assert.Equal("45.1", settings.GroupId);
-        Assert.False(settings.ScheduleNotify);
+        Assert.True(settings.ScheduleNotify);
         Assert.True(settings.SchedulePost);
         Assert.Equal(PostMode.ReplaceDelete, settings.ScheduleEventMode);
         Assert.Equal(PostMode.Edit, settings.SchedulePostMode);
@@ -365,7 +368,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         await client.PutJsonAsync($"/api/chats/{userId}", Settings());
 
-        Assert.Empty(_factory.Bot.Requests.OfType<SendMessageRequest>().Where(r => r.ChatId.Identifier == userId));
+        Assert.DoesNotContain(_factory.Bot.Requests.OfType<SendMessageRequest>(), r => r.ChatId.Identifier == userId);
     }
 
     [Fact]
@@ -619,10 +622,10 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     // ================= PUT /api/chats/{id}: settings =================
 
     [Fact]
-    public async Task Put_SchedulePost_IsPersisted_AndScheduleEventNotificationsStayDisabled()
+    public async Task Put_SchedulePostAndExistingLegacyPreference_ArePreserved()
     {
         var (userId, client) = NewUser();
-        SeedChannel(userId, c => c.GroupId = "45.1");
+        SeedChannel(userId, c => { c.GroupId = "45.1"; c.ScheduleNotify = true; });
 
         var response = await client.PutJsonAsync(
             $"/api/chats/{userId}",
@@ -637,7 +640,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var channel = LoadChannel(userId)!;
-        Assert.False(channel.ScheduleNotify);
+        Assert.True(channel.ScheduleNotify);
         Assert.True(channel.SchedulePost);
         Assert.Equal(PostMode.ReplaceDelete, channel.ScheduleEventMode);
         Assert.Equal(PostMode.Edit, channel.SchedulePostMode);
@@ -647,7 +650,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         var summary = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
         Assert.True(summary.SchedulePost);
-        Assert.False(summary.ScheduleNotify);
+        Assert.True(summary.ScheduleNotify);
         Assert.Equal(PostMode.Edit, summary.SchedulePostMode);
         Assert.Equal(ScheduleImage.None, summary.SchedulePostImage);
     }
@@ -663,6 +666,160 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var channel = LoadChannel(userId)!;
         Assert.False(channel.ScheduleNotify);
         Assert.False(channel.SchedulePost);
+    }
+
+    [Fact]
+    public async Task Put_UnrelatedEdit_PreservesLegacyPreferenceWhileServerDeliveryIsDisabled()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => { c.GroupId = "45.1"; c.ScheduleNotify = true; });
+        var initial = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings;
+        Assert.True(initial.ScheduleNotify);
+        var options = _factory.Services.GetRequiredService<IOptionsMonitor<DtekSettings>>().CurrentValue;
+        var enabled = options.Schedules.EnableEventNotifications;
+        options.Schedules.EnableEventNotifications = false;
+        try
+        {
+            var save = await client.PutJsonAsync($"/api/chats/{userId}", initial with { QuietHoursEnabled = true, Addresses = null });
+            Assert.Equal(HttpStatusCode.OK, save.StatusCode);
+            var saved = (await save.ReadAsync<ChatSummaryDto>())!.Settings;
+            Assert.True(saved.ScheduleNotify);
+            var unrelated = await client.PutJsonAsync($"/api/chats/{userId}", saved with { QuietHoursEnabled = true, Addresses = null });
+            Assert.True((await unrelated.ReadAsync<ChatSummaryDto>())!.Settings.ScheduleNotify);
+            using var scope = _factory.Services.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ScheduleNotifier>().TickAsync(CancellationToken.None);
+            Assert.DoesNotContain(_factory.Bot.Requests.OfType<SendMessageRequest>(), r => r.ChatId.Identifier == userId);
+        }
+        finally { options.Schedules.EnableEventNotifications = enabled; }
+    }
+
+    [Fact]
+    public async Task Put_RegionAddressesAndSettings_AreCommittedTogether_AndRetireOldAddressWork()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c =>
+        {
+            c.GroupId = "45.1";
+            c.Addresses.Add(new ChatAddress { RegionId = "kyiv", Name = "Дім", Street = "Стара", House = "1",
+                Groups = [new ChatAddressGroup { GroupId = "45.1" }] });
+        });
+        _factory.WithDb(db =>
+        {
+            db.AddressChecks.Add(new AddressCheck { ChatId = userId, RegionId = "kyiv", City = "", Street = "Стара", House = "1",
+                Status = AddressCheckStatus.Pending, RequestedAt = _factory.Clock.Now });
+            db.Deliveries.Add(new Delivery { ChatId = userId, RegionId = "kyiv:group:45.1", TelegramMessageId = 99 });
+        });
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", Settings(regionId: "odesa", schedulePost: true,
+            quietHoursEnabled: true) with
+        {
+            Addresses = [new(0, "odesa", "Офіс", "м. Одеса", "Нова", "2", [new("6.2")])],
+        });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
+        Assert.Equal("odesa", saved.RegionId);
+        Assert.True(saved.QuietHoursEnabled);
+        Assert.True(saved.SchedulePost);
+        Assert.Equal("6.2", saved.GroupId);
+        Assert.Equal("Офіс", Assert.Single(saved.Addresses!).Name);
+        Assert.True(Assert.Single(saved.Addresses!).Id > 0);
+        _factory.WithDb(db =>
+        {
+            Assert.Equal(AddressCheckStatus.Expired, db.AddressChecks.Single(c => c.ChatId == userId).Status);
+            Assert.True(db.Deliveries.Single(d => d.ChatId == userId && d.TelegramMessageId == 99).IsClosed);
+        });
+    }
+
+    [Theory]
+    [InlineData("foreign-id")]
+    [InlineData("wrong-region")]
+    [InlineData("too-many")]
+    [InlineData("bad-group")]
+    [InlineData("bad-template")]
+    [InlineData("bad-time")]
+    public async Task Put_InvalidAtomicDraft_PreservesRegionSettingsAndAddresses(string invalid)
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c =>
+        {
+            c.GroupId = "45.1";
+            c.Addresses.Add(new ChatAddress { RegionId = "kyiv", Name = "Збережена", Street = "Стара", House = "1",
+                Groups = [new ChatAddressGroup { GroupId = "45.1" }] });
+        });
+        var original = Assert.Single(LoadChannel(userId)!.Addresses);
+        var address = new ChatAddressDto(0, "odesa", "Нова", "", "Нова", "2", [new("6.2")]);
+        var draft = Settings(regionId: "odesa", quietHoursEnabled: true) with { Addresses = [address] };
+        draft = invalid switch
+        {
+            "foreign-id" => draft with { Addresses = [address with { Id = original.Id }] },
+            "wrong-region" => draft with { Addresses = [address with { RegionId = "kyiv" }] },
+            "too-many" => draft with { Addresses = [address, address, address, address] },
+            "bad-group" => draft with { Addresses = [address with { Groups = [new("not-a-group")] }] },
+            "bad-template" => draft with { Templates = Map(("emergency", "{unknown}")) },
+            "bad-time" => draft with { QuietHoursStartMinute = 1440 },
+            _ => draft,
+        };
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", draft);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal("kyiv", saved.RegionId);
+        Assert.False(saved.QuietHoursEnabled);
+        Assert.Equal("45.1", saved.GroupId);
+        Assert.Equal(original.Id, Assert.Single(saved.Addresses).Id);
+        Assert.Equal("Збережена", Assert.Single(saved.Addresses).Name);
+        Assert.DoesNotContain(_factory.Bot.Requests.OfType<SendMessageRequest>(), r => r.ChatId.Identifier == userId);
+    }
+
+    [Fact]
+    public async Task Put_OmittedAddressesPreserveThem_AndExplicitEmptyListClearsAtomically()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => c.Addresses.Add(new ChatAddress { RegionId = "kyiv", Name = "Дім",
+            Street = "Стара", Groups = [new ChatAddressGroup { GroupId = "45.1" }] }));
+        var original = Assert.Single(LoadChannel(userId)!.Addresses).Id;
+        var preserve = await client.PutJsonAsync($"/api/chats/{userId}", Settings(quietHoursEnabled: true));
+        Assert.Equal(HttpStatusCode.OK, preserve.StatusCode);
+        Assert.Equal(original, Assert.Single(LoadChannel(userId)!.Addresses).Id);
+        var clear = await client.PutJsonAsync($"/api/chats/{userId}", Settings(regionId: "odesa") with { Addresses = [] });
+        Assert.Equal(HttpStatusCode.OK, clear.StatusCode);
+        var saved = LoadChannel(userId)!;
+        Assert.Equal("odesa", saved.RegionId);
+        Assert.Empty(saved.Addresses);
+        Assert.Null(saved.GroupId);
+    }
+
+    [Fact]
+    public async Task Put_CompatibilityEditorPatch_PreservesUneditedModernSettings()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c =>
+        {
+            c.GroupId = "45.1"; c.ScheduleNotify = true; c.SchedulePost = true; c.EditInPlace = false;
+            c.ScheduleReminder = true; c.ScheduleReminderMinutes = 30;
+            c.QuietHoursEnabled = true; c.QuietHoursStartMinute = 1380; c.QuietHoursEndMinute = 360;
+            c.PartIdList = ["obolonskyi", "darnytskyi"];
+            c.TemplateMap = Map(("emergency", "Власний {message}"), ("local", "Локальний {message}"));
+            c.SlotSettingMap = new Dictionary<string, SlotSettingDto>
+            {
+                ["emergency"] = new(true, false),
+                ["regional"] = new(false, true),
+                ["local"] = new(true, true),
+                ["ended"] = new(true, false, EndStyle.Edit),
+            };
+            c.Addresses.Add(new ChatAddress { RegionId = "kyiv", Name = "Дім", Street = "Вулиця", House = "12",
+                Groups = [new ChatAddressGroup { GroupId = "45.1", Label = "Під'їзд 1" }] });
+        });
+        var original = Assert.Single((await (await client.GetAsync("/api/chats")).ReadAsync<List<ChatSummaryDto>>())!).Settings;
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", original with { IsPaused = true, Addresses = null });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
+        Assert.True(saved.IsPaused);
+        Assert.Equal(original with { IsPaused = true, Addresses = saved.Addresses, Templates = saved.Templates,
+            SlotSettings = saved.SlotSettings, PartIds = saved.PartIds }, saved);
+        Assert.Equal(original.PartIds, saved.PartIds);
+        Assert.Equal(original.Templates, saved.Templates);
+        Assert.Equal(original.SlotSettings, saved.SlotSettings);
+        Assert.Equal(Assert.Single(original.Addresses!).Id, Assert.Single(saved.Addresses!).Id);
+        Assert.Equal("Під'їзд 1", Assert.Single(Assert.Single(saved.Addresses!).Groups).Label);
     }
 
     [Fact]

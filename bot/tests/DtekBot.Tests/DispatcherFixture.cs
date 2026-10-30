@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Telegram.Bot;
 
 namespace DtekBot.Tests;
 
@@ -51,7 +52,7 @@ public sealed class DispatcherFixture : IDisposable
 
         Bot = new FakeTelegramBotClient();
         Clock = new TestClock(new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.FromHours(3)));
-        Dispatcher = new AlertDispatcher(Bot, Db, Clock, NullLogger<AlertDispatcher>.Instance);
+        Dispatcher = new AlertDispatcher(Bot, Db, Clock, NullLogger<AlertDispatcher>.Instance, CreateMirror());
     }
 
     public DtekSettings Settings { get; }
@@ -67,6 +68,12 @@ public sealed class DispatcherFixture : IDisposable
     public TestClock Clock { get; }
 
     public AlertDispatcher Dispatcher { get; }
+
+    public PrivateNotificationMirror CreateMirror(ITelegramBotClient? bot = null, TimeProvider? time = null) =>
+        new(bot ?? Bot, Db,
+            new DtekBot.Api.MiniApp.ChatAccessService(bot ?? Bot, Db,
+                NullLogger<DtekBot.Api.MiniApp.ChatAccessService>.Instance),
+            time ?? Clock, NullLogger<PrivateNotificationMirror>.Instance);
 
     public IOptionsMonitor<DtekSettings> Options => new TestOptionsMonitor(Settings);
 

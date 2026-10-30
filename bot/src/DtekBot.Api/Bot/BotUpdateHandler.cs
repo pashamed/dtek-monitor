@@ -17,7 +17,8 @@ public sealed class BotUpdateHandler(
     OutageAssessmentService assessment,
     IConfiguration config,
     TimeProvider time,
-    ILogger<BotUpdateHandler> logger)
+    ILogger<BotUpdateHandler> logger,
+    PrivateNotificationMirror mirror)
 {
     public async Task HandleAsync(Update update, CancellationToken ct)
     {
@@ -63,7 +64,8 @@ public sealed class BotUpdateHandler(
     // Every post of a trigger-enabled channel is remembered (a few of them) so the editor can warn about a wrong phrase.
     private async Task HandleChannelPostAsync(Message post, string text, CancellationToken ct)
     {
-        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == post.Chat.Id && c.IsActive && c.OutageTrigger, ct);
+        var channel = await db.Channels.FirstOrDefaultAsync(c =>
+            c.ChatId == post.Chat.Id && c.IsActive && c.OutageTrigger, ct);
         if (channel is null)
         {
             return;
@@ -72,16 +74,20 @@ public sealed class BotUpdateHandler(
         channel.RecentPosts = OutageTriggerMatcher.AppendRecent(channel.RecentPosts, text);
         await db.SaveChangesAsync(ct);
 
-        if (!OutageTriggerMatcher.IsMatch(channel.OutageTriggerPattern, text))
+        if (channel.IsPaused || !OutageTriggerMatcher.IsMatch(channel.OutageTriggerPattern, text))
         {
             return;
         }
 
-        await bot.SendMessage(
+        var disableNotification = QuietHours.IsQuiet(channel, time.GetUtcNow());
+        var sent = await bot.SendMessage(
             post.Chat.Id,
             await assessment.AssessAsync(channel, ct),
             replyParameters: new ReplyParameters { MessageId = post.Id, AllowSendingWithoutReply = true },
+            disableNotification: disableNotification,
             cancellationToken: ct);
+        await mirror.SyncAsync(sent, ct, replyToMessageId: post.Id, disableNotification: disableNotification);
+        await db.SaveChangesAsync(ct);
     }
 
     // The single entry point into the editor from a chat; the menu button next to the input field opens it too.

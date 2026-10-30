@@ -367,7 +367,8 @@ public sealed class CityDistrictRoutingMatrixTests
             var ended = Assert.Single(F.Bot.SentTo(chat), request => request.ReplyParameters is not null);
             Assert.Equal(delivery.TelegramMessageId, ended.ReplyParameters!.MessageId);
             Assert.Contains("ended|region=" + Encode(Region.Name) + "|part=" + Encode(part) + "|", ended.Text);
-            Assert.Contains("екстрені відключення знято", ended.Text);
+            Assert.Contains("запис про екстрені відключення", ended.Text);
+            Assert.Contains("Це не підтверджує", ended.Text);
         }
 
         public async Task AssertDuplicateAsync()

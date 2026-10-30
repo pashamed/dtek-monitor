@@ -44,6 +44,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public FakeYasnoClient Yasno { get; } = new();
 
     public FakeGridProvider Grid { get; } = new();
+    public FakeGroupStatusCollector Groups { get; } = new();
 
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.FromHours(3)));
 
@@ -84,6 +85,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<IYasnoClient>(Yasno);
             services.RemoveAll<DtekBot.Api.Grid.IGridStatusProvider>();
             services.AddSingleton<DtekBot.Api.Grid.IGridStatusProvider>(Grid);
+            services.RemoveAll<IGroupStatusCollector>();
+            services.AddSingleton<IGroupStatusCollector>(Groups);
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Clock);
 

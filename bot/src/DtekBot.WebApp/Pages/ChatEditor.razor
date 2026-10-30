@@ -169,7 +169,8 @@
         _deletePreviousAlert = s.DeletePreviousAlert ?? false;
         _notifyOnEnd = s.NotifyOnEnd;
         _editInPlace = s.EditInPlace;
-        _template = string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template;
+        _template = s.Templates?.GetValueOrDefault("emergency")
+            ?? (string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template);
         _errors = MessageTemplate.Validate(_template);
     }
 
@@ -193,9 +194,36 @@
         _serverDetails = [];
 
         var template = string.IsNullOrWhiteSpace(_template) || _template == Bootstrap.DefaultTemplate ? null : _template;
-        var settings = new ChatSettingsDto(
-            _regionId, _partId, _isActive, _isPaused, _filter, _notifyOnEnd, _editInPlace, template,
-            DeletePreviousAlert: _deletePreviousAlert);
+        var current = Chat.Settings;
+        var initialTemplate = current.Templates?.GetValueOrDefault("emergency")
+            ?? (string.IsNullOrWhiteSpace(current.Template) ? Bootstrap.DefaultTemplate : current.Template);
+        var templates = current.Templates is null ? null : new Dictionary<string, string>(current.Templates);
+        if (_template != initialTemplate && templates is not null)
+        {
+            if (template is null) templates.Remove("emergency");
+            else templates["emergency"] = template;
+        }
+        var slotSettings = current.SlotSettings;
+        if (slotSettings is not null && (_notifyOnEnd != current.NotifyOnEnd || _editInPlace != current.EditInPlace))
+        {
+            slotSettings = slotSettings.ToDictionary(pair => pair.Key, pair => pair.Value with
+            {
+                Enabled = pair.Key == "ended" && _notifyOnEnd != current.NotifyOnEnd ? _notifyOnEnd : pair.Value.Enabled,
+                EditInPlace = pair.Key != "ended" && _editInPlace != current.EditInPlace ? _editInPlace : pair.Value.EditInPlace,
+            });
+        }
+        var regionChanged = _regionId != current.RegionId;
+        var settings = current with
+        {
+            RegionId = _regionId, PartId = _partId,
+            PartIds = regionChanged || _partId != current.PartId ? (string.IsNullOrEmpty(_partId) ? [] : [_partId]) : current.PartIds,
+            IsActive = _isActive, IsPaused = _isPaused, Filter = _filter,
+            NotifyOnEnd = _notifyOnEnd, EditInPlace = _editInPlace,
+            Template = templates is null ? template : current.Template,
+            Templates = templates, SlotSettings = slotSettings,
+            Addresses = regionChanged ? [] : null,
+            DeletePreviousAlert = _deletePreviousAlert,
+        };
         var result = await Api.SaveChatAsync(Chat.ChatId, settings);
 
         _saving = false;

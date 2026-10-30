@@ -56,6 +56,7 @@ public sealed record ChatSettingsDto(
     int QuietHoursStartMinute = 1320,
     int QuietHoursEndMinute = 480,
     bool? DeletePreviousAlert = null,
+    // Omitted/null preserves saved addresses; a list replaces them atomically with the settings.
     IReadOnlyList<ChatAddressDto>? Addresses = null,
     // Read-only here: the group whose weekly schedule goes to Svitlobot; changed via PUT .../svitlobot/group.
     string? SvitlobotGroupId = null);

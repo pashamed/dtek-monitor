@@ -16,7 +16,7 @@ public sealed class ScheduleChangeTests : IDisposable
 
     public void Dispose() => f.Dispose();
 
-    private ScheduleNotifier Notifier() => new(f.Db, f.Bot, provider, f.Options, clock, NullLogger<ScheduleNotifier>.Instance);
+    private ScheduleNotifier Notifier() => new(f.Db, f.Bot, provider, f.Options, clock, NullLogger<ScheduleNotifier>.Instance, f.CreateMirror(time: clock));
 
     // The default heading has no change summary; these tests opt in the way a custom template does.
     private const string HeadingWithChanges = "❗️ {header}\n📅 {weekday} {date}{#changes}\n\n{changes}{/changes}";

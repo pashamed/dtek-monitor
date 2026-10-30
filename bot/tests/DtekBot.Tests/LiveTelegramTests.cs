@@ -450,7 +450,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                 s => s.Id == MessageSlots.ScheduleLine ? s.DefaultTemplate
                     : "🧪 <b>ТЕСТ — не реальна подія</b>\n" + s.DefaultTemplate);
         });
-        var dispatcher = new AlertDispatcher(bot, fixture.Db, fixture.Clock, NullLogger<AlertDispatcher>.Instance);
+        var dispatcher = new AlertDispatcher(bot, fixture.Db, fixture.Clock, NullLogger<AlertDispatcher>.Instance, fixture.CreateMirror(bot));
         var coordinator = new RegionAlertCoordinator(fixture.Db, dispatcher, fixture.Classifier, fixture.Options,
             NullLogger<RegionAlertCoordinator>.Instance);
         var grid = new GridState { RegionId = "kyiv", Status = GridStatuses.EmergencyOutages };
@@ -541,7 +541,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
             var provider = new FakeScheduleProvider();
             provider.Snapshots["kyiv"] = RealSnapshot();
             var notifier = new ScheduleNotifier(fixture.Db, bot, provider, fixture.Options, fixture.Clock,
-                NullLogger<ScheduleNotifier>.Instance);
+                NullLogger<ScheduleNotifier>.Instance, fixture.CreateMirror(bot));
             Assert.True((await notifier.SendScheduleNowAsync(channel, default)).Sent);
             Assert.Equal(1, transport.LastText.Split("Графік відключень на сьогодні").Length - 1);
             Assert.Equal(1, transport.LastText.Split("Графік відключень на завтра").Length - 1);
@@ -732,7 +732,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
         using var telegramHttp = new HttpClient(transport);
         var bot = new TelegramBotClient(token!, telegramHttp);
         var notifier = new ScheduleNotifier(fixture.Db, bot, schedules, fixture.Options, TimeProvider.System,
-            NullLogger<ScheduleNotifier>.Instance);
+            NullLogger<ScheduleNotifier>.Instance, fixture.CreateMirror(bot, TimeProvider.System));
         try
         {
             var group = snapshot.GroupIds.First();

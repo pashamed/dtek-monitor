@@ -43,7 +43,7 @@ public sealed class ScheduleNotifierTests : IDisposable
     public ScheduleNotifierTests()
     {
         _notifier = new ScheduleNotifier(
-            _f.Db, _f.Bot, _schedules, _f.Options, _clock, NullLogger<ScheduleNotifier>.Instance);
+            _f.Db, _f.Bot, _schedules, _f.Options, _clock, NullLogger<ScheduleNotifier>.Instance, _f.CreateMirror(time: _clock));
         _schedules.Snapshots["kyiv"] = RealSnapshot();
     }
 

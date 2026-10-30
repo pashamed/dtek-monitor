@@ -1,6 +1,6 @@
 name: Check regions for the shared bot
 
-# Browser checks for the shared bot. The bot polls DTEK, Ukrenergo and the schedules itself and dispatches
+# Browser checks for the shared bot. The API polls DTEK, Yasno groups, Ukrenergo and schedules and dispatches
 # check-regions (blocked DTEK pages) and check-addresses (pending address checks) when it needs a browser.
 # The hourly cron is a backup that also drains address checks whose dispatch failed.
 on:
@@ -21,7 +21,7 @@ permissions:
 jobs:
   shared-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       INGEST_URL: ${{ secrets.INGEST_URL }}
       INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
@@ -67,15 +67,15 @@ jobs:
         timeout-minutes: 5
         run: node ./src/check-addresses.js
 
-      # Backup for the bot's own Ukrenergo poll: a region-wide emergency is posted at once.
-      - name: Check the Ukrenergo status
+      # The API collects all sources and owns reconciliation; this is only a backup wake-up.
+      - name: Request the API monitoring cycle
         if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
-        timeout-minutes: 2
+        timeout-minutes: 6
         run: |
           # IIS answers 411 to a POST that has no length at all, so the empty body announces its length.
-          curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
+          curl -fsS -X POST -H "Content-Length: 0" --max-time 300 \
             -H "x-ingest-secret: $INGEST_SECRET" \
-            "${INGEST_URL%/}/grid/tick"
+            "${INGEST_URL%/}/monitoring/tick"
 
       - name: Keep workflow enabled
         if: always()

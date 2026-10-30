@@ -93,6 +93,7 @@ async function getStreetHouses(session, region, pending) {
         },
         body: form,
       })
+      if (!response.ok) throw new Error(`address lookup returned HTTP ${response.status}`)
       return await response.json()
     },
     {
@@ -102,7 +103,13 @@ async function getStreetHouses(session, region, pending) {
       needsCity: region.Id !== "kyiv",
     }
   )
-  return info?.data && typeof info.data === "object" ? info.data : {}
+  if (info?.result !== true || !info.data || typeof info.data !== "object" || Array.isArray(info.data)) {
+    throw new Error("address lookup returned an invalid or unsuccessful response")
+  }
+  if (Object.values(info.data).some((house) => !house || typeof house !== "object" || Array.isArray(house))) {
+    throw new Error("address lookup returned an invalid house record")
+  }
+  return info.data
 }
 
 function buildStreetResult(pending, houses) {

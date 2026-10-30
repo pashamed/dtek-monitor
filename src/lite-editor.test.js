@@ -226,9 +226,9 @@ test('address search, region changes and editor restoration', async () => {
       else if (path === '/api/address/cities') data = [{ name: 'м. Ірпінь' }];
       else if (path === '/api/address/streets') data = [{ name: 'вул. Західна' }];
       else if (path === '/api/address/houses') data = [{ house: '14', groupId: '3.2', groupIds: ['3.2', '4.1'] }];
-      else if (path.endsWith('/addresses') && route.request().method() === 'PUT') {
+      else if (path === '/api/chats/-100123' && route.request().method() === 'PUT') {
         const body = route.request().postDataJSON();
-        chat = { ...chat, settings: { ...chat.settings, addresses: body.addresses, groupId: body.addresses[0]?.groups[0]?.groupId } };
+        chat = { ...chat, settings: { ...chat.settings, ...body, groupId: body.addresses[0]?.groups[0]?.groupId } };
         data = chat;
       } else data = {};
       await route.fulfill({ json: data });
@@ -247,7 +247,7 @@ test('address search, region changes and editor restoration', async () => {
     await page.locator('input[placeholder="Оберіть вулицю спочатку"]').fill('14');
     await page.getByRole('option', { name: 'Будинок 14 · черга 3.2', exact: true }).click();
     assert.equal(await page.getByText('Черга 4.1', { exact: true }).count(), 1);
-    await page.getByRole('button', { name: 'Зберегти адреси', exact: true }).click();
+    await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
     await page.getByRole('button', { name: 'Знайти адресу', exact: true }).waitFor();
     assert.equal(chat.settings.addresses[0].street, 'вул. Західна');
     assert.equal(chat.settings.addresses[0].groups.length, 2);
@@ -291,7 +291,334 @@ test('address search, region changes and editor restoration', async () => {
     await page.evaluate(() => { window.Telegram.WebApp.showConfirm = (_text, callback) => callback(true); });
     await page.locator('#regionSel').selectOption('odesa');
     await page.waitForFunction(() => document.querySelector('#regionSel').value === 'odesa');
+    assert.equal(chat.settings.addresses.length, 1, 'Region draft must not clear saved addresses');
+    await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
+    await page.getByText('Збережено ✓', { exact: true }).waitFor();
     assert.equal(chat.settings.addresses.length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('schedule setup opens the address tab and manual fallback edits only its address draft', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 740 } });
+    const errors = [], writes = [];
+    page.on('pageerror', error => errors.push(error.message));
+    let chat = {
+      chatId: -100888, title: 'Дві адреси', isPrivate: false,
+      settings: {
+        regionId: 'kyiv-oblast', isActive: true, partIds: [], templates: {},
+        addresses: [
+          { id: 1, regionId: 'kyiv-oblast', name: 'Дім', city: 'м. Буча', street: 'вул. Вокзальна', house: '12', groups: [] },
+          { id: 2, regionId: 'kyiv-oblast', name: 'Офіс', city: '', street: '', house: '', groups: [] },
+        ],
+      },
+    };
+    await page.addInitScript(() => {
+      window.Telegram = { WebApp: {
+        initData: 'test', ready() {}, expand() {},
+        BackButton: { show() {}, hide() {}, onClick() {} },
+        showConfirm(_text, callback) { callback(true); },
+      } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() });
+      let data = {};
+      if (path === '/api/bootstrap') data = {
+        maxTemplateLength: 1000,
+        regions: [{ id: 'kyiv-oblast', name: 'Київська область', siteUrl: 'https://example.test', hasSchedules: true, hasGroups: false, parts: [] }],
+        templateSlots: [{ id: 'emergency', group: 'emergency', title: 'Екстрені', defaultTemplate: '{текст}', placeholders: [] }],
+      };
+      else if (path === '/api/chats') data = [chat];
+      else if (path === '/api/schedules/groups') data = [{ id: '3.2', name: '3.2' }];
+      else if (path === '/api/chats/-100888') {
+        chat = { ...chat, settings: { ...chat.settings, ...request.postDataJSON() } };
+        data = chat;
+      }
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    await page.getByRole('tab', { name: 'Графік', exact: true }).click();
+    await page.getByRole('button', { name: 'Вказати адресу або чергу', exact: true }).click();
+    assert.equal(await page.getByRole('tab', { name: 'Основне', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByLabel('Додати чергу', { exact: true }).nth(1).selectOption('3.2');
+    await page.getByText('Не вдається знайти адресу? Ввести вручну', { exact: true }).click();
+    const manual = page.locator('details.address-manual');
+    await manual.getByRole('textbox', { name: 'Населений пункт', exact: true }).fill('м. Ірпінь');
+    await manual.getByRole('textbox', { name: 'Вулиця', exact: true }).fill('вул. Західна');
+    await manual.getByRole('textbox', { name: 'Будинок', exact: true }).fill('14');
+    await manual.getByRole('button', { name: 'Обрати адресу', exact: true }).click();
+    await page.getByText('Адресу обрано. Натисніть «Зберегти», щоб застосувати всі зміни.', { exact: true }).waitFor();
+    assert.equal(writes.length, 0, 'Manual fallback must not call the legacy primary-address endpoint');
+    assert.equal(chat.settings.addresses[0].house, '12');
+    assert.equal(chat.settings.addresses[1].house, '');
+    await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('button').length
+      && !document.body.textContent.includes('Адресу обрано. Натисніть «Зберегти», щоб застосувати всі зміни.'));
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].path, '/api/chats/-100888');
+    assert.equal(chat.settings.addresses[0].street, 'вул. Вокзальна');
+    assert.equal(chat.settings.addresses[1].street, 'вул. Західна');
+    assert.equal(chat.settings.addresses[1].house, '14');
+    assert.equal(chat.settings.addresses[1].groups[0].groupId, '3.2', 'Manual entry preserves the chosen group');
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('changing parent address fields ignores delayed street and house results', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  const releases = [];
+  try {
+    const page = await browser.newPage();
+    const errors = [], writes = [];
+    page.on('pageerror', error => errors.push(error.message));
+    let streetStarted, houseStarted;
+    const streetRequest = new Promise(resolve => { streetStarted = resolve; });
+    const houseRequest = new Promise(resolve => { houseStarted = resolve; });
+    await page.addInitScript(() => {
+      window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick() {} } } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), url = new URL(request.url()), path = url.pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      if (request.method() !== 'GET') writes.push(path);
+      let data = {};
+      if (path === '/api/bootstrap') data = {
+        maxTemplateLength: 1000,
+        regions: [{ id: 'kyiv-oblast', name: 'Київська область', siteUrl: 'https://example.test', hasSchedules: false, hasGroups: false, parts: [] }],
+        templateSlots: [],
+      };
+      else if (path === '/api/chats') data = [{
+        chatId: -100999, title: 'Пошук', isPrivate: false,
+        settings: { regionId: 'kyiv-oblast', isActive: true, partIds: [], templates: {},
+          addresses: [{ id: 1, regionId: 'kyiv-oblast', name: 'Дім', city: '', street: '', house: '', groups: [] }] },
+      }];
+      else if (path === '/api/address/cities') data = [{ name: 'м. Ірпінь' }];
+      else if (path === '/api/address/streets') {
+        if (url.searchParams.get('query') === 'Зат') {
+          streetStarted();
+          await new Promise(resolve => releases.push(resolve));
+          data = [{ name: 'вул. Затримана' }];
+        } else data = [{ name: 'вул. Західна' }];
+      }
+      else if (path === '/api/address/houses') {
+        houseStarted();
+        await new Promise(resolve => releases.push(resolve));
+        data = [{ house: '14', groupId: '3.2' }];
+      }
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    const city = page.locator('input[placeholder="Наприклад, Одеса"]');
+    const street = page.locator('input[placeholder="Оберіть населений пункт спочатку"]');
+    const house = page.locator('input[placeholder="Оберіть вулицю спочатку"]');
+    await city.fill('Ір');
+    await page.getByRole('option', { name: 'м. Ірпінь', exact: true }).click();
+    await street.fill('Зат');
+    await streetRequest;
+    await city.fill('Бу');
+    const streetResponse = page.waitForResponse(response => response.url().includes('/api/address/streets'));
+    releases.shift()();
+    await streetResponse;
+    await page.getByRole('option', { name: 'м. Ірпінь', exact: true }).waitFor();
+    assert.equal(await page.getByRole('option', { name: 'вул. Затримана', exact: true }).count(), 0);
+    assert.equal(await street.isDisabled(), true);
+    await page.getByRole('option', { name: 'м. Ірпінь', exact: true }).click();
+    await street.fill('Зах');
+    await page.getByRole('option', { name: 'вул. Західна', exact: true }).click();
+    await house.fill('14');
+    await houseRequest;
+    await street.fill('Ін');
+    const houseResponse = page.waitForResponse(response => response.url().includes('/api/address/houses'));
+    releases.shift()();
+    await houseResponse;
+    await page.getByRole('option', { name: 'вул. Західна', exact: true }).waitFor();
+    assert.equal(await page.getByRole('option', { name: 'Будинок 14 · черга 3.2', exact: true }).count(), 0);
+    assert.equal(await house.isDisabled(), true);
+    assert.deepEqual(writes, []);
+    assert.deepEqual(errors, []);
+  } finally {
+    for (const release of releases) release();
+    await browser.close();
+  }
+});
+
+test('one atomic Save covers address and region drafts; Cancel, back and failures preserve saved state', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/style.css', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 740 } });
+    const errors = [], writes = [];
+    page.on('pageerror', error => errors.push(error.message));
+    let failSave = false;
+    let chat = {
+      chatId: -101010, title: 'Чернетки', isPrivate: false,
+      settings: { regionId: 'kyiv', isActive: true, isPaused: false, groupId: '1.1', partIds: [], templates: {},
+        addresses: [{ id: 1, regionId: 'kyiv', name: 'Дім', city: 'Київ', street: 'Вулиця', house: '12', groups: [{ groupId: '1.1' }] }] },
+    };
+    await page.addInitScript(() => {
+      window.confirmResult = true;
+      window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick(callback) { window.telegramBack = callback; } },
+        showConfirm(_text, callback) { callback(window.confirmResult); } } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<link rel="stylesheet" href="/style.css"><div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      if (path === '/style.css') return route.fulfill({ contentType: 'text/css', body: styles });
+      if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() });
+      let data = {};
+      if (path === '/api/bootstrap') data = {
+        maxTemplateLength: 1000, templateSlots: [],
+        regions: ['kyiv', 'odesa'].map(id => ({ id, name: id, hasSchedules: true, hasGroups: false, parts: [] })),
+      };
+      else if (path === '/api/chats') data = [chat];
+      else if (path === '/api/schedules/groups') data = [{ id: '1.1', name: '1.1' }, { id: '2.1', name: '2.1' }];
+      else if (path === '/api/chats/-101010') {
+        if (failSave) return route.fulfill({ status: 400, json: { error: 'Перевірте адресу.' } });
+        const body = request.postDataJSON();
+        chat = { ...chat, settings: { ...chat.settings, ...body, groupId: body.addresses[0]?.groups[0]?.groupId || null } };
+        data = chat;
+      }
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    const save = page.getByRole('button', { name: 'Зберегти', exact: true });
+    const cancel = page.getByRole('button', { name: 'Скасувати', exact: true });
+    await page.getByRole('textbox', { name: 'Назва', exact: true }).fill('Чернетка');
+    assert.equal(await save.isEnabled(), true);
+    await page.evaluate(() => { window.confirmResult = false; window.telegramBack(); });
+    assert.equal(await page.getByRole('textbox', { name: 'Назва', exact: true }).inputValue(), 'Чернетка');
+    await page.evaluate(() => { window.confirmResult = true; });
+    await cancel.click();
+    assert.equal(await page.getByRole('textbox', { name: 'Назва', exact: true }).inputValue(), 'Дім');
+    await page.locator('#regionSel').selectOption('odesa');
+    assert.equal(chat.settings.regionId, 'kyiv');
+    assert.equal(chat.settings.addresses.length, 1);
+    assert.deepEqual(writes, []);
+    await cancel.click();
+    assert.equal(await page.locator('#regionSel').inputValue(), 'kyiv');
+    assert.equal(await page.getByRole('textbox', { name: 'Назва', exact: true }).inputValue(), 'Дім');
+    await page.getByRole('textbox', { name: 'Назва', exact: true }).fill('Оновлений дім');
+    await page.getByRole('switch', { name: 'Пауза', exact: true }).check();
+    failSave = true;
+    await save.click();
+    await page.getByText('Перевірте адресу.', { exact: true }).waitFor();
+    assert.equal(chat.settings.addresses[0].name, 'Дім');
+    assert.equal(chat.settings.isPaused, false);
+    assert.equal(await page.getByRole('textbox', { name: 'Назва', exact: true }).inputValue(), 'Оновлений дім');
+    failSave = false;
+    await save.click();
+    await page.getByText('Збережено ✓', { exact: true }).waitFor();
+    assert.equal(chat.settings.addresses[0].name, 'Оновлений дім');
+    assert.equal(chat.settings.isPaused, true);
+    assert.equal(writes.length, 2);
+    assert.ok(writes.every(w => w.path === '/api/chats/-101010'));
+    await page.locator('#regionSel').selectOption('odesa');
+    await page.getByRole('button', { name: '+ Додати адресу', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Назва', exact: true }).fill('Офіс');
+    await page.getByLabel('Додати чергу', { exact: true }).selectOption('2.1');
+    assert.equal(chat.settings.regionId, 'kyiv');
+    await save.click();
+    await page.getByText('Збережено ✓', { exact: true }).waitFor();
+    assert.equal(chat.settings.regionId, 'odesa');
+    assert.equal(chat.settings.addresses[0].name, 'Офіс');
+    assert.equal(chat.settings.groupId, '2.1');
+    assert.equal(writes.length, 3);
+    const bounds = await save.boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 360, 'Save must fit a small viewport with Cancel');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('unrelated settings edits preserve an existing legacy schedule preference without exposing controls', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const writes = [], errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    let chat = { chatId: 456, title: 'Private', isPrivate: true,
+      settings: { regionId: 'kyiv', groupId: '1.1', isActive: true, scheduleNotify: true, addresses: [], partIds: [], templates: {} } };
+    await page.addInitScript(() => {
+      window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick() {} } } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      let data = {};
+      if (path === '/api/bootstrap') data = { maxTemplateLength: 1000, templateSlots: [],
+        regions: [{ id: 'kyiv', name: 'Київ', hasSchedules: true, hasGroups: false, parts: [] }] };
+      else if (path === '/api/chats') data = [chat];
+      else if (path === '/api/schedules/groups') data = [{ id: '1.1', name: '1.1' }];
+      else if (request.method() === 'PUT') {
+        const body = request.postDataJSON(); writes.push(body);
+        chat = { ...chat, settings: { ...chat.settings, ...body } }; data = chat;
+      }
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    await page.getByRole('tab', { name: 'Графік', exact: true }).click();
+    const events = page.getByRole('switch', { name: 'Сповіщати про плановий початок і кінець відключення', exact: true });
+    assert.equal(await events.count(), 0);
+    await page.getByRole('tab', { name: 'Повідомлення', exact: true }).click();
+    await page.getByRole('switch', { name: 'Надсилати автоматичні повідомлення без звуку', exact: true }).check();
+    await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
+    await page.getByText('Збережено ✓', { exact: true }).waitFor();
+    assert.ok(writes.every(body => body.scheduleNotify === true));
+    assert.equal(writes.length, 1);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('private schedule actions identify the private destination and viewing sends nothing', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const writes = [], errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(() => {
+      window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick() {} } } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      if (request.method() !== 'GET') writes.push(path);
+      let data = {};
+      if (path === '/api/bootstrap') data = {
+        maxTemplateLength: 1000, templateSlots: [],
+        regions: [{ id: 'kyiv', name: 'Київ', hasSchedules: true, hasGroups: false, parts: [] }],
+      };
+      else if (path === '/api/chats') data = [{
+        chatId: 123, title: 'Private', isPrivate: true,
+        settings: { regionId: 'kyiv', groupId: '1.1', isActive: true, addresses: [], partIds: [], templates: {} },
+      }];
+      else if (path === '/api/schedules/groups') data = [{ id: '1.1', name: '1.1' }];
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    await page.getByRole('tab', { name: 'Графік', exact: true }).click();
+    await page.getByRole('heading', { name: 'Графік у чаті з ботом', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Надіслати графік у канал зараз', exact: true }).count(), 0);
+    assert.deepEqual(writes, []);
+    await page.getByRole('button', { name: 'Надіслати графік у цей чат зараз', exact: true }).click();
+    await page.getByText('Графік надіслано в цей чат.', { exact: true }).waitFor();
+    assert.deepEqual(writes, ['/api/chats/123/schedules/send']);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
@@ -346,6 +673,9 @@ test('svitlobot main group buttons pick one group of a multi-address channel', a
     assert.deepEqual(writes, [{ method: 'PUT', path: '/api/chats/-100777/svitlobot/group', body: { groupId: '2.2' } }]);
     await card.getByText('Світлобот отримує тижневий графік черги 2.2 автоматично.', { exact: true }).waitFor();
     assert.equal(await card.getByRole('button', { name: 'Зробити основною', exact: true }).count(), 1);
+    await page.getByRole('tab', { name: 'Графік', exact: true }).click();
+    await page.getByText('Усі черги — в одному дописі. Основну чергу для Світлобота оберіть у «Основне».', { exact: true }).waitFor();
+    assert.equal(await page.getByText(/Світлобот отримує спільний тижневий графік/).count(), 0);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

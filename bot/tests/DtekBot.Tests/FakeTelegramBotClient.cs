@@ -52,15 +52,34 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
 
         object response = request switch
         {
-            SendMessageRequest => new Message { Id = _nextMessageId++, Chat = new Chat { Id = 0 } },
-            EditMessageTextRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
+            SendMessageRequest send => new Message
+            {
+                Id = _nextMessageId++, Chat = new Chat { Id = send.ChatId.Identifier ?? 0 },
+                Text = send.Text, Entities = send.Entities?.ToArray(),
+            },
+            CopyMessageRequest => new MessageId { Id = _nextMessageId++ },
+            EditMessageTextRequest edit => new Message
+            {
+                Id = edit.MessageId, Chat = new Chat { Id = edit.ChatId?.Identifier ?? 0 },
+                Text = edit.Text, Entities = edit.Entities?.ToArray(),
+            },
             AnswerCallbackQueryRequest => true,
             SetChatMenuButtonRequest => true,
             DeleteMessageRequest => true,
             SetMyCommandsRequest => true,
-            SendPhotoRequest => NewPhotoMessage(),
-            EditMessageMediaRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
-            EditMessageCaptionRequest edit => new Message { Id = edit.MessageId, Chat = new Chat { Id = 0 } },
+            SendPhotoRequest send => NewPhotoMessage(send.ChatId.Identifier ?? 0, send.Caption),
+            EditMessageMediaRequest edit => new Message
+            {
+                Id = edit.MessageId, Chat = new Chat { Id = edit.ChatId?.Identifier ?? 0 },
+                Caption = edit.Media.Caption, CaptionEntities = edit.Media.CaptionEntities?.ToArray(),
+                Photo = [new PhotoSize { FileId = "updated", FileUniqueId = "updated", Width = 10, Height = 10 }],
+            },
+            EditMessageCaptionRequest edit => new Message
+            {
+                Id = edit.MessageId, Chat = new Chat { Id = edit.ChatId?.Identifier ?? 0 },
+                Caption = edit.Caption, CaptionEntities = edit.CaptionEntities?.ToArray(),
+                Photo = [new PhotoSize { FileId = "f", FileUniqueId = "u", Width = 10, Height = 10 }],
+            },
             GetMeRequest => new User { Id = BotId, IsBot = true, FirstName = "DtekBot", Username = "dtek_test_bot" },
             GetChatMemberRequest member => MemberFor(member.UserId),
             GetChatAdministratorsRequest => MemberStatuses
@@ -94,10 +113,11 @@ public sealed class FakeTelegramBotClient : ITelegramBotClient
 
     public IEnumerable<DeleteMessageRequest> Deletes => Requests.OfType<DeleteMessageRequest>();
 
-    private Message NewPhotoMessage() => new()
+    private Message NewPhotoMessage(long chatId, string? caption) => new()
     {
         Id = _nextMessageId++,
-        Chat = new Chat { Id = 0 },
+        Chat = new Chat { Id = chatId },
+        Caption = caption,
         Photo = [new PhotoSize { FileId = "f", FileUniqueId = "u", Width = 10, Height = 10 }],
     };
 
