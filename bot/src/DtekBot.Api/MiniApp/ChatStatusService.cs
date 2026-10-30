@@ -34,17 +34,18 @@ public sealed class ChatStatusService(
         var settingsMatch = channel is not null
             && string.Equals(channel.RegionId, region.Id, StringComparison.OrdinalIgnoreCase);
         var groupIds = settingsMatch ? channel!.GroupIds() : [];
-        var partIds = requestedPartIds ?? (settingsMatch ? channel!.PartIdList : []);
+        var partIds = requestedPartIds ?? (settingsMatch ? channel!.PopupDistrictIds() : []);
         var lines = new List<string>();
 
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
-        var districtEmergencyApplies = state?.Kind != PopupKind.Emergency
-            || state.PartIdList is not { Count: > 0 }
+        var classified = state?.Classification().Resolve(partIds);
+        var districtEmergencyApplies = classified?.Kind != PopupKind.Emergency
+            || classified.PartIds is not { Count: > 0 }
             || partIds.Count == 0
-            || state.PartIdList.Intersect(partIds, StringComparer.OrdinalIgnoreCase).Any();
-        lines.Add(state?.Kind == PopupKind.Emergency && !districtEmergencyApplies
+            || classified.PartIds.Intersect(partIds, StringComparer.OrdinalIgnoreCase).Any();
+        lines.Add(classified?.Kind == PopupKind.Emergency && !districtEmergencyApplies
             ? "ℹ️ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено."
-            : state?.Kind switch
+            : classified?.Kind switch
         {
             PopupKind.Emergency => "🚨 На сайті ДТЕК діють екстрені відключення.",
             PopupKind.Accident => "⚠️ На сайті ДТЕК повідомлено про аварію в енергосистемі.",

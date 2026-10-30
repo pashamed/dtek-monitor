@@ -26,7 +26,7 @@ test('browser fallback checks selected regions concurrently and returns correlat
     registerHooks({
       resolve(specifier, context, nextResolve) {
         if (specifier === 'playwright') return {url:'data:text/javascript,' + encodeURIComponent(browser), shortCircuit:true};
-        if (specifier === './popup-llm.js') return {url:'data:text/javascript,export async function structurePopup(){return null}', shortCircuit:true};
+        if (specifier === './popup-llm.js') throw new Error('Regional collection must not invoke the legacy LLM parser');
         return nextResolve(specifier, context);
       }
     });
@@ -52,6 +52,7 @@ test('browser fallback checks selected regions concurrently and returns correlat
     .map(line => JSON.parse(line.slice('OBSERVATION:'.length)));
   assert.deepEqual(observations.map(r => r.regionId).sort(), ['kyiv', 'kyiv-oblast']);
   assert.ok(observations.every(r => r.collectionId === 'cycle-test' && r.popupText === 'Екстрені відключення'));
+  assert.ok(observations.every(r => !Object.hasOwn(r, 'structured')));
 });
 
 test('address directory drops cities without streets before ingest', async () => {
@@ -76,7 +77,7 @@ test('address directory drops cities without streets before ingest', async () =>
     registerHooks({
       resolve(specifier, context, nextResolve) {
         if (specifier === 'playwright') return {url:'data:text/javascript,' + encodeURIComponent(browser), shortCircuit:true};
-        if (specifier === './popup-llm.js') return {url:'data:text/javascript,export async function structurePopup(){return null}', shortCircuit:true};
+        if (specifier === './popup-llm.js') throw new Error('Regional collection must not invoke the legacy LLM parser');
         return nextResolve(specifier, context);
       }
     });

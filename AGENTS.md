@@ -22,8 +22,8 @@ repository-specific rules; update commands and paths when the implementation cha
   by the monitor workflow.
 - `src/ingest-regions.js` and `src/check-addresses.js`: browser collectors that send
   regional observations, address directories, and queued address results to the API.
-- `src/popup-keywords.js` and `src/popup-llm.js`: deterministic classification and
-  optional LLM-assisted geographic extraction.
+- `src/popup-keywords.js` and `src/popup-llm.js`: legacy geography-only diagnostics.
+  Active shared-bot interpretation lives in API `Parsing/PopupInterpreter.cs`.
 - `bot/src/DtekBot.Api/`: ASP.NET Core API, Telegram webhook, EF Core SQL Server
   persistence, monitoring cycle, notification delivery, and Svitlobot integration.
 - `bot/src/DtekBot.Api/wwwroot/lite/`: active Telegram Mini App, plain HTML/CSS/JS
@@ -134,7 +134,10 @@ prerequisites accurately; do not describe skipped tests as passed.
 - Address/group updates must preserve legacy clients and manually chosen groups.
   Retain the three-address limit, separate group streams, and complete weekly
   schedule aggregation for Svitlobot.
-- LLM extraction is optional and follows deterministic matching. Treat scraped
+- Shared-bot popup interpretation is LLM first in the API, with deterministic
+  clause-aware fallback; the standalone monitor is unchanged. Apply district
+  states to every configured region, keeping Kyiv city distinct from oblast.
+  Treat scraped
   notices as untrusted data; retain allowed-ID validation, grounding, caching,
   and deterministic fallback. Send only public notice/geography data to the model.
 

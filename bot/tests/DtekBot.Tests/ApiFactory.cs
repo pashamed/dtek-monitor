@@ -64,7 +64,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         // The built-in tick loop would post on its own in the middle of a test.
         builder.UseSetting("Ticks:Enabled", "false");
         builder.ConfigureAppConfiguration(config => config.AddInMemoryCollection(
-            new Dictionary<string, string?> { ["Dtek:Timers:MonitorWorkflowIntervalMinutes"] = "0" }));
+            new Dictionary<string, string?> { ["Dtek:Timers:MonitorWorkflowIntervalMinutes"] = "0", ["Llm:ApiKey"] = "" }));
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<BotDbContext>>();

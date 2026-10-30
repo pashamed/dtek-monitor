@@ -85,7 +85,9 @@ public sealed class GridAlertTests : IDisposable
         var response = await _client.PostAsJsonAsync("/ingest", new
         {
             regionId = "kyiv",
-            popupText = text,
+            popupText = districts.Length == 0 ? text
+                : string.Join(", ", RealSettings.Load().Regions.Single(r => r.Id == "kyiv").Parts
+                    .Where(p => districts.Contains(p.Id)).Select(p => p.Name)) + ": " + text,
             structured = districts.Length == 0 ? null : new { scope = "districts", districts },
         });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

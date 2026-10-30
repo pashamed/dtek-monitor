@@ -1355,7 +1355,9 @@ public static class MiniAppApi
             var warnings = new List<string>();
             var popup = await db.RegionStates.AsNoTracking().FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
             if (popup?.Kind is Parsing.PopupKind.Emergency or Parsing.PopupKind.Accident)
-                warnings.Add("У регіоні є повідомлення ДТЕК про екстрені відключення або аварію. План може не діяти; перевірте, яких районів стосується повідомлення.");
+                warnings.Add(popup.PartIdList is { Count: > 0 } affected
+                    ? $"ДТЕК повідомляє про екстрені відключення або аварію: {string.Join(", ", region.DisplayNames(affected))}. План у цих районах може не діяти."
+                    : "У регіоні є повідомлення ДТЕК про екстрені відключення або аварію. План може не діяти; перевірте, яких районів стосується повідомлення.");
             var grid = await db.GridStates.AsNoTracking().FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
             if (grid?.IsAlert == true && now - grid.FeedGeneratedAt <= TimeSpan.FromMinutes(settings.CurrentValue.Grid.MaxAgeMinutes))
                 warnings.Add("Укренерго повідомляє про екстрені обмеження або пошкодження мережі. План може не діяти.");

@@ -43,23 +43,6 @@ jobs:
         if: steps.ingest.outputs.configured == 'true'
         uses: actions/checkout@v7
 
-      # Its own branch, so the personal monitor's artifacts push never overwrites this cache (and vice versa).
-      - name: Checkout bot artifacts
-        if: steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
-        run: |
-          if [ -n "$(git ls-remote --heads origin bot-artifacts)" ]; then
-            git fetch --depth 1 origin bot-artifacts
-            git worktree add --detach artifacts FETCH_HEAD
-          else
-            git worktree add --orphan -b bot-artifacts artifacts
-            # One-time move of the popup cache that used to live on the personal artifacts branch.
-            if [ -n "$(git ls-remote --heads origin artifacts)" ]; then
-              git fetch --depth 1 origin artifacts
-              git show FETCH_HEAD:popup-structure.json > artifacts/popup-structure.json 2>/dev/null \
-                || rm -f artifacts/popup-structure.json
-            fi
-          fi
-
       - name: Set up Node.js
         if: steps.ingest.outputs.configured == 'true'
         uses: actions/setup-node@v7
@@ -76,12 +59,6 @@ jobs:
       - name: Check all regions
         if: steps.ingest.outputs.configured == 'true' && github.event.action != 'check-addresses'
         timeout-minutes: 5
-        env:
-          # Optional: lets an LLM read which districts a popup names. Any OpenAI-compatible provider works;
-          # the defaults are the Google Gemini free tier. Without the key the bot matches district names itself.
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: node ./src/ingest-regions.js
 
       # Cheap when nothing is queued (one HTTP request).
@@ -99,27 +76,6 @@ jobs:
           curl -fsS -X POST -H "Content-Length: 0" --max-time 60 --retry 2 \
             -H "x-ingest-secret: $INGEST_SECRET" \
             "${INGEST_URL%/}/grid/tick"
-
-      - name: Commit updated bot artifacts
-        if: always() && steps.ingest.outputs.configured == 'true' && github.event.action != 'check-regions'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git -C artifacts add --all
-
-          if git -C artifacts diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-
-          if git -C artifacts rev-parse --verify --quiet HEAD; then
-            git -C artifacts commit --amend --no-edit
-          else
-            git -C artifacts commit -m "chore: update bot artifacts"
-          fi
-
-          git push --force origin "$(git -C artifacts rev-parse HEAD):refs/heads/bot-artifacts"
 
       - name: Keep workflow enabled
         if: always()

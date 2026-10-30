@@ -77,7 +77,7 @@ public sealed class RegionAlertCoordinator(
 
         // Rows written before the districts were stored have none: fall back to the keywords in the text.
         var parts = state.PartIdList ?? classifier.Classify(region.Id, state.PopupText).PartIds;
-        return new PopupClassification(state.Kind, parts, state.NormalizedText, state.Hash);
+        return state.Classification() with { PartIds = parts };
     }
 
     // The hash only depends on the status, so a refreshed "since" never edits the message again.

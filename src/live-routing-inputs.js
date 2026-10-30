@@ -1,3 +1,4 @@
+// Legacy geography-only replays; does not validate the API-hosted interpretation tool.
 import { readFile, mkdir, writeFile } from "node:fs/promises"
 import { chromium } from "playwright"
 import { askModel, groundAnswer, validateAnswer, isLlmConfigured } from "./popup-llm.js"

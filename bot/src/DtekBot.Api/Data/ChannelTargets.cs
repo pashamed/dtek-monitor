@@ -33,6 +33,21 @@ public static class ChannelTargets
             a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? []))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
+    public static IReadOnlyList<string> PopupDistrictIds(this Channel channel)
+    {
+        if (channel.Addresses.Count == 0) return channel.PartIdList;
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var address in channel.Addresses)
+        {
+            IReadOnlyList<string> parts = address.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                ?? channel.PartIdList;
+            // An unrestricted address makes the subscription region-wide.
+            if (parts.Count == 0) return [];
+            result.UnionWith(parts);
+        }
+        return result.ToArray();
+    }
+
     public static string AddressText(this Channel channel, IEnumerable<ChatAddress>? addresses = null) =>
         channel.Addresses.Count == 0 ? channel.AddressLabel ?? ""
         : string.Join("; ", (addresses ?? channel.Addresses).Select(a =>

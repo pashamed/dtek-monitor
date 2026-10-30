@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs"
 import { chromium } from "playwright"
 
-import { structurePopup } from "./popup-llm.js"
 
 const SETTINGS_PATH = new URL(
   "../bot/src/DtekBot.Api/dtek-settings.json",
@@ -20,11 +19,6 @@ function loadRegions() {
   const requested = process.env.DTEK_REGION_IDS ? JSON.parse(process.env.DTEK_REGION_IDS) : null
   if (requested !== null && !Array.isArray(requested)) throw new Error("DTEK_REGION_IDS must be an array")
   return loadSettings().Dtek.Regions.filter((region) => region.SiteUrl && (!requested || requested.includes(region.Id)))
-}
-
-// The same keyword rules the backend uses; they decide whether a popup is familiar enough to skip the model.
-function loadClassification() {
-  return loadSettings().Dtek.Classification
 }
 
 function ingestEndpoint(path) {
@@ -151,7 +145,6 @@ async function ingestAddressDirectory(region, directory) {
 
 async function ingest(region, popupText) {
   const regionId = region.Id
-  const structured = await structurePopup(region, popupText, loadClassification())
   const response = await fetch(INGEST_URL, {
     method: "POST",
     headers: {
@@ -163,7 +156,6 @@ async function ingest(region, popupText) {
       popupText,
       observedAt: new Date().toISOString(),
       ...(process.env.DTEK_COLLECTION_ID ? { collectionId: process.env.DTEK_COLLECTION_ID } : {}),
-      ...(structured ? { structured } : {}),
     }),
     signal: AbortSignal.timeout(60000),
   })

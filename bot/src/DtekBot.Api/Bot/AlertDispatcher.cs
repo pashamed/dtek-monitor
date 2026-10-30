@@ -58,10 +58,6 @@ public sealed class AlertDispatcher(
             .Where(d => d.RegionId == region.Id && !d.IsClosed)
             .ToListAsync(ct);
 
-        var kind = result.Kind == PopupKind.Emergency ? AlertKind.Emergency
-            : result.Kind == PopupKind.Accident ? AlertKind.Accident
-            : AlertKind.Unknown;
-
         // Threads whose chat left the region or unsubscribed are closed without a message.
         var activeChats = channels.Select(c => c.ChatId).ToHashSet();
         foreach (var stale in openDeliveries.Where(d => !activeChats.Contains(d.ChatId)))
@@ -72,21 +68,24 @@ public sealed class AlertDispatcher(
 
         foreach (var channel in channels)
         {
+            var resolved = result.Resolve(channel.PopupDistrictIds());
+            var kind = resolved.Kind == PopupKind.Emergency ? AlertKind.Emergency
+                : resolved.Kind == PopupKind.Accident ? AlertKind.Accident : AlertKind.Unknown;
             var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
             var slot = SlotFor(kind, false);
             var slotOn = channel.SlotEnabled(slot);
-            var eligible = result.IsAlert
+            var eligible = resolved.IsAlert
                 && !channel.IsPaused
-                && Matches(channel, result)
+                && Matches(channel, resolved)
                 && slotOn;
 
             Outcome outcome;
             if (eligible)
             {
-                var text = Render(channel, region, kind, PartNames(region, result), popupText, now, source: source, affectedPartIds: result.PartIds);
+                var text = Render(channel, region, kind, PartNames(region, resolved), popupText, now, source: source, affectedPartIds: resolved.PartIds);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, slot, region.Id, delivery, text, RenderHash(channel, result.Hash, text), now, ct),
+                    () => SendOrEditAsync(channel, slot, region.Id, delivery, text, RenderHash(channel, resolved.Hash, text), now, ct),
                     ct);
             }
             else if (regionWideFallback is { IsAlert: true } fallback
@@ -107,7 +106,7 @@ public sealed class AlertDispatcher(
                         RenderHash(channel, fallback.Hash, text), now, ct),
                     ct);
             }
-            else if (delivery is not null && result.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
+            else if (delivery is not null && resolved.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
             {
                 // Narrowed out by the districts of the newer popup while the region-wide alert is still on:
                 // the chat keeps its open thread, so the alert is neither repeated later nor announced as ended.
@@ -117,12 +116,12 @@ public sealed class AlertDispatcher(
             {
                 // A switched-off alert type closes its open thread silently.
                 var announce = !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
-                    && !(result.IsAlert && !slotOn);
+                    && !(resolved.IsAlert && !slotOn);
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
                         () => SendEndAsync(channel, region, delivery, OwnPartNames(region, channel, result), popupText, now, ct,
-                            stabilizationActive: result.Kind == PopupKind.Stabilization),
+                            stabilizationActive: resolved.Kind == PopupKind.Stabilization),
                         ct)
                     : Outcome.Closed;
 
@@ -450,7 +449,7 @@ public sealed class AlertDispatcher(
     // The end notice is about the chat's own districts, not about whatever the replacing popup names.
     private static List<string> OwnPartNames(RegionSettings region, Channel channel, PopupClassification result)
     {
-        var own = channel.PartIdList;
+        var own = channel.PopupDistrictIds();
         return own.Count == 0
             ? PartNames(region, result)
             : region.DisplayNames(own);
@@ -489,16 +488,7 @@ public sealed class AlertDispatcher(
     // No chosen districts, or an alert that names none, reaches everybody in the region; otherwise any overlap counts.
     private static bool Matches(Channel channel, PopupClassification result)
     {
-        if (channel.Addresses.Count > 0)
-        {
-            return result.PartIds.Count == 0 || channel.Addresses.Any(address =>
-            {
-                IReadOnlyList<string> wanted = address.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    ?? channel.PartIdList;
-                return wanted.Count == 0 || result.PartIds.Any(id => wanted.Contains(id, StringComparer.OrdinalIgnoreCase));
-            });
-        }
-        var parts = channel.PartIdList;
+        var parts = channel.PopupDistrictIds();
         return parts.Count == 0 || result.PartIds.Count == 0
             || result.PartIds.Any(id => parts.Contains(id, StringComparer.OrdinalIgnoreCase));
     }

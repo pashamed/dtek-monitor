@@ -46,6 +46,12 @@ builder.Services.AddHttpClient<IDtekAddressClient, DtekAddressClient>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; dtek-monitor-bot/1.0)");
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false });
 builder.Services.AddSingleton<PopupClassifier>();
+builder.Services.AddSingleton<PopupInterpreter>();
+builder.Services.AddHttpClient(PopupInterpreter.ClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.MaxResponseContentBufferSize = 128 * 1024;
+}).RemoveAllLoggers();
 builder.Services.AddSingleton<SvitlobotKeyProtector>();
 // The channel key is in the query string: no request logging for this client.
 builder.Services.AddHttpClient<ISvitlobotClient, SvitlobotClient>(client =>
@@ -263,6 +269,11 @@ app.MapPost("/ingest", async (
     var observation = new DtekPopupObservation(region.Id, body.PopupText, body.ObservedAt ?? time.GetUtcNow(), body.Structured);
     if (collector.Accept(body.CollectionId, observation))
         return Results.Ok(new { regionId = region.Id, collected = true });
+    if (body.CollectionId is not null)
+    {
+        logger.LogWarning("Ignoring late or unmatched browser observation for {Region}", region.Id);
+        return Results.Ok(new { regionId = region.Id, collected = false, ignored = true });
+    }
 
     await TickGate.Grid.WaitAsync(ct);
     try
@@ -280,6 +291,8 @@ app.MapPost("/ingest", async (
             changed,
             kind = result.Kind.ToString(),
             parts = result.PartIds,
+            interpretation = result.Interpretation,
+            parser = result.Parser,
             dispatch,
         });
     }

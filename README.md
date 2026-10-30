@@ -288,11 +288,29 @@ The **Mini App** opens from the bot's private-chat menu at `/lite/`. It uses pla
 
 Use `AutoMigrate: true` only for initial setup and updates requiring database migrations. **The `ResetApplicationData` migration deletes all application data**: connected chats and administrators, addresses, schedules, Svitlobot keys, and check state. Tables and migration history remain. This is irreversible; back up the database before applying it. Hosting configuration secrets are outside the database and are not deleted. `App:PublicUrl` is the site's HTTPS URL, used for the “Редактор” menu button and the button under the greeting.
 
-**District recognition in DTEK notices.** Popup wording changes, so the bot first matches dictionary entries from `dtek-settings.json`. Word stems handle Ukrainian inflections: “бучанськ” matches “Бучанському районі”. If the repository has `LLM_API_KEY`, the workflow asks a language model about **unfamiliar notices only**: an unrecognized message kind, or district-related wording without a recognized district. Understood notices bypass the model. The result identifies all districts, specific IDs such as `obukhiv`, `fastiv`, and `bucha`, or unknown scope. The model receives only the public notice and allowed geography; unknown IDs and ungrounded district selections are rejected. Non-correlated browser runs persist the popup cache on `bot-artifacts`; correlated fallback runs skip branch checkout/commit. Model failures or invalid results fall back to deterministic classification; without district restrictions, eligible subscribers throughout the region receive the alert.
+**District recognition in DTEK notices.** The shared bot interprets nonempty public popups **LLM first in the API**, for both direct collection and browser ingestion. Its forced `submit_popup_interpretation` function takes only machine-readable arguments: state kinds (`emergency`, `accident`, `stabilization`, `cancelled`), explicit scope, and district IDs from `dtek-settings.json`. It is an internal model tool, not a public HTTP/MCP endpoint. The standalone monitor is unchanged.
 
-The default provider is Google Gemini Flash-Lite. Obtain a key from [Google AI Studio](https://aistudio.google.com/apikey) and store it as `LLM_API_KEY`. Check current provider pricing and data-use terms; the free tier may use requests for product improvement, so only public notice text is sent. Other OpenAI-compatible providers use `LLM_BASE_URL` and `LLM_MODEL`; an OpenAI example is `https://api.openai.com/v1` with `gpt-5-nano`. API billing is separate from a ChatGPT subscription. Verify model availability in your provider account; the configured default is `gemini-3.1-flash-lite`.
+This applies to **every configured region**, including Kyiv oblast, not just Kyiv city. Each clause is interpreted separately: an emergency on Kyiv's right bank with schedules on its left bank produces seven Emergency districts and three Stabilization districts, not ten Emergency districts. A whole-Kyiv emergency includes all ten IDs; other whole-region emergencies include that region's complete configured district set. Kyiv city and oblast never share district IDs. Unmentioned districts are not automatically assigned stabilization.
 
-This step runs in **GitHub Actions**, not the web application. Set `LLM_API_KEY` and, if needed, `LLM_BASE_URL` / `LLM_MODEL` under the workflow repository's **Settings → Secrets and variables → Actions**. The API does not use an `LLM_API_KEY` value from `appsettings.Production.json`.
+Tool arguments have three distinct outcomes:
+
+```json
+{"status":"parsed","states":[{"kind":"emergency","scope":"districts","districts":["bucha","obukhiv","fastiv"]},{"kind":"stabilization","scope":"districts","districts":["brovary"]}]}
+{"status":"unable_to_parse","states":[]}
+{"status":"no_information","states":[]}
+```
+
+`parsed` requires nonempty valid states. `unable_to_parse` means ambiguous/uninterpretable text; `no_information` means no relevant status information. Neither empty result means all-clear. Whole-region states use `"scope":"all"` and list every configured district; an empty district list never implicitly means the whole region in this tool contract. Legacy aggregate ingest responses keep their empty-parts-means-region-wide convention.
+
+Missing credentials, provider timeout, exhausted credit/quota, unsupported tool calling, invalid results, or an unable-to-parse answer trigger deterministic clause-aware parsing. A model's empty-information answer also falls back if the deterministic parser recognizes a state. Inputs over 4,000 characters are parsed completely by fallback rather than sending a misleading truncated notice. Unknown IDs, conflicting district states, and ungrounded geographic selections are rejected, not silently filtered. Successful model results are cached in API memory for 24 hours (up to 256 entries), keyed by region, text, settings, model, provider, and schema version. Provider failures have a 30-minute cooldown; restarting the API clears this cache. The workflow no longer maintains a popup cache on `bot-artifacts`.
+
+A recognizable blackout/emergency without reliable district scope is region-wide. Uninterpretable or irrelevant nonempty notices send a region-wide **Unknown** alert until a later observation updates it. Only a verified absent popup or explicit status transition can clear DTEK alerts; failed, blocked, missing, or older observations do not. District-specific stabilization ends that district's DTEK alert with schedules wording, never a claim of measured power restoration. A concurrent region-wide Ukrenergo alert remains active there.
+
+Configure provider credentials **on the API host**, not just in GitHub Actions: `Llm__ApiKey`, with optional `Llm__BaseUrl` and `Llm__Model` environment variables, or equivalent private hosting configuration keys `Llm:ApiKey`, `Llm:BaseUrl`, and `Llm:Model`. Legacy `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL` names are also accepted by the API when the corresponding `Llm` key is absent. Never commit the key. GitHub Actions no longer calls the model during regional collection.
+
+The default endpoint is `https://generativelanguage.googleapis.com/v1beta/openai`, with model `gemini-3.1-flash-lite`. Obtain a key from [Google AI Studio](https://aistudio.google.com/apikey), or use an OpenAI-compatible provider that supports forced function calls. Check model availability, pricing, and data-use terms; only public notice text and configured geography/classification definitions are sent. API billing is separate from a ChatGPT subscription.
+
+Deploy the additive `PopupInterpretation` EF migration alongside this API version. It adds nullable interpretation/provenance fields to regional state without resetting existing data; legacy rows remain readable. Prepare and review migrations locally, back up the database, and apply them only through the authorized deployment process.
 
 `GitHub:DispatchToken` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new) restricted to this repository with **Contents: Read and write**, as in the external-trigger setup. It dispatches `check-addresses` to `shared-bot.yml`. Without it, queued requests depend on a later backup run; the hourly cron is not a guaranteed deadline. The same token dispatches `check-emergency` to the standalone `monitor.yml` every `Dtek:Timers:MonitorWorkflowIntervalMinutes` (default 15, `0` disables it). Keep the token only in private hosting configuration, such as `appsettings.Production.json`; never log it.
 
@@ -554,7 +572,9 @@ login, hosted-production UI test, live address-directory lookup, or live Svitlob
 key/write test. Run it with the Telegram opt-in variables above and
 `dotnet test bot\tests\DtekBot.Tests --filter FullyQualifiedName~BrowserSettings_SaveReloadValidateAndSendToRealTestChannel`.
 
-For the district ingest-to-Telegram matrix, first populate the ignored
+The following Node LLM scripts are **legacy geography-only diagnostics**, not validation of the API's active LLM-first tool pipeline. Use the mocked `PopupInterpretationTests` and `PopupRoutingTests` for offline coverage of that pipeline.
+
+For the legacy district ingest-to-Telegram matrix, first populate the ignored
 `.env.llm-test` with `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`. With
 `DTEK_LIVE_LLM=1`, run
 `node --env-file=.env.llm-test src\live-routing-inputs.js` from the repository root.
@@ -575,7 +595,7 @@ duplicate suppression, stabilization clearance, and cleanup. It also ingests
 the captured current website popups. Allow roughly 12 minutes for Telegram
 rate limiting. These are controlled replays, not evidence of current emergencies
 in those districts. The exhaustive model calls deliberately test the model
-directly; production bypasses the model for recognized deterministic notices.
+directly; they do not exercise the API-hosted forced-tool client. Legacy `structured` geography hints remain accepted in ingest payloads but do not override the API interpreter.
 The offline city/oblast routing matrices additionally cover matching,
 nonmatching, region-wide subscriptions and both source arrival/clearance orders.
 

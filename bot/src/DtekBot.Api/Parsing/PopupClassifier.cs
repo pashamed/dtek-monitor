@@ -27,14 +27,19 @@ public sealed record PopupClassification(
     string NormalizedText,
     string Hash)
 {
+    public PopupInterpretation? Interpretation { get; init; }
+    public string? Parser { get; init; }
+
+    public PopupClassification Resolve(IReadOnlyList<string> parts) =>
+        Interpretation?.Resolve(this, parts) ?? this;
+
     // Unknown popups are treated as alerts so nothing is silently dropped.
     public bool IsAlert => Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
 }
 
 public sealed partial class PopupClassifier(IOptionsMonitor<DtekSettings> options)
 {
-    // structured is what the optional LLM step extracted from the same text; it only decides the districts,
-    // never the kind, and is ignored unless it names known districts of the region (or says "all").
+    // Compatibility classifier for legacy callers. New observations use PopupInterpreter and Interpret.
     public PopupClassification Classify(string regionId, string? popupText, StructuredPopup? structured = null)
     {
         var settings = options.CurrentValue;
@@ -49,6 +54,93 @@ public sealed partial class PopupClassifier(IOptionsMonitor<DtekSettings> option
         var parts = FromStructured(regionId, structured, settings) ?? FindParts(regionId, text, settings);
         return new PopupClassification(kind, parts, text, Hash(text));
     }
+
+    public PopupInterpretation Interpret(string regionId, string? popupText)
+    {
+        var settings = options.CurrentValue;
+        var region = settings.Regions.First(r => r.Id.Equals(regionId, StringComparison.OrdinalIgnoreCase));
+        if (Normalize(popupText).Length == 0) return new("no_information", []);
+        var plain = WebUtility.HtmlDecode(Regex.Replace(popupText!, @"<br\s*/?>|</p>|</h[1-6]>|</li>", "\n", RegexOptions.IgnoreCase));
+        var clauses = Regex.Split(plain,
+            @"[\r\n.!?;]+|,\s*(?=(?:а|але|проте|натомість|однак)\s)|,\s*(?=(?:на|у|в)\s+\p{L})",
+            RegexOptions.IgnoreCase).Select(Normalize).Where(s => s.Length > 0).ToArray();
+        var found = new Dictionary<string, PopupKind>(StringComparer.Ordinal);
+        IReadOnlyList<string> subject = [];
+        PopupKind? pendingKind = null;
+        var sawKind = false;
+        foreach (var clause in clauses)
+        {
+            var exception = Regex.Match(clause, @"\bкрім\b|за винятком|не стосується|не поширюється");
+            var statement = exception.Success ? clause[..exception.Index] : clause;
+            var excluded = exception.Success ? FindParts(regionId, clause[exception.Index..], settings) : [];
+            var named = FindParts(regionId, statement, settings);
+            var kind = ClassifyKind(statement, settings.Classification);
+            if (ContainsAny(statement, ["не скасовано", "не запровадж", "не введено", "не застосовуються"]))
+                return new("unable_to_parse", []);
+            if (kind == PopupKind.Unknown && (ContainsAny(statement, ["діють графіки", "діють графіки стабілізаційних"])
+                && !ContainsAny(statement, ["не діють", "не працюють"])))
+                kind = PopupKind.Stabilization;
+            if (kind == PopupKind.Unknown
+                && ContainsAny(statement, ["відсутнє електропостачання", "немає електропостачання", "зникло світло"]))
+                kind = PopupKind.Emergency;
+            if (kind == PopupKind.Unknown)
+            {
+                if (named.Count > 0)
+                {
+                    subject = named;
+                    var remainder = clause;
+                    foreach (var label in region.Parts.Select(p => p.Name).Concat(region.RetiredPartLabels.Values))
+                        remainder = remainder.Replace(Normalize(label), "", StringComparison.Ordinal);
+                    if (pendingKind is { } pending && Regex.IsMatch(remainder, @"^(?:\s|,|та|і)*$"))
+                    {
+                        found.Clear();
+                        foreach (var id in named) found[id] = pending;
+                    }
+                }
+                pendingKind = null;
+                continue;
+            }
+            sawKind = true;
+            // Advisory phrases describe a risk, not an outage in this clause.
+            if (ContainsAny(clause, ["уникнути екстрених", "запобігти екстреним"])) continue;
+            var others = ContainsAny(statement, ["інших районах", "решті районів"]);
+            var targets = IsRegionWide(statement) ? region.Parts.Select(p => p.Id).ToArray()
+                : named.Count > 0 ? named
+                : others ? region.Parts.Select(p => p.Id).Except(subject).ToArray()
+                : subject.Count > 0 ? subject
+                : region.Parts.Select(p => p.Id).ToArray();
+            if (named.Count > 0) subject = named;
+            if (named.Count == 0 && subject.Count == 0) pendingKind = kind;
+            foreach (var id in targets.Except(excluded))
+            {
+                // Region-wide schedule context cannot override a local active restriction.
+                if (named.Count == 0 && !ContainsAny(statement, ["тут ", "там "]) && kind is PopupKind.Stabilization or PopupKind.Cancelled
+                    && found.TryGetValue(id, out var previous) && previous is PopupKind.Accident or PopupKind.Emergency)
+                    continue;
+                if (named.Count == 0 && kind == PopupKind.Emergency
+                    && found.TryGetValue(id, out var active) && active == PopupKind.Accident) continue;
+                found[id] = kind;
+            }
+        }
+        // A parent cannot describe all its children when one of them has an explicit different state.
+        foreach (var part in region.Parts.Where(p => p.Children.Count > 0))
+            if (found.TryGetValue(part.Id, out var parentKind)
+                && PopupInterpretation.Expand(region, part.Children).Any(id => found.TryGetValue(id, out var childKind) && childKind != parentKind))
+                found.Remove(part.Id);
+        if (found.Count == 0) return new(sawKind || Regex.IsMatch(Normalize(popupText), "відключ|електропостач|знеструм|графік")
+            ? "unable_to_parse" : "no_information", []);
+        var groups = found.GroupBy(p => p.Value).Select(g =>
+        {
+            var ids = region.Parts.Where(p => g.Any(v => v.Key == p.Id)).Select(p => p.Id).ToArray();
+            return new PopupAreaState(g.Key.ToString().ToLowerInvariant(),
+                ids.Length == region.Parts.Count ? "all" : "districts", ids);
+        }).ToArray();
+        var result = new PopupInterpretation("parsed", groups);
+        return result.IsValid(region) ? result.Canonicalize(region) : new("unable_to_parse", []);
+    }
+
+    internal static bool IsRegionWide(string text) => ContainsAny(text,
+        ["по всій", "по всьому", "усьому регіон", "всій област", "всьому міст", "всьому києв", "усьому києв", "усі райони", "всі райони", "весь київ"]);
 
     // Null means "no usable structured answer, fall back to keywords".
     private static List<string>? FromStructured(string regionId, StructuredPopup? structured, DtekSettings settings)

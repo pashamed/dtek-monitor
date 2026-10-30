@@ -5,7 +5,8 @@ implemented code, including local changes; it is not confirmation that every
 feature is deployed. Hosting is an ASP.NET Core application with SQL Server;
 IIS/Web Deploy is supported, but the current server configuration was not audited.
 
-![Application architecture](architecture.svg)
+The Mermaid diagram below reflects API-hosted popup interpretation. The
+[older SVG snapshot](architecture.svg) predates that change.
 
 ## 1. The big picture
 
@@ -25,7 +26,7 @@ flowchart TB
         YASNO["Yasno API<br/>Kyiv addresses and group statuses"]
         PLAN["Baskerville42/outage-data-ua<br/>schedule JSON and image URLs"]
         GRID["lasercat12/ua-power-status<br/>Ukrenergo regional status JSON"]
-        LLM["Optional LLM provider<br/>unfamiliar public popup text only"]
+        LLM["Optional LLM provider<br/>public popup text; forced interpretation tool"]
     end
 
     subgraph GitHub["GitHub"]
@@ -34,14 +35,12 @@ flowchart TB
         SHARED["shared-bot.yml<br/>check-regions / check-addresses dispatch, hourly cron backup<br/>Node.js + Playwright Chromium"]
         REFRESH["schedule-refresh.yml<br/>10-minute schedule tick (backup)"]
         ART["artifacts branch<br/>standalone monitor state"]
-        BART["bot-artifacts branch<br/>popup LLM cache"]
         RELEASE["release-please.yml<br/>release PRs / releases, not deployment"]
         REPO --> MON
         REPO --> SHARED
         REPO --> REFRESH
         REPO --> RELEASE
         MON <--> ART
-        SHARED <--> BART
     end
 
     subgraph Backend["Shared ASP.NET Core backend (.NET 10)"]
@@ -90,7 +89,7 @@ flowchart TB
     DTEK --> SHARED
     YASNO --> SHARED
     DTEK --> MON
-    SHARED -. "optional extraction" .-> LLM
+    ROUTE -. "LLM first; deterministic fallback" .-> LLM
     SHARED -->|"popup / group / directory / address results"| INGEST
     REFRESH -->|"POST /ingest/schedules/tick"| INGEST
     COLLECT -->|"repository_dispatch: check-regions"| SHARED
@@ -124,9 +123,8 @@ the diagram groups the API boundary for readability.
 | GitHub shared-bot workflow | Browser collection, group statuses, address directories, queued address checks; grid tick request | `check-regions` / `check-addresses` dispatch from the backend; hourly UTC cron backup at minute 37; manual |
 | GitHub schedule-refresh workflow | Ask backend to evaluate schedules and sync Svitlobot (backup for `TickLoop`) | UTC cron every 10 minutes, offset to minute 2 |
 | SQL Server | Shared product's durable state | EF Core; source state, subscriptions and delivery records survive restarts |
-| Backend memory | Source caches, coordination gates and pending correlated browser replies | Process lifetime only; not a distributed queue/lock |
+| Backend memory | Source/model caches, coordination gates and pending correlated browser replies | Process lifetime only; not a distributed queue/lock; popup results cached up to 24 hours with 30-minute provider-failure cooldown |
 | GitHub `artifacts` branch | Standalone monitor state | Monitor workflow writes it |
-| GitHub `bot-artifacts` branch | Optional popup model cache | Shared-bot workflow writes it; correlated `check-regions` runs skip checkout/commit |
 | Release workflow | Release PR / GitHub release management | Push to `main`; **not a backend deployment pipeline** |
 
 GitHub cron is best-effort, not a real-time scheduler. The built-in timer requires
@@ -146,12 +144,15 @@ Use one backend instance; the timers and coordination gates are not distributed.
    blocked pages are not interpreted as "no emergency."
 2. Failed regions can trigger a GitHub browser run using `repository_dispatch`.
    A collection ID correlates callbacks to the waiting runtime cycle.
-3. Browser collection can use the optional LLM for unfamiliar public popup text.
-   Deterministic rules and validation remain part of classification; there is no
-   LLM in the normal message-rendering or schedule-diff path.
+3. The API interprets both direct and browser observations LLM first using a forced
+   settings-driven tool. Deterministic clause-aware parsing handles unavailable
+   providers and unusable results. Parsed district states, unable-to-parse, and
+   no-information are distinct; a nonempty unknown notice remains a region-wide
+   Unknown alert. There is no LLM in message rendering or schedule diffing.
 4. The backend stores observations and combines applicable DTEK, Ukrenergo and
    local group evidence. Routing respects city versus oblast, selected districts
-   and subscription targets; an unrelated district notice does not suppress an
+   and subscription targets in every configured region; mixed notices can assign
+   Emergency to one district and Stabilization to another. An unrelated district notice does not suppress an
    applicable broader source.
 5. Notification services render each chat's templates and posting mode, then
    store delivery state. Affirmative stabilization and a disappearing popup are

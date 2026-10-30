@@ -387,6 +387,8 @@ public sealed class AddressCheckService(
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == regionId, ct);
         var general = state?.Kind switch
         {
+            PopupKind.Emergency when state.PartIdList is { Count: > 0 } => "ДТЕК повідомляє про екстрені відключення в окремих районах; перевірте, чи стосується повідомлення вашої адреси.",
+            PopupKind.Accident when state.PartIdList is { Count: > 0 } => "ДТЕК повідомляє про аварію в окремих районах; перевірте, чи стосується повідомлення вашої адреси.",
             PopupKind.Emergency => "На сайті ДТЕК діє загальне повідомлення про екстрені відключення.",
             PopupKind.Accident => "На сайті ДТЕК діє загальне повідомлення про аварію в мережі.",
             _ => null,

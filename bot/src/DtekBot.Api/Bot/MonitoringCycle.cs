@@ -30,7 +30,10 @@ public sealed class MonitoringCycle(
         // No database writes or notifications until every source has completed (or reported unavailable).
         await Task.WhenAll(scheduleTasks.Cast<Task>().Append(popupTask).Append(gridTask));
 
-        foreach (var observation in await popupTask) await observations.SaveAsync(observation, ct);
+        var prepared = new List<(DtekPopupObservation Observation, PopupClassification Classification)>();
+        foreach (var observation in await popupTask)
+            prepared.Add((observation, await observations.PrepareAsync(observation, ct)));
+        foreach (var item in prepared) await observations.SaveAsync(item.Observation, ct, item.Classification);
         var summary = await gridTick.ApplyAsync(await gridTask, false, ct);
         logger.LogInformation("Monitoring collection finished: DTEK={DtekCount}/{Regions}, Ukrenergo={Feed}, schedules={Schedules}",
             popupTask.Result.Count, regions.Count(r => !string.IsNullOrWhiteSpace(r.SiteUrl)),

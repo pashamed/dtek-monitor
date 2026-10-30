@@ -1,4 +1,5 @@
 import crypto from "node:crypto"
+// Legacy geography-only diagnostics; shared-bot collection uses the API PopupInterpreter.
 import path from "node:path"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 

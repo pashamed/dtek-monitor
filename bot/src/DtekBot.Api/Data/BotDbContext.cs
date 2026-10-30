@@ -325,6 +325,13 @@ public sealed class RegionState
     public PopupKind Kind { get; set; }
     public string NormalizedText { get; set; } = "";
     public string? PopupText { get; set; }
+    public string? InterpretationJson { get; set; }
+    public string? PopupParser { get; set; }
+
+    public PopupClassification Classification() => new(Kind, PartIdList ?? [], NormalizedText, Hash)
+    {
+        Interpretation = InterpretationJson is null ? null : PopupInterpretation.Read(InterpretationJson),
+    };
 
     // Districts the popup named, comma-separated; null on rows written before they were stored.
     public string? PartIds { get; set; }

@@ -1,4 +1,4 @@
-// A JavaScript twin of the backend's keyword parser (bot/src/DtekBot.Api/Parsing/PopupClassifier.cs), kept just big
+// Legacy diagnostic twin of the backend's compatibility classifier, kept just big
 // enough to answer one question: did the keywords already understand this popup? If they did, the LLM is not asked.
 
 const DISTRICT_WORDS = /район|громад|населен/u

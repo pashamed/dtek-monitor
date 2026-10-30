@@ -1,3 +1,4 @@
+// Legacy geography-only diagnostic, not the API's active forced-tool interpreter.
 // Checks the LLM connection from your own machine, printing everything to the console (never the key):
 //   $env:LLM_API_KEY = "<key>"; node src/llm-check.js
 // Optional: LLM_BASE_URL and LLM_MODEL, the same variables the workflow uses.

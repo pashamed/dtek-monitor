@@ -23,12 +23,14 @@ public sealed class OutageAssessmentService(
         region?.UpgradeRetiredParts(channel);
 
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == channel.RegionId, ct);
-        var dtekAlert = state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
+        var wanted = channel.PopupDistrictIds();
+        var classified = state?.Classification().Resolve(wanted);
+        var dtekAlert = classified?.IsAlert == true;
 
         // A popup that names districts only concerns them; "in other districts the schedules apply".
-        IReadOnlyList<string> named = dtekAlert ? state!.PartIdList ?? [] : [];
+        IReadOnlyList<string> named = dtekAlert ? classified!.PartIds : [];
         var districtScoped = named.Count > 0;
-        var mine = channel.PartIdList.Where(p => named.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var mine = wanted.Where(p => named.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
         var regionalEmergency = dtekAlert && !districtScoped;
 
         // Ukrenergo reports emergencies earlier than the DTEK site, and explains an outage just as well.
@@ -49,7 +51,7 @@ public sealed class OutageAssessmentService(
         var answer = await AssessOutsideEmergencyDistrictsAsync(channel, regionalEmergency, gridEmergency, ct);
 
         // Without chosen districts there is no telling whether the address is one of the named ones.
-        if (districtScoped && channel.PartIdList.Count == 0)
+        if (districtScoped && wanted.Count == 0)
         {
             var places = region is null ? string.Join(", ", named) : string.Join(", ", region.DisplayNames(named));
             return $"ℹ️ На сайті ДТЕК діють екстрені відключення в районах: {places}. Якщо ваша адреса в одному з них, графік там не діє.\n\n{answer}";
@@ -70,9 +72,10 @@ public sealed class OutageAssessmentService(
         foreach (var address in channel.Addresses.OrderBy(a => a.Id))
         {
             var parts = address.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? channel.PartIdList;
-            var dtek = state?.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
-            var named = state?.PartIdList ?? [];
-            var district = dtek && named.Count > 0 && named.Any(parts.Contains);
+            var classified = state?.Classification().Resolve(parts);
+            var dtek = classified?.IsAlert == true;
+            var named = classified?.PartIds ?? [];
+            var district = dtek && named.Count > 0 && named.Intersect(parts, StringComparer.OrdinalIgnoreCase).Any();
             var general = dtek && named.Count == 0 || grid?.IsAlert == true;
             var off = address.Groups.Where(g => snapshot?.StatusAt(g.GroupId, time.GetUtcNow())?.IsOff == true).Select(g => g.GroupId).ToArray();
             var emergency = address.Groups.Where(g => emergencies.Any(e => e.GroupId == g.GroupId && e.IsEmergency)).Select(g => g.GroupId).ToArray();
