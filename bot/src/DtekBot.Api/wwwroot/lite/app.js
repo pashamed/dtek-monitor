@@ -1782,8 +1782,61 @@ function renderEditor(chat) {
     root.addEventListener('compositionend', sync);
     for (const event of ['keyup', 'mouseup', 'touchend', 'focusout']) root.addEventListener(event, remember);
     root.addEventListener('click', e => { if (e.target.closest('a')) e.preventDefault(); });
+    root.addEventListener('pointerdown', e => {
+      const token = e.target.closest('[data-template-token]');
+      if (!token || !root.contains(token)) return;
+      e.preventDefault();
+      root.focus({ preventScroll: true });
+      const caret = document.createRange();
+      caret.setStartAfter(token); caret.collapse(true);
+      window.getSelection().removeAllRanges(); window.getSelection().addRange(caret);
+      selection = caret.cloneRange();
+    });
     root.addEventListener('beforeinput', e => {
       if (['formatBold', 'formatItalic'].includes(e.inputType)) { e.preventDefault(); format(e.inputType === 'formatBold' ? 'b' : 'i'); }
+      if (!['deleteContentBackward', 'deleteContentForward'].includes(e.inputType) || e.isComposing) return;
+      const selected = window.getSelection();
+      if (!selected.rangeCount) return;
+      const caret = selected.getRangeAt(0);
+      if (!caret.collapsed || !root.contains(caret.startContainer)) return;
+      const backwards = e.inputType === 'deleteContentBackward';
+      let node = caret.startContainer;
+      const offset = caret.startOffset;
+      const inside = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).closest('[data-template-token]');
+      let token = inside;
+      if (!token) {
+        let candidate = null;
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (backwards ? offset > 0 : offset < node.textContent.length) return;
+        } else {
+          candidate = node.childNodes[backwards ? offset - 1 : offset];
+        }
+        const adjacent = current => {
+          while (current !== root && !(backwards ? current.previousSibling : current.nextSibling)) current = current.parentNode;
+          return current === root ? null : backwards ? current.previousSibling : current.nextSibling;
+        };
+        node = candidate || adjacent(node);
+        while (node) {
+          while (!node.matches?.('[data-template-token]') && node.childNodes.length)
+            node = backwards ? node.lastChild : node.firstChild;
+          if (node.nodeType !== Node.TEXT_NODE || node.textContent.length > 0) break;
+          node = adjacent(node);
+        }
+        token = node?.nodeType === Node.ELEMENT_NODE && node.matches('[data-template-token]') ? node : null;
+      }
+      if (!token || !root.contains(token)) return;
+      e.preventDefault();
+      caret.setStartBefore(token); caret.collapse(true);
+      let parent = token.parentElement;
+      token.remove();
+      while (parent !== root && parent.hasAttribute('data-template-open')
+        && !parent.textContent && !parent.querySelector('[data-template-token],br')) {
+        caret.setStartBefore(parent); caret.collapse(true);
+        const next = parent.parentElement;
+        parent.remove(); parent = next;
+      }
+      selected.removeAllRanges(); selected.addRange(caret);
+      selection = caret.cloneRange(); sync();
     });
     root.addEventListener('keydown', e => {
       if (!(e.ctrlKey || e.metaKey)) return;

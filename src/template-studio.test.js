@@ -383,3 +383,30 @@ test('all schedule image choices remain available for multiple addresses and pre
   assert.equal(f.writes.some(w => w.path.endsWith('/send')), false);
   assert.deepEqual(f.errors, []);
 });
+
+test('mobile input deletes protected tokens without keydown or losing editor focus', async t => {
+  const f = await openStudio(t, { emergency: 'Текст <b>{регіон}</b>{місто}' }), { page } = f;
+  await visual(page).waitFor();
+  await visual(page).locator('[data-template-token="{регіон}"]').dispatchEvent('pointerdown', { pointerType: 'touch' });
+  assert.equal(await visual(page).evaluate(el => document.activeElement === el), true);
+  const deleted = await visual(page).evaluate(el => el.dispatchEvent(new InputEvent('beforeinput', {
+    inputType: 'deleteContentBackward', bubbles: true, cancelable: true,
+  })));
+  assert.equal(deleted, false);
+  assert.equal(await visual(page).locator('[data-template-token="{регіон}"]').count(), 0);
+  assert.equal(await visual(page).evaluate(el => document.activeElement === el), true);
+  assert.equal(await raw(page).inputValue(), 'Текст {місто}');
+  await mode(page, 'Скасувати зміну тексту');
+  assert.equal(await visual(page).locator('[data-template-token="{регіон}"]').count(), 1);
+  await visual(page).evaluate(el => {
+    el.focus();
+    const token = el.querySelector('[data-template-token="{місто}"]');
+    const caret = document.createRange(); caret.setStartBefore(token); caret.collapse(true);
+    getSelection().removeAllRanges(); getSelection().addRange(caret);
+    el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentForward', bubbles: true, cancelable: true }));
+  });
+  assert.equal(await visual(page).locator('[data-template-token="{місто}"]').count(), 0);
+  assert.equal(await visual(page).locator('[data-template-token="{регіон}"]').count(), 1);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.errors, []);
+});

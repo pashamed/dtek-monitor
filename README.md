@@ -284,6 +284,8 @@ The lite Mini App combines ready-made styles with a visual editor:
   friendly data chips such as Region, Address, and Group. Chips keep the underlying
   placeholder intact. Conditional blocks have paired “If present” / “End” markers.
   Undo/redo buttons are available; pasted content is plain text.
+  On touch devices, tap a data chip to place the caret after it, then use the
+  keyboard delete key to remove the whole chip without closing the editor.
 - **Advanced:** edit the existing Telegram HTML and brace syntax directly. Unknown
   or unsupported syntax opens here unchanged rather than being silently converted.
   Merely switching modes does not rewrite a saved template.
