@@ -262,6 +262,8 @@ public static class ScheduleText
         {
             ["time"] = Clock(outageStart),
             ["minutes"] = minutesBefore.ToString(CultureInfo.InvariantCulture),
+            ["status"] = "Планове відключення",
+            ["statusCode"] = TemplateStatus.PlannedOutage,
             ["date"] = KyivTime.FromUtc(outageStart).ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
             ["region"] = regionName,
             ["group"] = groupId,

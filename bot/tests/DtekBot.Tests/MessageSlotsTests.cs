@@ -85,9 +85,9 @@ public class MessageSlotsTests
     public void IsAlert_IsTrueOnlyForTheAlertSlots(string? id, bool expected) => Assert.Equal(expected, MessageSlots.IsAlert(id));
 
     [Theory]
-    [InlineData("emergency", "message,popup")]
-    [InlineData("regional", "message,popup")]
-    [InlineData("local", "message,popup")]
+    [InlineData("emergency", "")]
+    [InlineData("regional", "")]
+    [InlineData("local", "")]
     [InlineData("schedule", "outages,morning,afternoon,evening,night")]
     [InlineData("schedule-line", "start,end")]
     [InlineData("ended", "")]
@@ -133,9 +133,9 @@ public class MessageSlotsTests
         Assert.Equal(shared, MessageSlots.Find("emergency")!.Placeholders.Select(p => p.Name));
         Assert.Equal(shared, MessageSlots.Find("ended")!.Placeholders.Select(p => p.Name));
         Assert.Equal(shared, MessageSlots.Find("regional")!.Placeholders.Select(p => p.Name));
-        Assert.Equal(shared.Concat(new[] { "group" }), MessageSlots.Find("local")!.Placeholders.Select(p => p.Name));
+        Assert.Equal(shared, MessageSlots.Find("local")!.Placeholders.Select(p => p.Name));
         Assert.Equal(
-            new[] { "emoji", "title", "message", "region", "part", "address", "where", "popup", "time", "date", "weekday", "daypart", "site" }.Order(),
+            new[] { "emoji", "title", "message", "region", "regionId", "city", "group", "status", "statusCode", "part", "address", "where", "popup", "time", "date", "weekday", "daypart", "site" }.Order(),
             shared.Order());
     }
 
@@ -296,7 +296,7 @@ public class MessageSlotsTests
     public void Validate_SlotDefaultsToEmergency()
     {
         Assert.Empty(MessageTemplate.Validate("{message}"));
-        Assert.Contains("Невідомий параметр {group}.", MessageTemplate.Validate("{message} {group}"));
+        Assert.Contains("Невідомий параметр {outages}.", MessageTemplate.Validate("{message} {outages}"));
     }
 
     [Fact]
@@ -321,7 +321,7 @@ public class MessageSlotsTests
     }
 
     [Theory]
-    [InlineData("emergency", "{message} {group}", "group")]
+    [InlineData("emergency", "{message} {outages}", "outages")]
     [InlineData("regional", "{message} {outages}", "outages")]
     [InlineData("schedule", "{outages} {message}", "message")]
     [InlineData("schedule", "{outages} {emoji}", "emoji")]
@@ -339,9 +339,9 @@ public class MessageSlotsTests
     [InlineData("regional", "{emoji} {title}")]
     [InlineData("local", "{group}")]
     [InlineData("emergency", "{#message}x{/message}")]
-    public void Validate_AlertSlots_NeedMessageOrPopup(string slot, string template)
+    public void Validate_AlertSlots_AllowCustomTextOrStructuredFields(string slot, string template)
     {
-        Assert.Contains(MessageTemplate.Validate(template, slot), e => e.StartsWith("Додайте {message} або {popup}"));
+        Assert.Empty(MessageTemplate.Validate(template, slot));
     }
 
     [Theory]
@@ -373,7 +373,7 @@ public class MessageSlotsTests
     [Fact]
     public void Validate_Block_NameFromAnotherSlot_IsUnknown()
     {
-        Assert.Contains("Невідомий параметр {group} в умовному блоці.", MessageTemplate.Validate("{message}{#group}x{/group}", "emergency"));
+        Assert.Contains("Невідомий параметр {outages} в умовному блоці.", MessageTemplate.Validate("{message}{#outages}x{/outages}", "emergency"));
     }
 
     [Fact]

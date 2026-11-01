@@ -33,12 +33,14 @@ public sealed class TemplatePreviewService(
         AlertKind? kindOverride,
         CancellationToken ct,
         string? scheduleLineTemplate = null,
-        string? scheduleHeadingTemplate = null)
+        string? scheduleHeadingTemplate = null,
+        Channel? channel = null)
     {
         var definition = MessageSlots.Find(slot)!;
         var now = time.GetUtcNow();
         var values = MessageSlots.Samples(slot).ToDictionary(p => p.Key, p => p.Value);
         string? imageUrl = null;
+        var context = channel?.ForRegion(region.Id) ?? new Channel { RegionId = region.Id, GroupId = groupId, AddressLabel = address };
 
         if (MessageSlots.IsAlert(slot))
         {
@@ -52,12 +54,14 @@ public sealed class TemplatePreviewService(
             {
                 values[pair.Key] = pair.Value;
             }
-            values["address"] = address ?? "";
-
-            if (slot == MessageSlots.Local)
+            var matching = context.Addresses.Where(a =>
             {
-                values["group"] = string.IsNullOrEmpty(groupId) ? values["group"] : groupId;
-            }
+                if (slot == MessageSlots.Local) return a.Groups.Any(g => g.GroupId == (groupId ?? "45.1"));
+                var scope = a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    ?? context.PartIdList.ToArray();
+                return partIds.Count == 0 || scope.Length == 0 || scope.Intersect(partIds, StringComparer.OrdinalIgnoreCase).Any();
+            });
+            context.AddTemplateContext(values, matching, slot == MessageSlots.Local ? [groupId ?? "45.1"] : null);
 
             if (values["popup"].Length == 0)
             {
@@ -88,7 +92,9 @@ public sealed class TemplatePreviewService(
                         ]),
                     });
             }
-            var target = new Channel { RegionId = region.Id, GroupId = groupId, AddressLabel = address, PartIdList = partIds.ToList() };
+            var target = context;
+            if (sample || target.GroupIds().Count == 0) target.GroupId = groupId;
+            target.PartIdList = partIds.ToList();
             var templates = new Dictionary<string, string>();
             if (!string.IsNullOrWhiteSpace(scheduleLineTemplate)) templates[MessageSlots.ScheduleLine] = scheduleLineTemplate;
             if (!string.IsNullOrWhiteSpace(scheduleHeadingTemplate)) templates[MessageSlots.ScheduleHeading] = scheduleHeadingTemplate;
@@ -101,6 +107,15 @@ public sealed class TemplatePreviewService(
         {
             values["region"] = region.Name;
             values["group"] = groupId;
+        }
+        if (slot == MessageSlots.BeforeOff)
+        {
+            context.AddTemplateContext(values, context.Addresses.Where(a =>
+                string.IsNullOrEmpty(groupId) || a.Groups.Any(g => g.GroupId == groupId)),
+                string.IsNullOrEmpty(groupId) ? null : [groupId]);
+            values["region"] = region.Name;
+            values["status"] = "Планове відключення";
+            values["statusCode"] = TemplateStatus.PlannedOutage;
         }
 
         var html = MessageTemplate.Render(template, values, definition.DefaultTemplate);

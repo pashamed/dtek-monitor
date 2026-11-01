@@ -309,7 +309,9 @@ public sealed partial class ScheduleNotifier(
             }
 
             var affected = groupIds.Where(id => snapshot.Find(id)?.Outages.Any(o => o.Start == outage.Start) == true).ToArray();
-            var values = ScheduleText.BeforeOffValues(region.Name, string.Join(", ", affected), outage.Start, channel.ScheduleReminderMinutes);
+            var values = ScheduleText.BeforeOffValues(region.Name, string.Join(", ", affected), outage.Start, channel.ScheduleReminderMinutes)
+                .ToDictionary(p => p.Key, p => p.Value);
+            channel.AddTemplateContext(values, channel.Addresses.Where(a => a.Groups.Any(g => affected.Contains(g.GroupId))), affected);
             var text = MessageTemplate.Render(
                 channel.TemplateFor(MessageSlots.BeforeOff),
                 values,

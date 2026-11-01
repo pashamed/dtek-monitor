@@ -447,11 +447,7 @@ public sealed class AlertDispatcher(
                 ? scope.Any(id => affectedPartIds.Contains(id, StringComparer.OrdinalIgnoreCase))
                 : region.DisplayNames(scope).Any(partNames.Contains));
         }).ToArray();
-        values["address"] = channel.AddressText(matching);
-        if (isGroup)
-        {
-            values["group"] = groupId ?? channel.GroupId ?? "";
-        }
+        channel.AddTemplateContext(values, matching, isGroup ? [groupId ?? channel.GroupId ?? ""] : null);
 
         var rendered = MessageTemplate.Render(channel.TemplateFor(slot), values, MessageSlots.Find(slot)!.DefaultTemplate);
         if (!isGroup && channel.IsCombined() && partNames.Count > 0)

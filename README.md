@@ -227,7 +227,7 @@ Apart from `/start`, configuration is handled in the Mini App editor rather than
 - **Private copies of linked chats:** The bot copies real alert, schedule, reminder, and automatic address-check messages from every linked channel/group into each linked administrator's private conversation. Each source has a labelled reply thread; multiple channels and electricity groups remain separate, including combined multi-group schedule posts. Copies follow bot-driven edits, clearance replies, and successful deletions, with durable source-specific message IDs. Your private subscription remains independent and may send its own notifications too. Copies are silent when either the source's delivery or your private quiet hours requires it. Pausing your private subscription does not pause linked-chat copies; pause the source or unlink it to stop those copies. Test sends and previews are not mirrored, historical messages are not imported, and manual Telegram edits/deletions are not tracked. The bot rechecks administrator access before copying; unlinking removes that source's copy tracking. Start the bot privately and keep it unblocked to receive copies. Telegram copy failures are logged without disabling the source channel.
 - **Quiet hours:** Configure a daily Kyiv-time interval per chat or channel under “Повідомлення”. Automatic alerts and schedule messages arrive immediately but silently during that interval. Disabled by default; manual actions and test messages are not silenced.
 - **Clearance delivery:** Under “Повідомлення”, the “Зняття запису” template supports replying to the original alert (default), sending a new message, or editing the original. If the original has been deleted or cannot be edited, the bot falls back to a new reply message.
-- **Custom templates:** Each message type — emergency, clearance, regional accident, local outage, schedule, power-off, and power-on — supports placeholders, a Telegram-style preview, and “Надіслати тест у канал” (tests are marked 🧪).
+- **Custom templates:** Start with a ready-made style, then choose “Налаштувати” to edit formatted text and insert named data chips. “Розширений” retains the raw template editor. Each editable message type has a Telegram-style preview; sending a test is a separate, confirmed action (tests are marked 🧪).
 - **Authorization:** Only channel administrators can change channel settings.
 
 New Telegram destinations must be **channels**, not Telegram groups. Electricity
@@ -274,6 +274,50 @@ the current situation. A stricter stale-evidence policy is deferred; no new
 freshness thresholds are introduced in this release.
 
 **Message templates** use Telegram HTML (`<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="https://…">`, `<tg-spoiler>`, `<blockquote>`) and placeholders:
+
+The lite Mini App combines ready-made styles with a visual editor:
+
+- **Ready-made styles:** choose Short, With address (where the slot supports it),
+  or Standard. Replacing a custom template requires confirmation and only changes
+  the draft.
+- **Customize:** edit text, select text for bold/italic or a link, and insert
+  friendly data chips such as Region, Address, and Group. Chips keep the underlying
+  placeholder intact. Conditional blocks have paired “If present” / “End” markers.
+  Undo/redo buttons are available; pasted content is plain text.
+- **Advanced:** edit the existing Telegram HTML and brace syntax directly. Unknown
+  or unsupported syntax opens here unchanged rather than being silently converted.
+  Merely switching modes does not rewrite a saved template.
+
+The schedule interval editor remains plain text with data chips, without HTML
+formatting. The API still validates and renders every preview using the existing
+slot-specific contract; no new storage format or migration is needed. Previews
+do not send messages. Save applies the draft, Cancel restores saved settings, and
+Send test names the destination and requires confirmation (including saving all
+pending settings when necessary).
+
+Alert templates may use **only structured fields** or custom text: `{текст}` and
+`{текст_сайту}` are no longer required. The “Лише дані” style provides a starting
+point without the full notice. Empty templates, unknown placeholders, invalid
+HTML, and oversized templates are still rejected. Schedule interval templates
+retain their required interval fields.
+
+Alerts, schedule headings, and advance reminders expose these data chips:
+
+| Placeholder | Value |
+| --- | --- |
+| `{регіон}` / `{region}` | Configured region name |
+| `{код_регіону}` / `{regionId}` | Configured region ID, such as `kyiv` |
+| `{місто}` / `{city}` | Distinct saved cities of matching addresses; empty when unknown |
+| `{черга}` / `{group}` | Matching electricity groups; one exact group for a local alert |
+| `{статус}` / `{status}` | Readable Ukrainian event status, not measured power |
+| `{код_статусу}` / `{statusCode}` | Backend event code |
+
+Alert status codes follow `AlertKind`: `Emergency`, `Accident`, `Ended`, or
+`Unknown`. `Ended` means the outage record was removed, not confirmed power
+restoration. Schedule headings use `ScheduleAvailable` or `ScheduleUnavailable`
+according to day/group coverage; reminders use `PlannedOutage`. Matching address
+values never combine different regions, and district/group-specific alerts exclude
+unaffected addresses. Ukrainian identifiers and legacy English aliases both work.
 
 | Placeholder                           | Meaning                                      |
 | ------------------------------------- | -------------------------------------------- |

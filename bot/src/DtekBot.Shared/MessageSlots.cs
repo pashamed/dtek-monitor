@@ -14,9 +14,12 @@ public static class MessageSlots
     public const string Off = "off";
     public const string On = "on";
 
-    private static readonly IReadOnlyList<PlaceholderDto> LocalExtra =
+    private static readonly IReadOnlyList<PlaceholderDto> ContextExtra =
     [
-        new("group", "Номер черги", "45.1"),
+        new("regionId", "Налаштований ідентифікатор регіону", "kyiv"),
+        new("city", "Населені пункти відповідних збережених адрес; порожньо, якщо невідомі", "Київ"),
+        new("address", "Відповідні збережені адреси (якщо є)", "вул. Тестова, 1"),
+        .. TemplateStatus.Placeholders,
     ];
 
     private static readonly IReadOnlyList<PlaceholderDto> SchedulePlaceholders =
@@ -54,6 +57,7 @@ public static class MessageSlots
         new("date", "Дата початку відключення", "15.10.2026"),
         new("region", "Назва регіону", "м. Київ"),
         new("group", "Номер черги", "45.1"),
+        .. ContextExtra,
     ];
 
     private static readonly IReadOnlyList<PlaceholderDto> OnPlaceholders =
@@ -94,7 +98,7 @@ public static class MessageSlots
             "Локальне відключення",
             "Сповіщення про аварійне чи екстрене відключення саме вашої черги (за даними Yasno).",
             "{emoji} Локальне відключення, черга {group}\n{message}{#address}\n📍 {address}{/address}\n\nДеталі: {site}",
-            [.. MessageTemplate.Placeholders, .. LocalExtra]),
+            MessageTemplate.Placeholders),
         new(
             Schedule,
             "stabilization",
@@ -115,6 +119,10 @@ public static class MessageSlots
                 new("region", "Збережений регіон", "Київська область"),
                 new("part", "Збережені райони (якщо є)", "Бучанський район"),
                 new("address", "Збережені адреси (якщо є)", "м. Ірпінь, вул. Західна, 14"),
+                new("regionId", "Налаштований ідентифікатор регіону", "kyiv-oblast"),
+                new("city", "Населені пункти збережених адрес; порожньо, якщо невідомі", "Ірпінь"),
+                new("group", "Черги цього регіону", "45.1"),
+                .. TemplateStatus.Placeholders,
                 new("changes", "Планові інтервали, додані або прибрані відносно попереднього графіка (порожньо, якщо змін немає)", "Зміни: додано 14:00–16:00; прибрано 18:00–20:00"),
             ]),
         new(
@@ -163,7 +171,6 @@ public static class MessageSlots
     // At least one of these must appear, otherwise the message would carry no content.
     public static IReadOnlyList<string> RequiredAny(string slot) => slot switch
     {
-        Emergency or Regional or Local => ["message", "popup"],
         Schedule => ["outages", "morning", "afternoon", "evening", "night"],
         ScheduleLine => ["start", "end"],
         _ => [],

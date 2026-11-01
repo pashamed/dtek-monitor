@@ -54,6 +54,25 @@ h2{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
 .empty{color:var(--muted)}
 code,.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
 
+.template-editor,.template-wrap,.visual-controls,.advanced-tools{display:flex;flex-direction:column;gap:12px;min-width:0}
+.style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.template-style{display:flex;flex-direction:column;gap:8px;text-align:left;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--glass);cursor:pointer;min-height:100px}
+.template-style.on{border-color:var(--blue);background:rgba(79,140,255,.12)}
+.template-style strong{font-size:15px}
+.style-sample{font-size:12px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;max-height:110px;overflow:auto}
+.visual-toolbar{display:flex;flex-wrap:wrap;gap:6px}
+.visual-toolbar .btn,.data-picker .btn{min-width:44px;min-height:44px}
+.visual-template{white-space:pre-wrap;overflow-wrap:anywhere;min-height:140px;border:1px solid var(--line);border-radius:14px;padding:14px;background:rgba(0,0,0,.16);font:inherit;line-height:1.8}
+.visual-template:focus{outline:2px solid var(--blue);outline-offset:2px}
+.visual-template a{color:var(--blue);text-decoration:underline}
+.visual-template tg-spoiler{background:var(--glass-hi);border-radius:4px}
+.visual-template pre,.visual-template code{white-space:pre-wrap}
+.data-token{display:inline;padding:3px 8px;border:1px solid rgba(167,139,250,.45);border-radius:8px;background:rgba(167,139,250,.18);color:#ded3ff;font-size:13px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.conditional-token{border-style:dashed;color:var(--muted);font-size:11px}
+.link-editor{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:12px;padding:12px}
+.template-editor>.seg button{min-height:44px}
+.template-style:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
 /* pills + chips */
 .pill{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:26px;padding:2px 12px;border-radius:99px;font-size:13px;font-weight:600;border:1px solid transparent;white-space:nowrap}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}

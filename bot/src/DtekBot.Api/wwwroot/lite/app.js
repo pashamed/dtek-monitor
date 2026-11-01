@@ -86,6 +86,110 @@ function h(tag, props, ...kids) {
   return el;
 }
 
+const DATA_LABELS = {
+  emoji: 'Значок', title: 'Заголовок', message: 'Текст сповіщення', region: 'Регіон',
+  part: 'Райони', address: 'Адреса', where: 'Місце', popup: 'Текст ДТЕК',
+  time: 'Час', date: 'Дата', weekday: 'День тижня', daypart: 'Частина доби',
+  site: 'Сайт ДТЕК', group: 'Черга', header: 'Заголовок графіка', changes: 'Зміни плану',
+  city: 'Місто', status: 'Статус', statusCode: 'Код статусу', regionId: 'Код регіону',
+  start: 'Початок', end: 'Кінець', duration: 'Тривалість', minutes: 'Хвилин до відключення',
+};
+const dataLabel = p => DATA_LABELS[p.key || p.name] || p.description || p.name;
+const templateEscape = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/{/g, '{{').replace(/}/g, '}}');
+const entityText = text => text.replace(/&(amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi, entity => {
+  const area = document.createElement('textarea');
+  area.innerHTML = entity; // Only an individual HTML entity, never markup.
+  return area.value;
+});
+
+function templateStyles(slot) {
+  const token = key => {
+    const p = slot.placeholders.find(p => (p.key || p.name) === key);
+    return p ? '{' + p.name + '}' : '';
+  };
+  const optionalAddress = token('address') ? '{#' + token('address').slice(1, -1) + '}\n📍 '
+    + token('address') + '{/' + token('address').slice(1, -1) + '}' : '';
+  let short;
+  if (ALERT_SLOTS.includes(slot.id) && token('message')) short = [token('emoji'), token('message')].filter(Boolean).join(' ');
+  else if (slot.id === 'before-off' && token('time'))
+    short = '⏳ Планове відключення о ' + token('time') + '\n'
+      + [token('region'), token('group') ? 'черга ' + token('group') : ''].filter(Boolean).join(' · ');
+  else if (slot.id === 'schedule-heading' && token('header')) short = token('header') + '\n📅 ' + token('date');
+  else if (slot.id === 'schedule-line' && token('start') && token('end')) short = token('start') + '–' + token('end');
+  return [
+    ...(token('status') ? [{ id: 'fields', title: 'Лише дані', text: [
+      [token('region'), token('city')].filter(Boolean).join(' · '),
+      token('group') ? 'Черга: ' + token('group') : '', token('status'),
+    ].filter(Boolean).join('\n') }] : []),
+    ...(short ? [{ id: 'short', title: 'Короткий', text: short }] : []),
+    ...(short && optionalAddress ? [{ id: 'address', title: 'З адресою', text: short + optionalAddress }] : []),
+    { id: 'default', title: 'Стандартний', text: slot.defaultTemplate },
+  ];
+}
+
+// Build editable DOM without injecting template HTML. Unsupported syntax stays in Advanced mode.
+function templateSurface(source, slot) {
+  const node = h('div', { class: 'visual-template', contenteditable: 'true', role: 'textbox',
+    'aria-multiline': 'true', 'aria-label': 'Текст повідомлення: ' + slot.title, spellcheck: 'false' });
+  const stack = [node];
+  let offset = 0, conditional = null, valid = true;
+  const find = name => slot.placeholders.find(p => p.name === name || p.key === name);
+  const appendText = text => {
+    if (/[<>]/.test(text) || /&(?!(amp|lt|gt|quot|#\d+|#x[0-9a-f]+);)/i.test(text)) valid = false;
+    stack.at(-1).append(document.createTextNode(entityText(text)));
+  };
+  const chip = (source, p, prefix = '') => h('span', { class: 'data-token' + (prefix ? ' conditional-token' : ''),
+    contenteditable: 'false', 'data-template-token': source, title: p.description,
+    'aria-label': prefix + dataLabel(p), text: prefix + dataLabel(p) });
+  for (const match of source.matchAll(/<[^>]*>|{{|}}|{[^{}]*}|[{}]/g)) {
+    appendText(source.slice(offset, match.index));
+    const text = match[0];
+    offset = match.index + text.length;
+    if (text === '{{' || text === '}}') { stack.at(-1).append(document.createTextNode(text[0])); continue; }
+    if (text.startsWith('{')) {
+      const name = text.slice(1, -1), marker = /^[#/]/.test(name) ? name[0] : '';
+      const p = find(marker ? name.slice(1) : name);
+      if (!p || (marker === '#' && conditional) || (marker === '/' && conditional !== name.slice(1))) { valid = false; break; }
+      if (marker === '#') conditional = name.slice(1);
+      if (marker === '/') conditional = null;
+      stack.at(-1).append(chip(text, p, marker === '#' ? 'Якщо є: ' : marker === '/' ? 'Кінець: ' : ''));
+    } else if (text.startsWith('<')) {
+      const tag = text.match(/^<(\/?)(b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-spoiler|blockquote)(\s[^<>]*)?>$/i);
+      if (!tag || slot.id === 'schedule-line') { valid = false; break; }
+      const name = tag[2].toLowerCase();
+      if (tag[1]) {
+        if (stack.length === 1 || stack.at(-1).tagName.toLowerCase() !== name || tag[3]?.trim()) { valid = false; break; }
+        stack.at(-1).dataset.templateClose = text;
+        stack.pop();
+      } else {
+        const attrs = tag[3] || '';
+        const link = name === 'a' ? attrs.match(/^\s+href\s*=\s*"([^"\s]+)"\s*$/) : null;
+        if (name === 'a' ? !link || !(/^(https?:\/\/|tg:\/\/)/.test(link[1]) || /^\{[^{}]+\}$/.test(link[1]) && find(link[1].slice(1, -1)))
+          : attrs.trim()) { valid = false; break; }
+        const el = h(name, { 'data-template-open': text });
+        if (link) el.setAttribute('href', '#');
+        stack.at(-1).append(el); stack.push(el);
+      }
+    } else { valid = false; break; }
+  }
+  appendText(source.slice(offset));
+  if (!valid || stack.length !== 1 || conditional) return null;
+  const readChildren = el => [...el.childNodes].map((child, i) =>
+    (i > 0 && child.nodeType === Node.ELEMENT_NODE && ['DIV', 'P'].includes(child.tagName) ? '\n' : '') + readNode(child)).join('');
+  const readNode = el => {
+    if (el.nodeType === Node.TEXT_NODE) return templateEscape(el.textContent);
+    if (el.nodeType !== Node.ELEMENT_NODE) return '';
+    if (el.dataset.templateToken) return el.dataset.templateToken;
+    if (el.tagName === 'BR') return '\n';
+    if (['DIV', 'P'].includes(el.tagName) && el.childNodes.length === 1 && el.firstChild.nodeName === 'BR') return '';
+    const contents = readChildren(el);
+    if (el.dataset.templateOpen) return el.dataset.templateOpen + contents + el.dataset.templateClose;
+    return contents;
+  };
+  return { node, read: () => readChildren(node), chip };
+}
+
 const ICONS = { back: 'M15 18l-6-6 6-6', refresh: 'M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5', chev: 'M9 6l6 6-6 6' };
 function icon(name) {
   const NS = 'http://www.w3.org/2000/svg';
@@ -1490,6 +1594,8 @@ function renderEditor(chat) {
   const studio = h('div', { class: 'studio' });
   // Editor widgets of the current slot (rebuilt whenever the slot changes).
   let tpl, counter, errBox, resetBtn, paramNote, testBtn, testOut, prevx;
+  let paintStyleCards = () => {};
+  const editorModes = {}, templateHistory = {};
   const previewCache = {};
 
   function renderPills() {
@@ -1522,12 +1628,144 @@ function renderEditor(chat) {
   }
 
   function onEdit() {
+    const history = templateHistory[cs];
+    if (history && history.current !== tpl.value) {
+      history.past.push(history.current);
+      if (history.past.length > 50) history.past.shift();
+      history.current = tpl.value; history.future = [];
+    }
+    ++seq;
     delete serr[cs];
     counter.textContent = `${tpl.value.length} / ${boot.maxTemplateLength}`;
     resetBtn.disabled = !isCustom(cs);
-    renderPills(); paintSlotErrors(); setErr([]); updateUi();
+    renderPills(); paintStyleCards(); paintSlotErrors(); setErr([]); updateUi();
     clearTimeout(timer);
     timer = setTimeout(runPreview, 300);
+  }
+
+  function visualControls(surface, slot) {
+    const root = surface.node;
+    let selection;
+    const remember = () => {
+      const selected = window.getSelection();
+      if (selected.rangeCount && root.contains(selected.anchorNode) && root.contains(selected.focusNode))
+        selection = selected.getRangeAt(0).cloneRange();
+    };
+    const range = () => {
+      root.focus();
+      if (!selection || !root.contains(selection.commonAncestorContainer)) {
+        selection = document.createRange(); selection.selectNodeContents(root); selection.collapse(false);
+      }
+      return selection;
+    };
+    const message = text => { paramNote.textContent = text; paramNote.className = 'hint pnote err'; };
+    const sync = () => {
+      const source = surface.read();
+      if (source.length > boot.maxTemplateLength) {
+        const previous = templateSurface(tpl.value, slot);
+        root.replaceChildren(...previous.node.childNodes); selection = null;
+        message('Текст задовгий. Скоротіть його; останню зміну скасовано.');
+        return;
+      }
+      tpl.value = source; tpls[cs] = source;
+      paramNote.className = 'hint pnote';
+      paramNote.textContent = 'Дані в кольорових мітках бот підставить автоматично.';
+      onEdit(); remember();
+    };
+    const insert = node => {
+      const selected = range();
+      selected.deleteContents(); selected.insertNode(node);
+      selected.setStartAfter(node); selected.collapse(true);
+      window.getSelection().removeAllRanges(); window.getSelection().addRange(selected);
+      selection = selected.cloneRange(); sync();
+    };
+    const format = (tag, href) => {
+      if (slot.id === 'schedule-line') { message('Інтервал графіка підтримує лише текст і дані, без форматування.'); return; }
+      const selected = range();
+      if (selected.collapsed) { message('Виділіть текст, потім оберіть форматування.'); return; }
+      if (tag === 'a' && (selected.cloneContents().querySelector('a') || selected.startContainer.parentElement?.closest('a'))) {
+        message('Посилання вже є. Змініть його в розширеному редакторі.'); return;
+      }
+      const parent = selected.startContainer.nodeType === Node.ELEMENT_NODE ? selected.startContainer : selected.startContainer.parentElement;
+      const existing = tag === 'a' ? null : parent.closest(tag === 'b' ? 'b,strong' : 'i,em');
+      if (existing && root.contains(existing) && existing.contains(selected.endContainer)) {
+        const before = selected.cloneRange(), after = selected.cloneRange();
+        before.selectNodeContents(existing); before.setEnd(selected.startContainer, selected.startOffset);
+        after.selectNodeContents(existing); after.setStart(selected.endContainer, selected.endOffset);
+        const head = existing.cloneNode(false), tail = existing.cloneNode(false);
+        head.append(before.cloneContents()); tail.append(after.cloneContents());
+        const contents = selected.extractContents();
+        for (const mark of [...contents.querySelectorAll(tag === 'b' ? 'b,strong' : 'i,em')].reverse())
+          mark.replaceWith(...mark.childNodes);
+        const children = [...contents.childNodes];
+        const hasContent = el => el.textContent.length > 0 || el.querySelector('br');
+        existing.replaceWith(...(hasContent(head) ? [head] : []), ...children, ...(hasContent(tail) ? [tail] : []));
+        selected.setStartBefore(children[0]); selected.setEndAfter(children.at(-1));
+        window.getSelection().removeAllRanges(); window.getSelection().addRange(selected);
+        selection = selected.cloneRange(); sync(); return;
+      }
+      const wrapper = h(tag, { 'data-template-open': href ? '<a href="' + href.replace(/&/g, '&amp;') + '">' : '<' + tag + '>',
+        'data-template-close': '</' + tag + '>' });
+      if (href) wrapper.setAttribute('href', '#');
+      wrapper.append(selected.extractContents()); selected.insertNode(wrapper);
+      selected.selectNodeContents(wrapper);
+      window.getSelection().removeAllRanges(); window.getSelection().addRange(selected);
+      selection = selected.cloneRange(); sync();
+    };
+    const travel = redo => {
+      const history = templateHistory[cs], from = redo ? history.future : history.past, to = redo ? history.past : history.future;
+      if (!from.length) { message(redo ? 'Немає змін для повторення.' : 'Немає змін для скасування.'); return; }
+      to.push(history.current); history.current = from.pop();
+      tpls[cs] = history.current; tpl.value = history.current;
+      onEdit(); renderStudio(); runPreview();
+    };
+    root.addEventListener('input', e => { if (!e.isComposing) sync(); });
+    root.addEventListener('compositionend', sync);
+    for (const event of ['keyup', 'mouseup', 'touchend', 'focusout']) root.addEventListener(event, remember);
+    root.addEventListener('click', e => { if (e.target.closest('a')) e.preventDefault(); });
+    root.addEventListener('beforeinput', e => {
+      if (['formatBold', 'formatItalic'].includes(e.inputType)) { e.preventDefault(); format(e.inputType === 'formatBold' ? 'b' : 'i'); }
+    });
+    root.addEventListener('keydown', e => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (['b', 'i', 'z', 'y'].includes(key)) {
+        e.preventDefault(); remember();
+        if (key === 'b' || key === 'i') format(key);
+        else travel(key === 'y' || e.shiftKey);
+      }
+    });
+    root.addEventListener('paste', e => {
+      e.preventDefault(); remember();
+      insert(document.createTextNode(e.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n')));
+    });
+    root.addEventListener('drop', e => { e.preventDefault(); message('Вставте текст із буфера обміну. Перетягування файлів не підтримується.'); });
+    const button = (text, label, action) => h('button', { type: 'button', class: 'btn ghost sm', text, 'aria-label': label,
+      onmousedown: e => e.preventDefault(), onclick: action });
+    const url = h('input', { type: 'url', placeholder: 'https://…', 'aria-label': 'Адреса посилання', autocomplete: 'off' });
+    const linkError = h('p', { class: 'hint err', role: 'alert' });
+    const linkPanel = h('div', { class: 'link-editor', hidden: true }, url, linkError,
+      button('Додати посилання', 'Додати посилання', () => {
+        const href = url.value.trim();
+        if (!/^(https?:\/\/|tg:\/\/)[^\s"<>]+$/.test(href)) { linkError.textContent = 'Введіть адресу https://, http:// або tg://.'; return; }
+        format('a', href); linkPanel.hidden = true;
+      }),
+      button('Скасувати', 'Скасувати посилання', () => { linkPanel.hidden = true; root.focus(); }));
+    const toolbar = h('div', { class: 'visual-toolbar', role: 'group', 'aria-label': 'Форматування тексту' },
+      ...(slot.id === 'schedule-line' ? [] : [
+        button('B', 'Жирний текст', () => format('b')), button('I', 'Курсив', () => format('i')),
+        button('Посилання', 'Посилання', () => {
+          if (range().collapsed) { message('Виділіть текст, потім додайте посилання.'); return; }
+          linkPanel.hidden = false; linkError.textContent = ''; url.focus();
+        }),
+      ]),
+      button('↶', 'Скасувати зміну тексту', () => travel(false)), button('↷', 'Повторити зміну тексту', () => travel(true)));
+    const data = h('details', { class: 'fold data-picker' }, h('summary', { text: '+ Додати дані' }),
+      h('div', { class: 'chips' }, slot.placeholders.map(p => button(dataLabel(p), 'Додати: ' + dataLabel(p), () =>
+        insert(surface.chip('{' + p.name + '}', p))))));
+    const emojis = h('div', { class: 'chips' }, ['⚠️', '📅', '🕒', '📍', '→', '–'].map(text =>
+      button(text, 'Вставити ' + text, () => insert(document.createTextNode(text)))));
+    return h('div', { class: 'visual-controls' }, toolbar, linkPanel, root, data, emojis);
   }
 
   // Insert text at the caret (replacing the selection); `caret` is the offset inside the inserted text to place the cursor at.
@@ -1545,10 +1783,15 @@ function renderEditor(chat) {
     if (!x) { studio.replaceChildren(card(h('p', { class: 'empty', text: 'Шаблони недоступні.' }))); return; }
     tpl = h('textarea', { maxlength: boot.maxTemplateLength, rows: 4, spellcheck: 'false', 'aria-label': 'Шаблон: ' + x.title, id: 'tpl' });
     tpl.value = tpls[cs];
+    const history = templateHistory[cs];
+    if (!history || history.current !== tpl.value) templateHistory[cs] = { current: tpl.value, past: [], future: [] };
     counter = h('div', { class: 'counter' });
     errBox = h('div', { class: 'errs', role: 'alert' });
     paramNote = h('p', { class: 'hint pnote', 'aria-live': 'polite', text: 'Торкніться параметра, щоб вставити його в текст.' });
-    resetBtn = h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути до стандартного', onclick: () => { tpl.value = x.defaultTemplate; tpls[cs] = x.defaultTemplate; onEdit(); tpl.focus(); } });
+    resetBtn = h('button', { type: 'button', class: 'btn ghost sm', text: 'Скинути до стандартного', onclick: async () => {
+      if (!await confirmSetting('Замінити цей текст стандартним? Зміна лише у чернетці, до «Зберегти».')) return;
+      tpl.value = x.defaultTemplate; tpls[cs] = x.defaultTemplate; onEdit(); renderStudio(); runPreview();
+    } });
     resetBtn.disabled = !isCustom(cs);
     tpl.addEventListener('input', () => { tpls[cs] = tpl.value; onEdit(); });
     counter.textContent = `${tpl.value.length} / ${boot.maxTemplateLength}`;
@@ -1565,6 +1808,52 @@ function renderEditor(chat) {
       x.placeholders.map(p => h('div', { class: 'ph' }, h('code', { text: '{' + p.name + '}' }), ' — ' + p.description, p.example ? h('small', { text: 'У прикладі: ' + p.example }) : null)),
       h('div', { class: 'ph', text: 'Теги: <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>. Фігурні дужки: {{ і }}.' }));
 
+    const surface = templateSurface(tpl.value, x), styles = templateStyles(x);
+    const mode = editorModes[cs] || (isCustom(cs) ? surface ? 'visual' : 'advanced' : 'styles');
+    editorModes[cs] = !surface && mode === 'visual' ? 'advanced' : mode;
+    const choices = styles.map(style => h('button', { type: 'button', class: 'template-style', 'aria-label': 'Стиль: ' + style.title,
+      onclick: async () => {
+        if (tpl.value === style.text) return;
+        if (isCustom(cs) && !await confirmSetting('Замінити власний текст стилем «' + style.title + '»? Зміна лише у чернетці, до «Зберегти».')) return;
+        tpl.value = style.text; tpls[cs] = style.text; onEdit(); editorModes[cs] = 'styles'; renderStudio(); runPreview();
+      },
+    }, h('strong', { text: style.title }), h('span', { class: 'style-sample', text: (() => {
+      const sample = templateSurface(style.text, x);
+      if (!sample) return 'Перегляньте приклад нижче';
+      for (const token of sample.node.querySelectorAll('[data-template-token]')) {
+        const raw = token.dataset.templateToken, name = raw.slice(1, -1);
+        token.replaceWith(/^[#/]/.test(name) ? '' : x.placeholders.find(p => p.name === name || p.key === name)?.example || dataLabel({ name }));
+      }
+      return sample.node.textContent;
+    })() })));
+    const modeButtons = seg([['styles', 'Готові стилі'], ['visual', 'Налаштувати'], ['advanced', 'Розширений']],
+      () => editorModes[cs], value => { editorModes[cs] = value; renderStudio(); runPreview(); }, 'Редактор повідомлення');
+    const visualButton = [...modeButtons.children][1];
+    paintStyleCards = () => {
+      choices.forEach((choice, i) => {
+        const active = tpl.value === styles[i].text;
+        choice.classList.toggle('on', active); choice.setAttribute('aria-pressed', active);
+      });
+      visualButton.disabled = !templateSurface(tpl.value, x);
+    };
+    paintStyleCards();
+    const rawTools = h('div', { class: 'advanced-tools' },
+      h('div', { class: 'chips' }, ['🔴', '🟢', '⚠️', '📅', '🕒', '📍', '→', '–'].map(text =>
+        h('button', { type: 'button', class: 'chip', text, onmousedown: keep, onclick: () => put(text) })),
+        cs === 'schedule-line' ? null : h('button', { type: 'button', class: 'chip', text: 'Жирний', onmousedown: keep,
+          onclick: () => { const selected = tpl.value.slice(tpl.selectionStart, tpl.selectionEnd); put('<b>' + selected + '</b>', 3 + selected.length); } })),
+      h('div', { class: 'fl sm' }, h('span', { text: 'Параметри' }), help('cond')), chips, legend);
+    const editor = h('div', { class: 'template-editor' }, modeButtons,
+      !surface ? h('p', { class: 'hint', text: 'Цей шаблон відкрито без змін у розширеному редакторі. Виправте синтаксис, щоб перейти до візуального.' }) : null,
+      h('div', { class: 'style-grid', hidden: editorModes[cs] !== 'styles' }, choices),
+      h('p', { class: 'hint', hidden: editorModes[cs] !== 'styles', text: 'Оберіть стиль або натисніть «Налаштувати». Зміни діють після «Зберегти».' }),
+      surface && editorModes[cs] === 'visual' ? visualControls(surface, x) : null,
+      h('div', { class: 'tawrap', hidden: editorModes[cs] !== 'advanced' }, tpl),
+      editorModes[cs] === 'advanced' ? rawTools : null,
+      counter, paramNote);
+    if (editorModes[cs] === 'visual') paramNote.textContent = 'Дані в кольорових мітках бот підставить автоматично.';
+    if (editorModes[cs] === 'styles') paramNote.hidden = true;
+
     prevx = tgPreview();
     testOut = h('div', { class: 'testout', 'aria-live': 'polite' });
     testBtn = h('button', { type: 'button', class: 'btn', onclick: sendTest });
@@ -1576,7 +1865,7 @@ function renderEditor(chat) {
       const swId = 'sw' + (++uid), isEnd = x.id === 'ended';
       const cb = h('input', { type: 'checkbox', role: 'switch', id: swId });
       cb.checked = ss.enabled;
-      const wrap = h('div', { class: 'tawrap' + (ss.enabled ? '' : ' dim') }, tpl, counter);
+      const wrap = h('div', { class: 'template-wrap' + (ss.enabled ? '' : ' dim') }, editor);
       const endNote = h('p', { class: 'hint modenote' });
       const endFld = isEnd ? h('div', { class: 'fld endstyle' + (ss.enabled ? '' : ' dim') }, fieldLabel('Як показувати', 'slotEndStyle'),
         seg(END_STYLES.map(e => [e[0], e[1]]), () => ss.endStyle, v => { ss.endStyle = v; paintEndNote(); touch(); }, 'Як показувати', 'stack'), endNote) : null;
@@ -1592,7 +1881,7 @@ function renderEditor(chat) {
       slotOpts.wrap = wrap;
     }
 
-    studio.replaceChildren(
+    studio.replaceChildren(...[
       ['schedule', 'schedule-heading', 'schedule-line'].includes(cs) ? card(
         h('h3', { class: 'ct', text: 'Вигляд графіка' }),
         h('p', { class: 'hint', text: 'Один допис: сьогодні й завтра, черги окремо. Редагуйте заголовок або один інтервал — бот повторить його для всіх відключень. Додайте {зміни} в заголовок, щоб розмістити там підсумок доданих і скасованих інтервалів; без нього підсумок додається автоматично.' }),
@@ -1607,15 +1896,12 @@ function renderEditor(chat) {
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: x.title }), help('template')),
         h('p', { class: 'hint', text: x.description }),
         slotOpts,
-        slotOpts ? slotOpts.wrap : h('div', { class: 'tawrap' }, tpl, counter), errBox,
-        h('div', { class: 'chips' }, ['🔴', '🟢', '⚠️', '📅', '🕒', '📍', '→', '–'].map(text =>
-          h('button', { type: 'button', class: 'chip', text, onmousedown: keep, onclick: () => put(text) })),
-          cs === 'schedule-line' ? null : h('button', { type: 'button', class: 'chip', text: 'Жирний', onmousedown: keep,
-            onclick: () => { const selected = tpl.value.slice(tpl.selectionStart, tpl.selectionEnd); put('<b>' + selected + '</b>', 3 + selected.length); } })),
-        h('div', { class: 'fl sm' }, h('span', { text: 'Параметри' }), help('cond')), chips, paramNote,
+        slotOpts ? slotOpts.wrap : editor, errBox,
         prevx.node,
+        h('p', { class: 'hint', text: 'Приклад не надсилається. Кнопка тесту надсилає повідомлення у «' + channelName + '».' }),
         h('div', { class: 'testrow' }, testBtn, help('test')), testOut),
-      card(resetBtn, legend));
+      card(resetBtn),
+    ].filter(Boolean));
     paintSlotErrors();
     const c = previewCache[cs];
     if (c) prevx.set('ok', c);
@@ -1648,6 +1934,8 @@ function renderEditor(chat) {
     testBusy = true; testBtn.disabled = true; testBtn.classList.add('busy'); testOut.replaceChildren();
     const fail = lines => testOut.replaceChildren(...lines.map(t => h('div', { class: 'note err', role: 'alert', text: t })));
     try {
+      if (!await confirmSetting((isDirty() ? 'Зберегти всі зміни й надіслати тест' : 'Надіслати тест')
+        + ' у «' + channelName + '»?')) return;
       if (isDirty()) {
         const err = await doSave(true);
         if (err) { fail(err.lines || errorText(err)); return; }

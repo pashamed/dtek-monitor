@@ -236,10 +236,11 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
     {
         var (userId, client) = NewUser();
 
-        var response = await client.PutJsonAsync($"/api/chats/{userId}", Settings(Map(("emergency", "{group} {message}"))));
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", Settings(Map(("emergency", "{outages} {message}"))));
 
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var details = (await response.ReadAsync<ApiError>())!.Details!;
-        Assert.Contains("Екстрені відключення: Невідомий параметр {черга}.", details);
+        Assert.Contains("Екстрені відключення: Невідомий параметр {відключення}.", details);
     }
 
     [Fact]

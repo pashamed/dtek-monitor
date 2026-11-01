@@ -7,6 +7,22 @@ public class MessageTemplateTests
     private static Dictionary<string, string> Values(params (string Key, string Value)[] pairs) =>
         pairs.ToDictionary(p => p.Key, p => p.Value);
 
+    [Theory]
+    [InlineData("emergency", "{значок} {текст}")]
+    [InlineData("regional", "{значок} {текст}")]
+    [InlineData("local", "{значок} {текст}{#адреса}\n📍 {адреса}{/адреса}")]
+    [InlineData("ended", "{значок} {текст}{#адреса}\n📍 {адреса}{/адреса}")]
+    [InlineData("schedule-heading", "{шапка}\n📅 {дата}")]
+    [InlineData("schedule-heading", "{шапка}\n📅 {дата}{#адреса}\n📍 {адреса}{/адреса}")]
+    [InlineData("schedule-line", "{початок}–{кінець}")]
+    [InlineData("before-off", "⏳ Планове відключення о {час}\n{регіон} · черга {черга}")]
+    [InlineData("emergency", "{текст} <b><i><a href=\"https://example.test/?a=1&amp;b=2\">Оновлення</a></i></b>")]
+    [InlineData("emergency", "<strong>{emoji}</strong> {текст}{#address}\n<b>{address}</b>{/address}\n{{буквально}} &amp; &lt;текст&gt;\n<a href=\"{site}\">ДТЕК</a>!")]
+    public void Validate_VisualEditorStylesAndMarkup_UseExistingContract(string slot, string template)
+    {
+        Assert.Empty(MessageTemplate.Validate(PlaceholderNames.ToCanonical(template), slot));
+    }
+
     // ---- Render ----
 
     [Fact]
@@ -145,13 +161,9 @@ public class MessageTemplateTests
     [Theory]
     [InlineData("just text")]
     [InlineData("{emoji} {title} {region} {part} {where} {site} {time}")]
-    public void Validate_MissingMessageAndPopup_IsError(string template)
+    public void Validate_MissingMessageAndPopup_IsAllowed(string template)
     {
-        var errors = MessageTemplate.Validate(template);
-
-        var error = Assert.Single(errors);
-        Assert.Contains("{message}", error);
-        Assert.Contains("{popup}", error);
+        Assert.Empty(MessageTemplate.Validate(template));
     }
 
     [Theory]

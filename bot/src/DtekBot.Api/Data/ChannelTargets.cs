@@ -97,6 +97,18 @@ public static class ChannelTargets
             : string.Join(", ", new[] { a.City, a.Street, a.House }.Where(v => !string.IsNullOrWhiteSpace(v))))
             .Where(v => !string.IsNullOrWhiteSpace(v)).Distinct());
 
+    public static void AddTemplateContext(this Channel channel, IDictionary<string, string> values,
+        IEnumerable<ChatAddress>? matchingAddresses = null, IReadOnlyList<string>? groupIds = null)
+    {
+        var addresses = (matchingAddresses ?? channel.Addresses).ToArray();
+        values["regionId"] = channel.RegionId;
+        values["city"] = string.Join(", ", (channel.Addresses.Count == 0 ? new[] { channel.AddressCity } : addresses.Select(a => a.City))
+            .Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
+        values["address"] = channel.AddressText(addresses);
+        values["group"] = string.Join(", ", groupIds ?? (channel.Addresses.Count == 0 ? channel.GroupIds()
+            : addresses.SelectMany(a => a.Groups).Select(g => g.GroupId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()));
+    }
+
     public static string GroupNames(this Channel channel, string groupId) => string.Join(", ",
         channel.Addresses.Where(a => a.Groups.Any(g => g.GroupId == groupId)).Select(a =>
         {

@@ -490,17 +490,22 @@ public static class MiniAppApi
                 return Json(new PreviewResponse("", errors));
             }
 
-            if (slot == MessageSlots.Schedule && request.Addresses is { Count: > 0 })
+            var previewChannel = new Channel { RegionId = region.Id, GroupId = request.GroupId, PartIdList = wantedParts.ToList() };
+            if (request.Addresses is { Count: > 0 })
             {
                 if (request.Addresses.Count > 3 || request.Addresses.Any(a => a is null
                     || !settings.CurrentValue.Regions.Any(r => r.Id == a.RegionId) || a.Groups is null))
                     return Error("Перевірте адреси та регіон.");
-                var channel = new Channel { RegionId = region.Id, PartIdList = wantedParts.ToList() };
                 foreach (var a in request.Addresses)
-                    channel.Addresses.Add(new ChatAddress { Name = a.Name, RegionId = a.RegionId, Label = a.Label,
+                    previewChannel.Addresses.Add(new ChatAddress { Name = a.Name, RegionId = a.RegionId, Label = a.Label,
                         City = a.City, Street = a.Street, House = a.House, PartIds = a.PartIds,
                         Groups = a.Groups.Where(g => g is not null).DistinctBy(g => g.GroupId)
                             .Select(g => new ChatAddressGroup { GroupId = g.GroupId, Label = g.Label }).ToList() });
+                previewChannel = previewChannel.ForRegion(region.Id);
+            }
+            if (slot == MessageSlots.Schedule && previewChannel.Addresses.Count > 0)
+            {
+                var channel = previewChannel;
                 if (channel.GroupIds().Count > 0)
                 {
                     channel.TemplateMap = string.IsNullOrWhiteSpace(previewTemplate) ? new Dictionary<string, string>()
@@ -530,13 +535,13 @@ public static class MiniAppApi
                 region,
                 wantedParts,
                 request.GroupId,
-                request.Addresses is { Count: > 0 } ? new Channel { Addresses = request.Addresses.Select(a =>
-                    new ChatAddress { City = a.City, Street = a.Street, House = a.House, Label = a.Label }).ToList() }.AddressText() : null,
+                previewChannel.AddressText(),
                 request.ImageKind ?? ScheduleImage.Grid,
                 kind,
                 ct,
                 lineTemplate,
-                headingTemplate);
+                headingTemplate,
+                previewChannel);
             return Json(new PreviewResponse(rendered.Html, errors, rendered.ImageUrl));
         });
 
@@ -639,7 +644,8 @@ public static class MiniAppApi
                 null,
                 ct,
                 channel.TemplateFor(MessageSlots.ScheduleLine),
-                channel.TemplateFor(MessageSlots.ScheduleHeading));
+                channel.TemplateFor(MessageSlots.ScheduleHeading),
+                channel);
 
             try
             {

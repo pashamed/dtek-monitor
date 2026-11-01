@@ -548,11 +548,11 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         var response = await client.PutJsonAsync(
             $"/api/chats/{userId}",
-            Settings(templates: Map(("emergency", "no content here"), ("schedule", "just text"), ("on", "<script>x</script>"))));
+            Settings(templates: Map(("emergency", "{unknown}"), ("schedule", "just text"), ("on", "<script>x</script>"))));
 
         var error = (await response.ReadAsync<ApiError>())!;
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains(error.Details!, d => d.StartsWith("Екстрені відключення: Додайте {текст} або {текст_сайту}"));
+        Assert.Contains(error.Details!, d => d.StartsWith("Екстрені відключення: Невідомий параметр {unknown}"));
         Assert.Contains(error.Details!, d => d.StartsWith("Графік відключень: Додайте {відключення}"));
         Assert.Contains(error.Details!, d => d.StartsWith("Світло з'явилося за графіком: Тег <script>"));
     }
@@ -562,7 +562,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     {
         var (userId, client) = NewUser();
 
-        var wrongSlot = await client.PutJsonAsync($"/api/chats/{userId}", Settings(templates: Map(("emergency", "{message} {group}"))));
+        var wrongSlot = await client.PutJsonAsync($"/api/chats/{userId}", Settings(templates: Map(("emergency", "{message} {outages}"))));
         var rightSlot = await client.PutJsonAsync($"/api/chats/{userId}", Settings(templates: Map(("local", "{message} {group} {#address}{address}{/address}"))));
 
         Assert.Equal(HttpStatusCode.BadRequest, wrongSlot.StatusCode);

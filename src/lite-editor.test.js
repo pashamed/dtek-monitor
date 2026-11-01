@@ -257,13 +257,17 @@ test('address search, region changes and editor restoration', async () => {
     assert.equal(await page.getByRole('tab', { name: 'Аварія в регіоні', exact: true }).count(), 0);
     assert.equal(await page.getByRole('tab', { name: 'Запис про відключення знято', exact: true }).count(), 0);
     await page.getByRole('button', { name: 'Знято', exact: true }).click();
+    await page.getByRole('button', { name: 'Розширений', exact: true }).click();
     await page.getByRole('textbox', { name: 'Шаблон: Запис про відключення знято', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Аварія / район', exact: true }).click();
+    await page.getByRole('button', { name: 'Розширений', exact: true }).click();
     await page.getByRole('textbox', { name: 'Шаблон: Аварія в регіоні', exact: true }).waitFor();
     await page.getByRole('tab', { name: 'Графік відключень', exact: true }).click();
+    await page.getByRole('button', { name: 'Розширений', exact: true }).click();
     assert.equal(await page.getByRole('tab', { name: 'Графік відключень', exact: true }).getAttribute('aria-selected'), 'true');
     await page.getByRole('textbox', { name: 'Шаблон: Заголовок графіка', exact: true }).fill('⚡ {шапка}\n{день_тижня} {дата}');
     await page.getByRole('button', { name: 'Інтервал {відключення}', exact: true }).click();
+    await page.getByRole('button', { name: 'Розширений', exact: true }).click();
     const previewRequest = page.waitForRequest(request => request.url().endsWith('/api/preview')
       && request.postDataJSON().scheduleLineTemplate === '🕒 {початок}  →  {кінець}');
     await page.getByRole('textbox', { name: 'Шаблон: Рядок графіка', exact: true }).fill('🕒 {початок}  →  {кінець}');

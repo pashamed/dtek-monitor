@@ -883,6 +883,34 @@ public sealed class ScheduleNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task ScheduleReminder_StructuredFieldsIncludeOnlyAffectedRegionAndGroups()
+    {
+        AddChannel(configure: c =>
+        {
+            c.ScheduleNotify = false;
+            c.ScheduleReminder = true;
+            c.ScheduleReminderMinutes = 15;
+            c.Templates = TemplatesJson((MessageSlots.BeforeOff, "{regionId}|{city}|{group}|{status}|{statusCode}"));
+            c.Addresses = [
+                new() { RegionId = "kyiv", Name = "Дім", City = "Київ", Groups = [new() { GroupId = "45.1" }] },
+                new() { RegionId = "kyiv", Name = "Робота", City = "Інший", Groups = [new() { GroupId = "45.2" }] },
+                new() { RegionId = "kyiv-oblast", Name = "Дача", City = "Бровари", Groups = [new() { GroupId = "45.1" }] },
+            ];
+        });
+        _schedules.Snapshots["kyiv"] = WithOutages(RealSnapshot(), "45.2", Out(Kyiv(15, 14), Kyiv(15, 16)));
+
+        var result = await TickAsync(Kyiv(15, 10, 50));
+
+        Assert.Equal(1, result.Sent);
+        var message = Assert.Single(_f.Bot.Sent).Text;
+        Assert.Contains("kyiv|Київ|45.1|Планове відключення|PlannedOutage", message);
+        Assert.DoesNotContain("Інший", message);
+        Assert.DoesNotContain("45.2", message);
+        Assert.DoesNotContain("Бровари", message);
+        Assert.Single(_f.Db.ScheduleReminderDeliveries);
+    }
+
+    [Fact]
     public async Task AutomaticSchedulePost_IsSentSilentlyDuringQuietHours()
     {
         AddPostChannel(configure: c =>

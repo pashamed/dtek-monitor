@@ -26,6 +26,12 @@ public static class CombinedSchedule
                 ["address"] = channel.AddressText(),
                 ["changes"] = changes?.GetValueOrDefault(ScheduleText.DateKey(start)) ?? "",
             };
+            channel.AddTemplateContext(values);
+            var groupIds = channel.GroupIds();
+            var available = groupIds.Count > 0 && snapshot.CoverageStart <= start && snapshot.CoverageEnd >= end
+                && groupIds.All(id => snapshot.CoversDay(id, start, end));
+            values["status"] = available ? "Опублікований графік" : "Графік недоступний";
+            values["statusCode"] = available ? TemplateStatus.ScheduleAvailable : TemplateStatus.ScheduleUnavailable;
             var template = channel.TemplateFor(MessageSlots.ScheduleHeading);
             var fallback = MessageSlots.Find(MessageSlots.ScheduleHeading)!.DefaultTemplate;
             var heading = MessageTemplate.Render(template, values, fallback);

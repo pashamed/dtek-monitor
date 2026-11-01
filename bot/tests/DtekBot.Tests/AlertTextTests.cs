@@ -18,7 +18,7 @@ public class AlertTextTests
         var values = Build();
 
         Assert.Equal(
-            new[] { "address", "date", "daypart", "emoji", "message", "part", "popup", "region", "site", "time", "title", "weekday", "where" },
+            new[] { "address", "city", "date", "daypart", "emoji", "group", "message", "part", "popup", "region", "regionId", "site", "status", "statusCode", "time", "title", "weekday", "where" },
             values.Keys.OrderBy(k => k).ToArray());
         Assert.Equal("15.01.2026", values["date"]);
         Assert.Equal("Четвер", values["weekday"]);

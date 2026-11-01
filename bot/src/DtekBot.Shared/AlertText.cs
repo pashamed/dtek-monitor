@@ -48,8 +48,13 @@ public static class AlertText
         {
             ["emoji"] = emoji,
             ["title"] = title,
+            ["status"] = title,
+            ["statusCode"] = kind.ToString(),
             ["message"] = $"{where}: {sentence}",
             ["region"] = regionName,
+            ["regionId"] = "",
+            ["city"] = "",
+            ["group"] = "",
             ["part"] = part,
             ["address"] = "",
             ["where"] = where,
