@@ -34,7 +34,8 @@ public sealed class SvitlobotScheduleSyncService(
         }
 
         var channels = await db.Channels
-            .Where(channel => channel.GroupId != null && channel.SvitlobotKey != null)
+            .Where(channel => channel.SvitlobotKey != null
+                && (channel.GroupId != null || channel.Addresses.Any(a => a.Groups.Any())))
             .ToListAsync(ct);
         if (channels.Count == 0)
         {
@@ -56,7 +57,7 @@ public sealed class SvitlobotScheduleSyncService(
         var updated = 0;
         var dirty = false;
 
-        foreach (var regionChannels in channels.GroupBy(channel => channel.RegionId))
+        foreach (var regionChannels in channels.GroupBy(channel => channel.SvitlobotTarget()?.RegionId))
         {
             var region = regionSettings.Regions.FirstOrDefault(candidate =>
                 candidate.HasSchedules && candidate.Id == regionChannels.Key);

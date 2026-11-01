@@ -49,12 +49,15 @@ public sealed class AlertDispatcher(
         await mirror.RetryPendingAsync(ct);
 
         var channels = await db.Channels
-            .Where(c => c.RegionId == region.Id && c.IsActive)
+            .Where(c => c.IsActive && (c.Addresses.Any(a => a.RegionId == region.Id)
+                || (!c.Addresses.Any() && c.RegionId == region.Id)))
             .ToListAsync(ct);
         foreach (var saved in channels)
         {
-            region.UpgradeRetiredParts(saved);
+            if (saved.RegionId == region.Id) region.UpgradeRetiredParts(saved);
         }
+        channels = channels.Select(c => c.ForRegion(region.Id)).ToList();
+        foreach (var target in channels) region.UpgradeRetiredParts(target);
 
         var openDeliveries = await db.Deliveries
             .Where(d => d.RegionId == region.Id && !d.IsClosed)
@@ -170,8 +173,10 @@ public sealed class AlertDispatcher(
         await mirror.RetryPendingAsync(ct);
 
         var channels = await db.Channels
-            .Where(c => c.RegionId == region.Id && c.IsActive && (c.Addresses.Any(a => a.Groups.Any(g => g.GroupId == groupId)) || (!c.Addresses.Any() && c.GroupId == groupId)))
+            .Where(c => c.IsActive && (c.Addresses.Any(a => a.RegionId == region.Id && a.Groups.Any(g => g.GroupId == groupId))
+                || (!c.Addresses.Any() && c.RegionId == region.Id && c.GroupId == groupId)))
             .ToListAsync(ct);
+        channels = channels.Select(c => c.ForRegion(region.Id)).ToList();
         var openDeliveries = await db.Deliveries
             .Where(d => d.RegionId == key && !d.IsClosed)
             .ToListAsync(ct);
@@ -454,7 +459,7 @@ public sealed class AlertDispatcher(
             var names = matching.Select(a => a.Name).Where(n => n != "").Distinct().ToArray();
             if (names.Length > 0) rendered += "\n📍 " + System.Net.WebUtility.HtmlEncode(string.Join(", ", names));
         }
-        return rendered;
+        return channel.IsMultiRegion ? $"📍 {System.Net.WebUtility.HtmlEncode(region.Name)}\n{rendered}" : rendered;
     }
 
     // Names only the districts the alert itself mentions: parts that are merely implied by another one
@@ -506,7 +511,7 @@ public sealed class AlertDispatcher(
             || result.PartIds.Any(id => parts.Contains(id, StringComparer.OrdinalIgnoreCase));
     }
 
-    private static string RenderHash(Channel channel, string sourceHash, string text) => !channel.IsCombined() ? sourceHash
+    private static string RenderHash(Channel channel, string sourceHash, string text) => !channel.IsCombined() && !channel.IsMultiRegion ? sourceHash
         : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sourceHash + text)));
 
     // Deactivates chats that blocked the bot or no longer exist.
@@ -527,6 +532,8 @@ public sealed class AlertDispatcher(
             {
                 logger.LogWarning("Deactivating chat {ChatId}: {Error}", channel.ChatId, ex.Message);
                 channel.IsActive = false;
+                var saved = db.Channels.Local.FirstOrDefault(c => c.ChatId == channel.ChatId);
+                if (saved is not null) saved.IsActive = false;
                 return Outcome.Failed;
             }
             catch (ApiRequestException ex) when (ex.Message.Contains("message is not modified", StringComparison.OrdinalIgnoreCase))

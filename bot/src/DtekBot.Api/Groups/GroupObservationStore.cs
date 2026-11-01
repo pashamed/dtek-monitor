@@ -45,13 +45,19 @@ public sealed class GroupObservationStore(
     public async Task<GroupDispatchSummary> DispatchAsync(GroupObservation observation, CancellationToken ct)
     {
         var region = options.CurrentValue.Regions.First(r => r.Id == observation.RegionId);
-        var subscribers = await db.Channels.Where(c => c.RegionId == region.Id && c.IsActive).ToListAsync(ct);
-        var followed = subscribers.SelectMany(c => c.GroupIds()).Distinct(StringComparer.Ordinal).ToArray();
+        var subscribers = await db.Channels.Where(c => c.IsActive && (c.Addresses.Any(a => a.RegionId == region.Id)
+            || (!c.Addresses.Any() && c.RegionId == region.Id))).ToListAsync(ct);
+        var followed = subscribers.SelectMany(c => c.ForRegion(region.Id).GroupIds()).Distinct(StringComparer.Ordinal).ToArray();
+        var prefix = AlertDispatcher.GroupDeliveryKey(region.Id, "");
+        var openGroups = await db.Deliveries.Where(d => !d.IsClosed && d.RegionId.StartsWith(prefix))
+            .Select(d => d.RegionId).Distinct().ToListAsync(ct);
         int sent = 0, edited = 0, closed = 0, failed = 0;
-        foreach (var groupId in followed)
+        foreach (var groupId in followed.Concat(openGroups.Select(key => key[prefix.Length..])).Distinct(StringComparer.Ordinal))
         {
-            if (!observation.Groups.TryGetValue(groupId, out var entry)) continue;
-            var summary = await dispatcher.DispatchGroupAsync(region, groupId, entry.Today == GroupStatuses.Emergency, ct);
+            var observed = observation.Groups.TryGetValue(groupId, out var entry);
+            if (!observed && followed.Contains(groupId, StringComparer.Ordinal)) continue;
+            // A group with no remaining subscribers only closes stale threads, even when the source omitted it.
+            var summary = await dispatcher.DispatchGroupAsync(region, groupId, !observed || entry!.Today == GroupStatuses.Emergency, ct);
             sent += summary.Sent;
             edited += summary.Edited;
             closed += summary.Closed;

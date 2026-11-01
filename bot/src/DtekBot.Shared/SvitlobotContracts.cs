@@ -17,10 +17,10 @@ public sealed record SvitlobotKeyCheckDto(string Masked, string Fingerprint);
 public sealed record SvitlobotPushRequest(bool? IncludeMaybe = null);
 
 // Chooses which of the chat's groups Svitlobot follows; null returns to the default (first address, first group).
-public sealed record SetSvitlobotGroupRequest(string? GroupId);
+public sealed record SetSvitlobotGroupRequest(string? GroupId, string? RegionId = null, long? AddressId = null);
 
 // GroupId is the group Svitlobot follows after the change.
-public sealed record SvitlobotGroupDto(string? GroupId, string Message);
+public sealed record SvitlobotGroupDto(string? GroupId, string Message, string? RegionId = null, long? AddressId = null);
 
 // Answer of the write calls; HasSchedule is the state of the Svitlobot schedule afterwards.
 public sealed record SvitlobotResultDto(string Message, bool HasSchedule);

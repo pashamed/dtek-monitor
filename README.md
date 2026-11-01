@@ -641,10 +641,13 @@ nonmatching, region-wide subscriptions and both source arrival/clearance orders.
 
 ### Multiple addresses and groups
 
-The lite editor stores up to **three addresses in one region**. Each address can
-have several groups and a label such as “Під’їзд 1”. “Знайти адресу” opens
+The lite editor stores up to **three addresses total across regions**. Each address
+has its own region, several groups, and an optional label such as “Під’їзд 1”.
+One channel can follow Kyiv city and Kyiv oblast simultaneously. “Знайти адресу” opens
 settlement, street, and building lookup (street and building only for Kyiv city).
-Changing region requires confirmation before removing the old addresses and groups.
+Changing the channel's main region changes the legacy/default selection, not the
+regions of existing addresses. Address edits and general settings are saved together;
+Cancel leaves the server's saved addresses unchanged.
 Reloading restores the last channel and tab; a single chat opens without a
 selection step. Older clients can save general settings without deleting the
 new address list. Replace the full list through
@@ -652,19 +655,21 @@ new address list. Replace the full list through
 field is optional. Blazor remains compatible for general settings, while
 address-list management is available in the lite Mini App.
 
-All groups are published in **one text post** with sections and labels.
-A group shared by several addresses appears once. Edit, new-message, and
+All groups within a region are published in **one text post** with sections and labels.
+A group shared by several addresses in that region appears once. Different regions
+have independently tracked posts and reminders; mixed-region messages name the region.
+Identical group numbers in different regions are separate subscriptions. Edit, new-message, and
 replace-with-deletion modes are preserved. Long posts are split to fit Telegram
 limits. A single address with one group retains its existing format and image.
 There is no building-wide ANY/ALL aggregate: each group is shown separately.
 An advance warning for a shared outage start is sent once for all matching
 groups. Quiet hours mean silent delivery, not delayed delivery.
 
-Svitlobot keeps **one weekly timetable per channel**, so it follows **one main
-group**. In the Mini App's Svitlobot card, a channel with several groups shows
+Svitlobot keeps **one weekly timetable per channel**, so it follows **one selected
+address, region, and group**. In the Mini App's Svitlobot card, a channel with several groups shows
 a «Зробити основною» button for each group. Until one is chosen, or if the
 chosen group is removed, the first group of the first address is used. Changing
-the main group writes that group's week on the next sync; manual uploads respect
+the main group writes that group's week from its address's region on the next sync; manual uploads respect
 `includeMaybe`. If the main group's weekly data is unavailable, synchronization
 waits. Monday refreshes are preserved. Svitlobot channel posts
 provide **only the trigger text**, “Світло зникло” or a custom phrase;
@@ -675,13 +680,19 @@ The trigger assesses every address and replies briefly for each. Unresolved
 cases are checked at DTEK as one batch within a single chat budget; completed
 batch results arrive in one message. The DTEK collector passes the full
 `sub_type_reason` array, filling detected groups for addresses without a group
-selection. Manually selected groups are not overwritten. Regional alerts remain
-shared, while group accidents have a separate stream naming matching addresses.
+selection. Manually selected groups are not overwritten. Alerts and assessments use
+each address's region and districts; group accidents have a separate region/group
+stream naming matching addresses. Checks share one chat budget but cache and apply
+results by region, so identical address text in two regions cannot mix results.
 
 Migration `20261020213320_MultiAddressGroups` adds `ChatAddresses` and
 `ChatAddressGroups`, migrates the legacy address/group without clearing data,
 keeps legacy columns readable, and preserves message IDs. The migration is
 included in the repository; development work does not apply it to production.
+Migration `20261101150040_MultiRegionAddresses` adds the Svitlobot target region/address
+and expands schedule thread keys to include the region (and electricity group for
+event threads). Existing message IDs and addresses are retained. Apply this migration
+with the release; no production migration is performed during development.
 Back up the database and use the normal controlled migration process for a
 separately authorized deployment.
 

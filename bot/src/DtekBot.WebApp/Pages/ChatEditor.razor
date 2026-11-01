@@ -221,7 +221,7 @@
             NotifyOnEnd = _notifyOnEnd, EditInPlace = _editInPlace,
             Template = templates is null ? template : current.Template,
             Templates = templates, SlotSettings = slotSettings,
-            Addresses = regionChanged ? [] : null,
+            Addresses = null,
             DeletePreviousAlert = _deletePreviousAlert,
         };
         var result = await Api.SaveChatAsync(Chat.ChatId, settings);

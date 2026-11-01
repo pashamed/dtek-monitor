@@ -7,6 +7,11 @@ namespace DtekBot.Api.Data;
 
 public sealed class Channel
 {
+    internal Channel Copy() => (Channel)MemberwiseClone();
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool IsMultiRegion { get; set; }
+
     public List<ChatAddress> Addresses { get; set; } = [];
     public long ChatId { get; set; }
     public string RegionId { get; set; } = "";
@@ -154,6 +159,8 @@ public sealed class Channel
 
     // Svitlobot keeps one weekly schedule per channel; this is the group it follows (see ChannelTargets.SvitlobotGroup).
     public string? SvitlobotGroupId { get; set; }
+    public string? SvitlobotRegionId { get; set; }
+    public long? SvitlobotAddressId { get; set; }
 }
 
 public sealed class ChatAddress
@@ -183,7 +190,7 @@ public enum SchedulePhase
     On,
 }
 
-// The one schedule message a chat currently shows; it is edited while the outage progresses.
+// Each regional group keeps its own episode message while the outage progresses.
 public sealed class ScheduleThread
 {
     public long ChatId { get; set; }
@@ -203,7 +210,7 @@ public sealed class ScheduleThread
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
-// The latest schedule post of a chat for a given day, so the next update can edit or replace it.
+// Each region keeps its latest daily schedule post for independent edits or replacement.
 public sealed class SchedulePostThread
 {
     public string? MessageIds { get; set; }
@@ -410,7 +417,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
         modelBuilder.Entity<Channel>().Navigation(x => x.Addresses).AutoInclude();
         modelBuilder.Entity<SchedulePostThread>(e =>
         {
-            e.HasKey(x => x.ChatId);
+            e.HasKey(x => new { x.ChatId, x.RegionId });
             e.Property(x => x.ChatId).ValueGeneratedNever();
             e.Property(x => x.RegionId).HasMaxLength(64);
             e.Property(x => x.GroupId).HasMaxLength(16);
@@ -422,7 +429,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
 
         modelBuilder.Entity<ScheduleThread>(e =>
         {
-            e.HasKey(x => x.ChatId);
+            e.HasKey(x => new { x.ChatId, x.RegionId, x.GroupId });
             e.Property(x => x.ChatId).ValueGeneratedNever();
             e.Property(x => x.RegionId).HasMaxLength(64);
             e.Property(x => x.GroupId).HasMaxLength(16);
@@ -515,6 +522,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.AddressHouse).HasMaxLength(64);
             e.Property(x => x.SvitlobotKey).HasMaxLength(512);
             e.Property(x => x.SvitlobotGroupId).HasMaxLength(16);
+            e.Property(x => x.SvitlobotRegionId).HasMaxLength(64);
             e.HasIndex(x => new { x.RegionId, x.IsActive });
             e.HasIndex(x => x.GroupId);
         });

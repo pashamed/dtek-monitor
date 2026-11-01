@@ -286,7 +286,7 @@ test('address search, region changes and editor restoration', async () => {
     await page.getByRole('tab', { name: 'Основне', exact: true }).click();
     await page.evaluate(() => { window.Telegram.WebApp.showConfirm = (_text, callback) => callback(false); });
     await page.locator('#regionSel').selectOption('odesa');
-    assert.equal(await page.locator('#regionSel').inputValue(), 'kyiv-oblast');
+    assert.equal(await page.locator('#regionSel').inputValue(), 'odesa');
     assert.equal(chat.settings.addresses.length, 1);
     await page.evaluate(() => { window.Telegram.WebApp.showConfirm = (_text, callback) => callback(true); });
     await page.locator('#regionSel').selectOption('odesa');
@@ -294,7 +294,8 @@ test('address search, region changes and editor restoration', async () => {
     assert.equal(chat.settings.addresses.length, 1, 'Region draft must not clear saved addresses');
     await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
     await page.getByText('Збережено ✓', { exact: true }).waitFor();
-    assert.equal(chat.settings.addresses.length, 0);
+    assert.equal(chat.settings.addresses.length, 1);
+    assert.equal(chat.settings.addresses[0].regionId, 'kyiv-oblast');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
@@ -489,7 +490,7 @@ test('one atomic Save covers address and region drafts; Cancel, back and failure
       else if (path === '/api/chats/-101010') {
         if (failSave) return route.fulfill({ status: 400, json: { error: 'Перевірте адресу.' } });
         const body = request.postDataJSON();
-        chat = { ...chat, settings: { ...chat.settings, ...body, groupId: body.addresses[0]?.groups[0]?.groupId || null } };
+        chat = { ...chat, settings: { ...chat.settings, ...body, groupId: body.addresses.find(a => a.regionId === body.regionId)?.groups[0]?.groupId || null } };
         data = chat;
       }
       await route.fulfill({ json: data });
@@ -528,13 +529,16 @@ test('one atomic Save covers address and region drafts; Cancel, back and failure
     assert.ok(writes.every(w => w.path === '/api/chats/-101010'));
     await page.locator('#regionSel').selectOption('odesa');
     await page.getByRole('button', { name: '+ Додати адресу', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Назва', exact: true }).fill('Офіс');
-    await page.getByLabel('Додати чергу', { exact: true }).selectOption('2.1');
+    await page.getByRole('textbox', { name: 'Назва', exact: true }).nth(1).fill('Офіс');
+    await page.getByLabel('Додати чергу', { exact: true }).nth(1).selectOption('2.1');
     assert.equal(chat.settings.regionId, 'kyiv');
     await save.click();
     await page.getByText('Збережено ✓', { exact: true }).waitFor();
     assert.equal(chat.settings.regionId, 'odesa');
-    assert.equal(chat.settings.addresses[0].name, 'Офіс');
+    assert.equal(chat.settings.addresses[0].name, 'Оновлений дім');
+    assert.equal(chat.settings.addresses[0].regionId, 'kyiv');
+    assert.equal(chat.settings.addresses[1].name, 'Офіс');
+    assert.equal(chat.settings.addresses[1].regionId, 'odesa');
     assert.equal(chat.settings.groupId, '2.1');
     assert.equal(writes.length, 3);
     const bounds = await save.boundingBox();
@@ -634,7 +638,7 @@ test('svitlobot main group buttons pick one group of a multi-address channel', a
     page.on('pageerror', error => errors.push(error.message));
     const addresses = [
       { id: 1, regionId: 'kyiv', name: 'Дім', groups: [{ groupId: '45.1' }] },
-      { id: 2, regionId: 'kyiv', name: 'Офіс', groups: [{ groupId: '2.2', label: 'під’їзд 2' }] },
+      { id: 2, regionId: 'kyiv-oblast', name: 'Офіс', groups: [{ groupId: '45.1', label: 'під’їзд 2' }] },
     ];
     const chat = {
       chatId: -100777, title: 'Канал', isPrivate: false,
@@ -643,6 +647,7 @@ test('svitlobot main group buttons pick one group of a multi-address channel', a
     await page.addInitScript(() => {
       window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick() {} } } };
     });
+
     await page.route('https://lite.test/**', async route => {
       const request = route.request(), path = new URL(request.url()).pathname;
       if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
@@ -651,33 +656,137 @@ test('svitlobot main group buttons pick one group of a multi-address channel', a
       let data = {};
       if (path === '/api/bootstrap') data = {
         maxTemplateLength: 1000,
-        regions: [{ id: 'kyiv', name: 'Київ', hasSchedules: true, hasGroups: false, parts: [] }],
+        regions: [{ id: 'kyiv', name: 'Київ', hasSchedules: true, hasGroups: false, parts: [] },
+          { id: 'kyiv-oblast', name: 'Київська область', hasSchedules: true, hasGroups: false, parts: [] }],
         templateSlots: [['emergency', 'emergency'], ['ended', 'emergency']]
           .map(([id, group]) => ({ id, group, title: id, description: '', defaultTemplate: '{текст}', placeholders: [] })),
       };
       else if (path === '/api/chats') data = [chat];
       else if (path === '/api/schedules/groups') data = [{ id: '45.1', name: '45.1' }, { id: '2.2', name: '2.2' }];
       else if (path === '/api/preview') data = { html: 'Приклад', errors: [] };
-      else if (path.endsWith('/svitlobot/group')) data = { groupId: '2.2', message: 'Світлобот тепер отримує графік черги 2.2. Оновимо його під час наступної перевірки.' };
+      else if (path.endsWith('/svitlobot/group')) data = { groupId: '45.1', regionId: 'kyiv-oblast', addressId: 2,
+        message: 'Світлобот тепер отримує графік черги 45.1. Оновимо його під час наступної перевірки.' };
       await route.fulfill({ json: data });
     });
     await page.goto('https://lite.test/');
     const card = page.locator('#svb');
-    await card.getByText('Черга 45.1 · Дім', { exact: true }).waitFor();
-    await card.getByText('Черга 2.2 · Офіс · під’їзд 2', { exact: true }).waitFor();
+    await card.getByText('Київ · Черга 45.1 · Дім', { exact: true }).waitFor();
+    await card.getByText('Київська область · Черга 45.1 · Офіс · під’їзд 2', { exact: true }).waitFor();
     assert.equal(await card.getByText('Основна', { exact: true }).count(), 1);
     assert.equal(await card.getByRole('button', { name: 'Зробити основною', exact: true }).count(), 1);
 
     await card.getByRole('button', { name: 'Зробити основною', exact: true }).click();
-    await card.getByText(/тепер отримує графік черги 2\.2/).waitFor();
-    assert.deepEqual(writes, [{ method: 'PUT', path: '/api/chats/-100777/svitlobot/group', body: { groupId: '2.2' } }]);
-    await card.getByText('Світлобот отримує тижневий графік черги 2.2 автоматично.', { exact: true }).waitFor();
+    await card.getByText(/тепер отримує графік черги 45\.1/).waitFor();
+    assert.deepEqual(writes, [{ method: 'PUT', path: '/api/chats/-100777/svitlobot/group', body: { groupId: '45.1', regionId: 'kyiv-oblast', addressId: 2 } }]);
+    await card.getByText('Світлобот отримує тижневий графік: Київська область · черга 45.1.', { exact: true }).waitFor();
     assert.equal(await card.getByRole('button', { name: 'Зробити основною', exact: true }).count(), 1);
     await page.getByRole('tab', { name: 'Графік', exact: true }).click();
-    await page.getByText('Усі черги — в одному дописі. Основну чергу для Світлобота оберіть у «Основне».', { exact: true }).waitFor();
+    await page.getByText('Кожен регіон отримує окремий графік. Адресу й чергу для Світлобота оберіть у «Основне».', { exact: true }).waitFor();
     assert.equal(await page.getByText(/Світлобот отримує спільний тижневий графік/).count(), 0);
     assert.deepEqual(errors, []);
   } finally {
+    await browser.close();
+  }
+});
+
+test('address region controls directories and groups, ignores old responses and preserves manual groups', async () => {
+  const source = await readFile(new URL('../bot/src/DtekBot.Api/wwwroot/lite/app.js', import.meta.url), 'utf8');
+  const browser = await chromium.launch({ headless: true });
+  const releases = [];
+  try {
+    const page = await browser.newPage();
+    const errors = [], writes = [], searches = [];
+    let oldCitiesStarted, oldGroupsStarted;
+    const oldCities = new Promise(resolve => { oldCitiesStarted = resolve; });
+    const oldGroups = new Promise(resolve => { oldGroupsStarted = resolve; });
+    const chat = { chatId: -100888, title: 'Регіони', isPrivate: false, settings: {
+      regionId: 'kyiv', isActive: true, partIds: ['obolonskyi'], templates: {},
+      addresses: [{ id: 1, regionId: 'kyiv', name: 'Дім', city: '', street: '', house: '',
+        partIds: 'obolonskyi', groups: [] }],
+    } };
+    await page.addInitScript(() => {
+      window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {},
+        BackButton: { show() {}, hide() {}, onClick() {} } } };
+    });
+    await page.route('https://lite.test/**', async route => {
+      const request = route.request(), url = new URL(request.url()), path = url.pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="app"></div><script type="module" src="/app.js"></script>' });
+      if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
+      if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() });
+      let data = {};
+      if (path === '/api/bootstrap') data = { maxTemplateLength: 1000, templateSlots: [], regions: [
+        { id: 'kyiv', name: 'Київ', siteUrl: 'https://public.test', hasSchedules: true, hasGroups: false,
+          parts: [{ id: 'obolonskyi', name: 'Оболонський' }] },
+        { id: 'kyiv-oblast', name: 'Київська область', siteUrl: 'https://public.test', hasSchedules: true, hasGroups: false,
+          parts: [{ id: 'bucha', name: 'Бучанський' }] },
+      ] };
+      else if (path === '/api/chats') data = [chat];
+      else if (path === '/api/schedules/groups') {
+        if (url.searchParams.get('regionId') === 'kyiv') {
+          oldGroupsStarted();
+          await new Promise(resolve => releases.push(resolve));
+          data = [{ id: '9.9', name: 'Стара черга' }];
+        } else data = [{ id: '1.1', name: '1.1' }, { id: '2.2', name: '2.2' }];
+      }
+      else if (path.startsWith('/api/address/')) {
+        searches.push(url.search);
+        if (path.endsWith('/cities')) {
+          if (url.searchParams.get('regionId') === 'kyiv') {
+            oldCitiesStarted();
+            await new Promise(resolve => releases.push(resolve));
+            data = [{ name: 'Старий населений пункт' }];
+          } else data = [{ name: 'м. Буча' }];
+        } else if (path.endsWith('/streets')) data = [{ name: 'вул. Вокзальна' }];
+        else if (path.endsWith('/houses')) data = [{ house: '12', groupId: '1.1' }];
+      }
+      else if (path === '/api/chats/-100888' && request.method() === 'PUT') data = {
+        ...chat, settings: { ...chat.settings, ...request.postDataJSON() },
+      };
+      await route.fulfill({ json: data });
+    });
+    await page.goto('https://lite.test/');
+    await oldGroups;
+    const picker = page.locator('.dtek-address');
+    const city = picker.getByLabel('Населений пункт', { exact: true }).first();
+    const street = picker.getByLabel('Вулиця', { exact: true }).first();
+    const house = picker.getByLabel('Номер будинку', { exact: true });
+    await city.fill('Ки');
+    await oldCities;
+    await page.getByLabel('Регіон адреси', { exact: true }).selectOption('kyiv-oblast');
+    assert.equal(await city.inputValue(), '');
+    assert.equal(await street.isDisabled(), true);
+    assert.equal(await house.isDisabled(), true);
+    assert.equal(await page.getByLabel('Район адреси', { exact: true }).inputValue(), '');
+    await page.getByLabel('Додати чергу', { exact: true }).selectOption('2.2');
+    const finished = Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/address/cities?regionId=kyiv&')),
+      page.waitForResponse(r => r.url().includes('/api/schedules/groups?regionId=kyiv')),
+    ]);
+    releases.splice(0).forEach(release => release());
+    await finished;
+    assert.equal(await page.getByRole('option', { name: 'Старий населений пункт', exact: true }).count(), 0);
+    assert.equal(await page.getByLabel('Додати чергу', { exact: true }).locator('option[value="9.9"]').count(), 0);
+    await city.fill('Бу');
+    await page.getByRole('option', { name: 'м. Буча', exact: true }).click();
+    await street.fill('Во');
+    await page.getByRole('option', { name: 'вул. Вокзальна', exact: true }).click();
+    await house.fill('12');
+    await page.getByRole('option', { name: 'Будинок 12 · черга 1.1', exact: true }).click();
+    await page.getByText('Адресу обрано. Натисніть «Зберегти», щоб застосувати всі зміни.', { exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Адреса 1 · Київська область', exact: true }).waitFor();
+    assert.equal(await page.getByText('Черга 2.2', { exact: true }).count(), 1);
+    assert.equal(await page.getByText('Черга 1.1', { exact: true }).count(), 0);
+    assert.deepEqual(writes, []);
+    assert.ok(searches.slice(1).every(search => search.includes('regionId=kyiv-oblast')));
+    await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
+    await page.getByText('Збережено ✓', { exact: true }).waitFor();
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].body.regionId, 'kyiv');
+    assert.equal(writes[0].body.addresses[0].regionId, 'kyiv-oblast');
+    assert.deepEqual(writes[0].body.addresses[0].groups, [{ groupId: '2.2', label: '' }]);
+    assert.deepEqual(errors, []);
+  } finally {
+    releases.forEach(release => release());
     await browser.close();
   }
 });

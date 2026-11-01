@@ -59,7 +59,9 @@ public sealed record ChatSettingsDto(
     // Omitted/null preserves saved addresses; a list replaces them atomically with the settings.
     IReadOnlyList<ChatAddressDto>? Addresses = null,
     // Read-only here: the group whose weekly schedule goes to Svitlobot; changed via PUT .../svitlobot/group.
-    string? SvitlobotGroupId = null);
+    string? SvitlobotGroupId = null,
+    string? SvitlobotRegionId = null,
+    long? SvitlobotAddressId = null);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
 // EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.

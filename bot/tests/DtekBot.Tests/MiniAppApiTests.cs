@@ -750,8 +750,8 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var draft = Settings(regionId: "odesa", quietHoursEnabled: true) with { Addresses = [address] };
         draft = invalid switch
         {
-            "foreign-id" => draft with { Addresses = [address with { Id = original.Id }] },
-            "wrong-region" => draft with { Addresses = [address with { RegionId = "kyiv" }] },
+            "foreign-id" => draft with { Addresses = [address with { Id = long.MaxValue }] },
+            "wrong-region" => draft with { Addresses = [address with { RegionId = "invalid-region" }] },
             "too-many" => draft with { Addresses = [address, address, address, address] },
             "bad-group" => draft with { Addresses = [address with { Groups = [new("not-a-group")] }] },
             "bad-template" => draft with { Templates = Map(("emergency", "{unknown}")) },
@@ -767,6 +767,122 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(original.Id, Assert.Single(saved.Addresses).Id);
         Assert.Equal("Збережена", Assert.Single(saved.Addresses).Name);
         Assert.DoesNotContain(_factory.Bot.Requests.OfType<SendMessageRequest>(), r => r.ChatId.Identifier == userId);
+    }
+
+    [Fact]
+    public async Task Put_MixedKyivAddresses_ValidateEachRegion_AndPreserveOnLegacyRegionChange()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId);
+        _factory.Schedules.Snapshots["kyiv-oblast"] = RealSnapshot();
+        var response = await client.PutJsonAsync($"/api/chats/{userId}", Settings(schedulePost: true,
+            scheduleNotify: true, scheduleReminder: true) with
+        {
+            Addresses = [
+                new(0, "kyiv", "Дім", "Київ", "Вулиця", "1", [new("45.1")], "obolonskyi"),
+                new(0, "kyiv-oblast", "Дача", "Буча", "Вулиця", "2", [new("45.1")], "bucha"),
+            ],
+        });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
+        Assert.Equal(["kyiv", "kyiv-oblast"], saved.Addresses!.Select(a => a.RegionId));
+        Assert.True(saved.SchedulePost);
+        Assert.True(saved.ScheduleNotify);
+        Assert.True(saved.ScheduleReminder);
+        Assert.Contains("kyiv-oblast", _factory.Schedules.Calls);
+
+        var legacy = await client.PutJsonAsync($"/api/chats/{userId}", saved with
+        {
+            RegionId = "donetsk", PartIds = [], PartId = null, Addresses = null,
+        });
+        Assert.Equal(HttpStatusCode.OK, legacy.StatusCode);
+        var changed = (await legacy.ReadAsync<ChatSummaryDto>())!.Settings;
+        Assert.Equal("donetsk", changed.RegionId);
+        Assert.Null(changed.GroupId);
+        Assert.Equal(saved.Addresses!.Select(a => a.Id), changed.Addresses!.Select(a => a.Id));
+        Assert.True(changed.SchedulePost);
+        Assert.True(changed.ScheduleNotify);
+        Assert.True(changed.ScheduleReminder);
+    }
+
+    [Theory]
+    [InlineData("region")]
+    [InlineData("district")]
+    [InlineData("group")]
+    public async Task SaveAddresses_MixedRegionValidation_IsAtomic(string invalid)
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => c.Addresses.Add(new ChatAddress
+        {
+            RegionId = "kyiv", Name = "Дім", Groups = [new ChatAddressGroup { GroupId = "45.1" }],
+        }));
+        _factory.Schedules.Snapshots["kyiv-oblast"] = RealSnapshot();
+        var original = Assert.Single(LoadChannel(userId)!.Addresses);
+        var next = new ChatAddressDto(0, "kyiv-oblast", "Дача", null, null, null, [new("45.1")], "bucha");
+        next = invalid switch
+        {
+            "region" => next with { RegionId = "invalid-region" },
+            "district" => next with { PartIds = "obolonskyi" },
+            "group" => next with { Groups = [new("99.99")] },
+            _ => next,
+        };
+        var response = await client.PutJsonAsync($"/api/chats/{userId}/addresses",
+            new SaveAddressesRequest([original.ToDto() with { Name = "Змінена" }, next]));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var unchanged = Assert.Single(LoadChannel(userId)!.Addresses);
+        Assert.Equal(original.Id, unchanged.Id);
+        Assert.Equal("Дім", unchanged.Name);
+        Assert.Equal("kyiv", unchanged.RegionId);
+        Assert.DoesNotContain(_factory.Bot.Requests.OfType<SendMessageRequest>(), r => r.ChatId.Identifier == userId);
+    }
+
+    [Fact]
+    public async Task SaveAddresses_ExistingAddressCanChangeRegion_WithoutChangingItsIdOrMainRegion()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c => c.Addresses.Add(new ChatAddress { RegionId = "kyiv", Name = "Дім",
+            PartIds = "obolonskyi", Groups = [new ChatAddressGroup { GroupId = "45.1" }] }));
+        _factory.Schedules.Snapshots["kyiv-oblast"] = RealSnapshot();
+        var original = Assert.Single(LoadChannel(userId)!.Addresses).ToDto();
+        var response = await client.PutJsonAsync($"/api/chats/{userId}/addresses",
+            new SaveAddressesRequest([original with { RegionId = "kyiv-oblast", PartIds = "bucha" }]));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var settings = (await response.ReadAsync<ChatSummaryDto>())!.Settings;
+        Assert.Equal("kyiv", settings.RegionId);
+        Assert.Null(settings.GroupId);
+        var saved = Assert.Single(settings.Addresses!);
+        Assert.Equal(original.Id, saved.Id);
+        Assert.Equal("kyiv-oblast", saved.RegionId);
+        Assert.Equal("bucha", saved.PartIds);
+        Assert.Equal("45.1", Assert.Single(saved.Groups).GroupId);
+    }
+
+    [Fact]
+    public async Task SaveAddresses_MixedRegions_PreserveMatchingPendingChecksAndDeliveries()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c =>
+        {
+            c.Addresses.Add(new ChatAddress { RegionId = "kyiv", Name = "Дім", Street = "Вулиця", House = "1",
+                Groups = [new ChatAddressGroup { GroupId = "45.1" }] });
+            c.Addresses.Add(new ChatAddress { RegionId = "kyiv-oblast", Name = "Дача", Street = "Вулиця", House = "2",
+                Groups = [new ChatAddressGroup { GroupId = "45.1" }] });
+        });
+        _factory.Schedules.Snapshots["kyiv-oblast"] = RealSnapshot();
+        var addresses = LoadChannel(userId)!.Addresses.Select(a => a.ToDto()).ToArray();
+        _factory.WithDb(db =>
+        {
+            db.AddressChecks.Add(new AddressCheck { ChatId = userId, RegionId = "kyiv-oblast", AddressId = addresses[1].Id,
+                City = "", Street = "Вулиця", House = "2", Status = AddressCheckStatus.Pending, RequestedAt = _factory.Clock.Now });
+            db.Deliveries.Add(new Delivery { ChatId = userId, RegionId = "kyiv-oblast:group:45.1", TelegramMessageId = 90 });
+        });
+        var response = await client.PutJsonAsync($"/api/chats/{userId}/addresses", new SaveAddressesRequest(addresses));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        _factory.WithDb(db =>
+        {
+            Assert.Equal(AddressCheckStatus.Pending, db.AddressChecks.Single(c => c.ChatId == userId).Status);
+            Assert.False(db.Deliveries.Single(d => d.ChatId == userId).IsClosed);
+        });
     }
 
     [Fact]
@@ -1164,6 +1280,23 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("надіслано", (await response.ReadAsync<JsonElement>()).GetProperty("message").GetString());
         Assert.Single(_factory.Bot.Photos);
+    }
+
+    [Fact]
+    public async Task Post_SendScheduleNow_UsesAddressRegionWithoutMainGroup()
+    {
+        var (userId, client) = NewUser();
+        SeedChannel(userId, c =>
+        {
+            c.GroupId = null;
+            c.Addresses.Add(new ChatAddress { RegionId = "kyiv-oblast", Name = "Дача",
+                Groups = [new ChatAddressGroup { GroupId = "45.1" }] });
+        });
+        _factory.Schedules.Snapshots["kyiv-oblast"] = RealSnapshot();
+        var response = await client.PostAsync($"/api/chats/{userId}/schedules/send", null);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("kyiv-oblast", _factory.Schedules.Calls);
+        Assert.Null(LoadChannel(userId)!.GroupId);
     }
 
     [Fact]

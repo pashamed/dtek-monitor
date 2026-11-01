@@ -19,9 +19,9 @@ namespace DtekBot.Api.Schedules;
 public sealed record ScheduleTickSummary(int Chats, int Sent, int Edited, int Skipped, int Failed);
 public sealed record SchedulePostNowResult(bool Sent, bool Failed, string Message);
 
-// Keeps two kinds of stabilization messages in step with the chat's group schedule:
-//  - the "light off / on" event messages (one thread per outage episode), and
-//  - the schedule post (the day's outages, usually with a picture).
+// Keeps two kinds of stabilization messages in step with the chat's address schedules:
+//  - the "light off / on" event messages (one thread per regional group episode), and
+//  - each region's schedule post (the day's outages, usually with a picture).
 // Each follows the chat's own mode: edit the same message, post a new one, or post a new one and delete the old.
 // Called on a timer from outside (the workflow), so a tick only compares the stored state with the schedule
 // and never assumes it ran on time.
@@ -52,19 +52,28 @@ public sealed partial class ScheduleNotifier(
 
     private async Task<(Dictionary<string, long[][]> Days, List<KeyValue> Rows)> ReadPlanAsync(Channel channel, CancellationToken ct)
     {
-        var prefix = $"schedule-plan:{channel.ChatId}:";
+        var prefix = $"schedule-plan:{channel.ChatId}:{channel.RegionId}:";
         var rows = await db.KeyValues.Where(v => v.Key.StartsWith(prefix)).OrderBy(v => v.Key).ToListAsync(ct);
-        if (rows.Count > 0)
+        var legacyRows = rows.Count == 0
+            ? (await db.KeyValues.Where(v => v.Key.StartsWith($"schedule-plan:{channel.ChatId}:")).OrderBy(v => v.Key).ToListAsync(ct))
+                .Where(v => v.Key.Split(':').Length == 3).ToList()
+            : [];
+        var storedRows = rows.Count > 0 ? rows : legacyRows;
+        if (storedRows.Count > 0)
         {
             try
             {
-                var baseline = JsonSerializer.Deserialize<PlanBaseline>(string.Concat(rows.Select(r => r.Value)));
+                var baseline = JsonSerializer.Deserialize<PlanBaseline>(string.Concat(storedRows.Select(r => r.Value)));
                 if (baseline is not null && baseline.RegionId == channel.RegionId && baseline.Days is not null
                     && baseline.Days.Values.All(day => day is not null && day.All(o => o is { Length: 2 } && o[1] > o[0])))
+                {
+                    db.KeyValues.RemoveRange(legacyRows);
                     return (baseline.Days, rows);
+                }
             }
             catch (JsonException ex)
             {
+                db.KeyValues.RemoveRange(legacyRows);
                 logger.LogWarning(ex, "Stored schedule plan for chat {ChatId} is malformed; starting a new baseline", channel.ChatId);
                 return (new Dictionary<string, long[][]>(), rows);
             }
@@ -88,7 +97,7 @@ public sealed partial class ScheduleNotifier(
         {
             var value = json.Substring(index * 256, Math.Min(256, json.Length - index * 256));
             if (index < rows.Count) rows[index].Value = value;
-            else db.KeyValues.Add(new KeyValue { Key = $"schedule-plan:{channel.ChatId}:{index:D6}", Value = value });
+            else db.KeyValues.Add(new KeyValue { Key = $"schedule-plan:{channel.ChatId}:{channel.RegionId}:{index:D6}", Value = value });
         }
         db.KeyValues.RemoveRange(rows.Skip(chunks));
     }
@@ -99,13 +108,16 @@ public sealed partial class ScheduleNotifier(
         var now = time.GetUtcNow();
         await mirror.RetryPendingAsync(ct);
 
-        var channels = await db.Channels
-            .Where(c => c.IsActive && !c.IsPaused && c.GroupId != null
+        var savedChannels = await db.Channels
+            .Where(c => c.IsActive && !c.IsPaused
+                && (c.Addresses.Any(a => a.Groups.Any()) || (!c.Addresses.Any() && c.GroupId != null))
                 && ((settings.Schedules.EnableEventNotifications && c.ScheduleNotify)
                     || c.SchedulePost || c.ScheduleReminder))
             .ToListAsync(ct);
-        var threads = await db.ScheduleThreads.ToDictionaryAsync(t => t.ChatId, ct);
-        var posts = await db.SchedulePostThreads.ToDictionaryAsync(t => t.ChatId, ct);
+        var channels = savedChannels.SelectMany(c => c.RegionIds().Select(c.ForRegion))
+            .Where(c => c.GroupIds().Count > 0).ToList();
+        var threads = await db.ScheduleThreads.ToDictionaryAsync(t => (t.ChatId, t.RegionId, t.GroupId), ct);
+        var posts = await db.SchedulePostThreads.ToDictionaryAsync(t => (t.ChatId, t.RegionId), ct);
         var cutoff = now.AddDays(-7);
         var reminders = await db.ScheduleReminderDeliveries
             .Where(d => d.OutageStart >= cutoff)
@@ -117,32 +129,36 @@ public sealed partial class ScheduleNotifier(
             await db.ScheduleReminderDeliveries.Where(d => d.OutageStart < cutoff).ToListAsync(ct));
 
         // A thread whose chat turned the feature off or changed group starts fresh next time.
-        var byChat = channels.ToDictionary(c => c.ChatId);
+        var byRegion = channels.ToDictionary(c => (c.ChatId, c.RegionId));
+        var byChat = savedChannels.ToDictionary(c => c.ChatId);
         var planState = await db.KeyValues.Where(v => v.Key.StartsWith("schedule-plan:")).ToListAsync(ct);
         db.KeyValues.RemoveRange(planState.Where(row =>
         {
             var parts = row.Key.Split(':');
-            return parts.Length != 3 || !long.TryParse(parts[1], out var chatId)
-                || !byChat.TryGetValue(chatId, out var channel) || !channel.SchedulePost;
+            if (parts.Length is not (3 or 4) || !long.TryParse(parts[1], out var chatId)) return true;
+            return parts.Length == 4
+                ? !byRegion.TryGetValue((chatId, parts[2]), out var regional) || !regional.SchedulePost
+                : !byChat.TryGetValue(chatId, out var channel) || !channel.SchedulePost
+                    || !byRegion.ContainsKey((chatId, channel.RegionId));
         }));
         foreach (var thread in threads.Values.ToList())
         {
-            if (!byChat.TryGetValue(thread.ChatId, out var channel)
+            if (!byRegion.TryGetValue((thread.ChatId, thread.RegionId), out var channel)
                 || !settings.Schedules.EnableEventNotifications || !channel.ScheduleNotify
-                || channel.GroupId != thread.GroupId || channel.RegionId != thread.RegionId)
+                || !channel.GroupIds().Contains(thread.GroupId))
             {
                 db.ScheduleThreads.Remove(thread);
-                threads.Remove(thread.ChatId);
+                threads.Remove((thread.ChatId, thread.RegionId, thread.GroupId));
             }
         }
 
         foreach (var post in posts.Values.ToList())
         {
-            if (!byChat.TryGetValue(post.ChatId, out var channel) || !channel.SchedulePost
+            if (!byRegion.TryGetValue((post.ChatId, post.RegionId), out var channel) || !channel.SchedulePost
                 || (post.MessageIds is null && channel.GroupId != post.GroupId) || channel.RegionId != post.RegionId)
             {
                 db.SchedulePostThreads.Remove(post);
-                posts.Remove(post.ChatId);
+                posts.Remove((post.ChatId, post.RegionId));
             }
         }
 
@@ -170,6 +186,7 @@ public sealed partial class ScheduleNotifier(
 
             foreach (var channel in regionGroup)
             {
+                if (!byChat[channel.ChatId].IsActive) continue;
                 if (channel.ScheduleReminder)
                 {
                     var outcome = await SendDueReminderAsync(
@@ -182,25 +199,29 @@ public sealed partial class ScheduleNotifier(
                     }
                 }
 
-                if (settings.Schedules.EnableEventNotifications && channel.ScheduleNotify)
+                if (settings.Schedules.EnableEventNotifications && channel.ScheduleNotify && byChat[channel.ChatId].IsActive)
                 {
-                    threads.TryGetValue(channel.ChatId, out var thread);
-                    var desired = Decide(settings, region, snapshot, channel, thread, now);
-                    var outcome = desired is null
-                        ? Outcome.Skipped
-                        : await ApplyAsync(
-                            channel, region, thread, desired, threads, now, ct,
-                            disableNotification: QuietHours.IsQuiet(channel, now));
-                    Count(outcome);
-                    if (outcome is Outcome.Sent or Outcome.Edited)
+                    foreach (var groupId in channel.GroupIds())
                     {
-                        await Task.Delay(SendSpacing, ct);
+                        if (!byChat[channel.ChatId].IsActive) break;
+                        var target = channel.ForRegion(region.Id);
+                        target.GroupId = groupId;
+                        threads.TryGetValue((channel.ChatId, region.Id, groupId), out var thread);
+                        var desired = Decide(settings, region, snapshot, target, thread, now);
+                        var outcome = desired is null
+                            ? Outcome.Skipped
+                            : await ApplyAsync(
+                                target, region, thread, desired, threads, now, ct,
+                                disableNotification: QuietHours.IsQuiet(channel, now));
+                        Count(outcome);
+                        if (outcome is Outcome.Sent or Outcome.Edited)
+                            await Task.Delay(SendSpacing, ct);
                     }
                 }
 
-                if (channel.SchedulePost && channel.IsActive)
+                if (channel.SchedulePost && byChat[channel.ChatId].IsActive)
                 {
-                    posts.TryGetValue(channel.ChatId, out var post);
+                    posts.TryGetValue((channel.ChatId, region.Id), out var post);
                     var outcome = await ApplyPostAsync(
                         settings, channel, region, snapshot, post, posts, now, ct,
                         disableNotification: QuietHours.IsQuiet(channel, now));
@@ -214,37 +235,45 @@ public sealed partial class ScheduleNotifier(
         }
 
         await db.SaveChangesAsync(ct);
-        return new ScheduleTickSummary(channels.Count, sent, edited, skipped, failed);
+        return new ScheduleTickSummary(savedChannels.Count, sent, edited, skipped, failed);
     }
 
     public async Task<SchedulePostNowResult> SendScheduleNowAsync(Channel channel, CancellationToken ct)
     {
         await mirror.RetryPendingAsync(ct);
         var settings = options.CurrentValue;
-        var region = settings.Regions.FirstOrDefault(r => r.Id == channel.RegionId && r.HasSchedules);
-        if (region is null || string.IsNullOrWhiteSpace(channel.GroupId))
+        var targets = channel.RegionIds().Select(channel.ForRegion)
+            .Where(c => c.GroupIds().Count > 0 && settings.Regions.Any(r => r.Id == c.RegionId && r.HasSchedules)).ToArray();
+        if (targets.Length == 0)
         {
             return new(false, false, "Спершу оберіть регіон із графіками та чергу.");
         }
 
-        var snapshot = await schedules.GetAsync(region.Id, ct);
-        if (snapshot is null)
+        var posts = await db.SchedulePostThreads.Where(t => t.ChatId == channel.ChatId)
+            .ToDictionaryAsync(t => (t.ChatId, t.RegionId), ct);
+        var outcomes = new List<Outcome>();
+        var available = false;
+        foreach (var target in targets)
         {
-            return new(false, false, "Графіки тимчасово недоступні. Спробуйте пізніше.");
+            var region = settings.Regions.First(r => r.Id == target.RegionId);
+            var snapshot = await schedules.GetAsync(region.Id, ct);
+            if (snapshot is null) continue;
+            available = true;
+            if (!target.GroupIds().Any(id => snapshot.Find(id) is not null)) continue;
+            posts.TryGetValue((channel.ChatId, region.Id), out var post);
+            outcomes.Add(await ApplyPostAsync(
+                settings, target, region, snapshot, post, posts, time.GetUtcNow(), ct, force: true));
+            if (db.Channels.Local.Any(c => c.ChatId == channel.ChatId && !c.IsActive)) break;
         }
-
-        if (!channel.GroupIds().Any(id => snapshot.Find(id) is not null))
-        {
-            return new(false, false, "Для обраної черги графік недоступний.");
-        }
-
-        var post = await db.SchedulePostThreads.FirstOrDefaultAsync(t => t.ChatId == channel.ChatId, ct);
-        var posts = post is null
-            ? new Dictionary<long, SchedulePostThread>()
-            : new Dictionary<long, SchedulePostThread> { [channel.ChatId] = post };
-        var outcome = await ApplyPostAsync(
-            settings, channel, region, snapshot, post, posts, time.GetUtcNow(), ct, force: true);
         await db.SaveChangesAsync(ct);
+        if (outcomes.Count == 0)
+        {
+            return new(false, false, available ? "Для обраної черги графік недоступний."
+                : "Графіки тимчасово недоступні. Спробуйте пізніше.");
+        }
+        var outcome = outcomes.Contains(Outcome.Failed) ? Outcome.Failed
+            : outcomes.Contains(Outcome.Sent) ? Outcome.Sent
+            : outcomes.Contains(Outcome.Edited) ? Outcome.Edited : Outcome.Skipped;
         return outcome switch
         {
             Outcome.Sent => new(true, false, "Графік надіслано в канал."),
@@ -287,6 +316,7 @@ public sealed partial class ScheduleNotifier(
                 MessageSlots.Find(MessageSlots.BeforeOff)!.DefaultTemplate);
             if (channel.IsCombined())
                 text += "\n" + string.Join("; ", affected.Select(id => System.Net.WebUtility.HtmlEncode(channel.GroupNames(id)) + " · " + id));
+            text = ScheduleText.LabelRegion(channel, region.Name, text);
             try
             {
                 var sent = await WithRetry(() => WithMarkupFallback(
@@ -379,11 +409,13 @@ public sealed partial class ScheduleNotifier(
         RegionSettings region,
         ScheduleThread? thread,
         Desired desired,
-        Dictionary<long, ScheduleThread> threads,
+        Dictionary<(long ChatId, string RegionId, string GroupId), ScheduleThread> threads,
         DateTimeOffset now,
         CancellationToken ct,
         bool disableNotification)
     {
+        var text = channel.IsCombined() ? channel.Heading(channel.GroupId!) + "\n" + desired.Text : desired.Text;
+        desired = desired with { Text = ScheduleText.LabelRegion(channel, region.Name, text) };
         var hash = Hash(desired.Text);
         var mode = channel.ScheduleEventMode;
 
@@ -447,14 +479,14 @@ public sealed partial class ScheduleNotifier(
         string hash,
         int messageId,
         bool isPhoto,
-        Dictionary<long, ScheduleThread> threads,
+        Dictionary<(long ChatId, string RegionId, string GroupId), ScheduleThread> threads,
         DateTimeOffset now)
     {
         if (thread is null)
         {
-            thread = new ScheduleThread { ChatId = channel.ChatId };
+            thread = new ScheduleThread { ChatId = channel.ChatId, RegionId = region.Id, GroupId = channel.GroupId! };
             db.ScheduleThreads.Add(thread);
-            threads[channel.ChatId] = thread;
+            threads[(channel.ChatId, region.Id, channel.GroupId!)] = thread;
         }
 
         thread.RegionId = region.Id;
@@ -475,7 +507,7 @@ public sealed partial class ScheduleNotifier(
         RegionSettings region,
         ScheduleSnapshot snapshot,
         SchedulePostThread? post,
-        Dictionary<long, SchedulePostThread> posts,
+        Dictionary<(long ChatId, string RegionId), SchedulePostThread> posts,
         DateTimeOffset now,
         CancellationToken ct,
         bool force = false,
@@ -552,9 +584,9 @@ public sealed partial class ScheduleNotifier(
 
             if (post is null)
             {
-                post = new SchedulePostThread { ChatId = channel.ChatId };
+                post = new SchedulePostThread { ChatId = channel.ChatId, RegionId = region.Id };
                 db.SchedulePostThreads.Add(post);
-                posts[channel.ChatId] = post;
+                posts[(channel.ChatId, region.Id)] = post;
             }
 
             post.RegionId = region.Id;
@@ -583,15 +615,28 @@ public sealed partial class ScheduleNotifier(
 
     public async Task<string?> PreviewCombinedAsync(Channel channel, CancellationToken ct)
     {
-        var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId && r.HasSchedules);
-        if (region is null) return null;
-        var snapshot = await schedules.GetAsync(region.Id, ct);
-        if (snapshot is null) return null;
-        return ScheduleText.RenderPost(channel, snapshot, region.Name, time.GetUtcNow(), false, region.DisplayNames(channel.DistrictIds()));
+        var previews = new List<string>();
+        foreach (var regionId in channel.RegionIds())
+        {
+            var target = channel.ForRegion(regionId);
+            if (target.GroupIds().Count == 0) continue;
+            var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == regionId && r.HasSchedules);
+            if (region is null) continue;
+            var snapshot = await schedules.GetAsync(region.Id, ct);
+            if (snapshot is null)
+            {
+                if (!target.IsMultiRegion) return null;
+                previews.Add(ScheduleText.LabelRegion(target, region.Name, "Графіки тимчасово недоступні."));
+                continue;
+            }
+            previews.Add(ScheduleText.RenderPost(target, snapshot, region.Name, time.GetUtcNow(), false,
+                region.DisplayNames(target.DistrictIds())));
+        }
+        return previews.Count == 0 ? null : string.Join("\n\n", previews);
     }
 
     private async Task<Outcome> ApplyCombinedPostAsync(Channel channel, RegionSettings region,
-        ScheduleSnapshot snapshot, SchedulePostThread? post, Dictionary<long, SchedulePostThread> posts,
+        ScheduleSnapshot snapshot, SchedulePostThread? post, Dictionary<(long ChatId, string RegionId), SchedulePostThread> posts,
         DateTimeOffset now, CancellationToken ct, bool force, bool disableNotification)
     {
         if (now < snapshot.CoverageStart || now >= snapshot.CoverageEnd) return Outcome.Skipped;
@@ -627,8 +672,8 @@ public sealed partial class ScheduleNotifier(
                 foreach (var id in oldIds.Except(ids)) await DeleteQuietlyAsync(channel.ChatId, id, ct);
             if (post is null)
             {
-                post = new SchedulePostThread { ChatId = channel.ChatId };
-                db.SchedulePostThreads.Add(post); posts[channel.ChatId] = post;
+                post = new SchedulePostThread { ChatId = channel.ChatId, RegionId = region.Id };
+                db.SchedulePostThreads.Add(post); posts[(channel.ChatId, region.Id)] = post;
             }
             post.MessageId = ids[0]; post.MessageIds = System.Text.Json.JsonSerializer.Serialize(ids);
             post.IsPhoto = false; post.RegionId = region.Id; post.GroupId = channel.GroupId!;
@@ -651,6 +696,8 @@ public sealed partial class ScheduleNotifier(
     {
         logger.LogWarning("Deactivating chat {ChatId} after schedule send: {Error}", channel.ChatId, ex.Message);
         channel.IsActive = false;
+        var saved = db.Channels.Local.FirstOrDefault(c => c.ChatId == channel.ChatId);
+        if (saved is not null) saved.IsActive = false;
         foreach (var thread in db.ScheduleThreads.Local.Where(t => t.ChatId == channel.ChatId).ToList())
         {
             db.ScheduleThreads.Remove(thread);

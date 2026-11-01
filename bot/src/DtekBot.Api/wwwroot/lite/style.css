@@ -359,3 +359,4 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
   .ed{margin:0;padding:0 0 calc(120px + env(safe-area-inset-bottom))}
   .topbar,.tabs{margin-left:0;margin-right:0;border-radius:0}
 }
+.address-region select { width: 100%; min-width: 0; }

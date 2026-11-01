@@ -473,7 +473,10 @@ function renderEditor(chat) {
   const tpls = Object.fromEntries(slots.map(x => [x.id, (chat.settings.templates || {})[x.id] || x.defaultTemplate]));
   const perr = {}, serr = {};
 
-  const groupOf = () => s.addresses.flatMap(a => a.groups || []).map(g => g.groupId).sort()[0] || null;
+  const scheduleAddressOf = () => s.addresses.find(a => a.regionId === s.regionId && regionOf(a.regionId)?.hasSchedules && a.groups?.length)
+    || s.addresses.find(a => regionOf(a.regionId)?.hasSchedules && a.groups?.length);
+  const groupOf = () => scheduleAddressOf()?.groups.map(g => g.groupId).sort()[0] || null;
+  const scheduleRegionOf = () => scheduleAddressOf()?.regionId || s.regionId;
   const customised = (x, v) => !!(x && v && v.trim() && v !== x.defaultTemplate);
   const isCustom = id => customised(slotOf(id), tpls[id]);
   const tplMap = get => ({
@@ -663,13 +666,6 @@ function renderEditor(chat) {
   }
 
   regionSel.addEventListener('change', async () => {
-    if (regionSel.value !== s.regionId && s.addresses.length) {
-      const nextRegion = regionSel.value;
-      regionSel.value = s.regionId || '';
-      if (!await confirmSetting('Змінити регіон у чернетці? Поточні адреси й черги буде видалено лише після «Зберегти».')) return;
-      s.addresses = [];
-      regionSel.value = nextRegion;
-    }
     s.regionId = regionSel.value || null; s.partIds = []; dq = ''; dqIn.value = '';
     if (s.regionId && !s.isActive) { s.isActive = true; activeRow.cb.checked = true; }
     setErr([]); refreshAll();
@@ -1061,12 +1057,22 @@ function renderEditor(chat) {
   }
 
   function addressCollection() {
-    const region = regionOf(s.regionId), ctx = makeAddrCtx();
-    const list = h('div'), info = h('p', { class: 'hint', text: 'До 3 адрес одного регіону. Усі зміни застосуються разом після «Зберегти».' });
+    const ctx = makeAddrCtx();
+    const list = h('div'), info = h('p', { class: 'hint', text: 'До 3 адрес у різних регіонах. Зміни застосуються після «Зберегти»; сповіщення й графіки надходитимуть окремо.' });
     const add = h('button', { type: 'button', class: 'btn ghost sm', text: '+ Додати адресу' });
     const paint = () => {
       add.disabled = s.addresses.length >= 3;
       list.replaceChildren(...s.addresses.map((address, index) => {
+        const region = regionOf(address.regionId), addressRegionId = address.regionId;
+        const addressRegion = h('select', { 'aria-label': 'Регіон адреси' },
+          ...boot.regions.map(r => h('option', { value: r.id, text: r.name })));
+        addressRegion.value = address.regionId || '';
+        addressRegion.addEventListener('change', () => {
+          address.regionId = addressRegion.value;
+          address.city = ''; address.street = ''; address.house = ''; address.label = null;
+          address.partIds = null; address.groups = [];
+          paint(); renderSched(); touch();
+        });
         const fields = [['Назва', 'name', 64], ['Населений пункт', 'city', 128], ['Вулиця', 'street', 256], ['Будинок', 'house', 64]];
         const inputs = fields.map(([label, key, max]) => {
           const input = h('input', { type: 'text', value: address[key] || '', maxlength: String(max), 'aria-label': label });
@@ -1076,13 +1082,16 @@ function renderEditor(chat) {
         const searchBox = h('div');
         const searchContext = {
           ...ctx,
+          msg: h('div', { class: 'msg', role: 'status' }),
+          fail: e => { if (address.regionId === addressRegionId && searchBox.isConnected) ctx.fail(e); },
           commit: async (_method, _path, body) => {
+            if (address.regionId !== addressRegionId || !s.addresses.includes(address) || !searchBox.isConnected) return false;
             address.city = body.city || '';
             address.street = body.street;
             address.house = body.house;
             address.label = body.label || [address.city, address.street, address.house].filter(Boolean).join(', ');
             const ids = body.groupIds?.length ? body.groupIds : body.groupId ? [body.groupId] : [];
-            if (ids.length) {
+            if (ids.length && !address.groups.length) {
               address.groups = [...new Set(ids)].map(groupId => address.groups.find(g => g.groupId === groupId) || { groupId, label: '' });
             }
             paint(); renderSched(); touch();
@@ -1093,15 +1102,15 @@ function renderEditor(chat) {
         };
         const search = h('button', { type: 'button', class: 'btn ghost sm', text: 'Знайти адресу', onclick: () => {
           searchBox.replaceChildren(region.hasGroups
-            ? addressPicker(s.regionId, searchContext)
-            : dtekAddressPicker(s.regionId, searchContext));
+            ? addressPicker(address.regionId, searchContext)
+            : dtekAddressPicker(address.regionId, searchContext));
         } });
         if (!address.street && region?.siteUrl) {
           searchBox.append(region.hasGroups
-            ? addressPicker(s.regionId, searchContext)
-            : dtekAddressPicker(s.regionId, searchContext));
+            ? addressPicker(address.regionId, searchContext)
+            : dtekAddressPicker(address.regionId, searchContext));
         }
-        const districts = h('select', { 'aria-label': 'Район адреси' }, h('option', { value: '', text: 'Райони з основних налаштувань' }),
+        const districts = h('select', { 'aria-label': 'Район адреси' }, h('option', { value: '', text: address.regionId === s.regionId ? 'Райони з основних налаштувань' : 'Весь регіон' }),
           ...(region?.parts || []).map(part => h('option', { value: part.id, text: part.name })));
         districts.value = address.partIds || '';
         districts.addEventListener('change', () => { address.partIds = districts.value || null; touch(); });
@@ -1114,13 +1123,16 @@ function renderEditor(chat) {
         }));
         paintGroups();
         const select = h('select', { 'aria-label': 'Додати чергу' }, h('option', { value: '', text: '+ Додати чергу' }));
-        if (region?.hasSchedules) loadGroups(s.regionId).then(items => select.append(...items.map(g => h('option', { value: g.id, text: g.name }))), ctx.fail);
+        if (region?.hasSchedules) loadGroups(address.regionId).then(items => {
+          if (address.regionId === addressRegionId && select.isConnected) select.append(...items.map(g => h('option', { value: g.id, text: g.name })));
+        }, e => { if (address.regionId === addressRegionId && select.isConnected) ctx.fail(e); });
         else select.disabled = true;
         select.addEventListener('change', () => {
           if (select.value && !address.groups.some(g => g.groupId === select.value)) address.groups.push({ groupId: select.value, label: '' });
           select.value = ''; paintGroups(); renderSched(); touch();
         });
         return card(h('h3', { class: 'ct', text: `Адреса ${index + 1} · ${region?.name || ''}` }),
+          h('div', { class: 'fld address-region' }, h('label', { text: 'Регіон адреси' }), addressRegion),
           region?.siteUrl ? search : null, searchBox, ...inputs,
           h('div', { class: 'fld' }, h('label', { text: 'Район' }), districts), groups, select,
           h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => { s.addresses = s.addresses.filter(a => a !== address); paint(); renderSched(); touch(); } }));
@@ -1175,7 +1187,9 @@ function renderEditor(chat) {
   const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : 'None';
   const previewBody = id => ({
     slot: ['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id,
-    template: ['schedule-heading', 'schedule-line'].includes(id) ? null : customised(slotOf(id), tpls[id]) ? tpls[id] : null, regionId: s.regionId, partIds: partIdsOf(s),
+    template: ['schedule-heading', 'schedule-line'].includes(id) ? null : customised(slotOf(id), tpls[id]) ? tpls[id] : null,
+    regionId: ['schedule', 'schedule-heading', 'schedule-line'].includes(id) ? scheduleRegionOf() : s.regionId,
+    partIds: ['schedule', 'schedule-heading', 'schedule-line'].includes(id) && scheduleRegionOf() !== s.regionId ? [] : partIdsOf(s),
     addresses: s.addresses, groupId: groupOf(), kind: KIND_OF[id] || 'Emergency',
     imageKind: imageKindOf(['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id),
     scheduleLineTemplate: tpls['schedule-line'] || null,
@@ -1188,7 +1202,7 @@ function renderEditor(chat) {
   const pvx = tgPreview();
 
   function loadPv() {
-    const r = regionOf(s.regionId), g = groupOf();
+    const r = regionOf(scheduleRegionOf()), g = groupOf();
     if (!r || !r.hasSchedules || !g || !slotOf('schedule')) { pv.key = ''; pv.state = 'idle'; pvx.set('idle', null, 'Оберіть чергу, щоб побачити приклад публікації.'); return; }
     const body = previewBody('schedule'), k = JSON.stringify(body);
     if (k === pv.key && pv.state !== 'err') return;
@@ -1256,17 +1270,20 @@ function renderEditor(chat) {
     for (const a of chat.settings.addresses || []) {
       for (const g of a.groups || []) {
         const name = [a.name, g.label].filter(Boolean).join(' · ');
-        const item = map.get(g.groupId) || { id: g.groupId, names: [] };
+        const key = `${a.regionId}:${a.id}:${g.groupId}`;
+        const item = map.get(key) || { id: g.groupId, regionId: a.regionId, addressId: a.id || null, key, names: [] };
         if (name && !item.names.includes(name)) item.names.push(name);
-        map.set(g.groupId, item);
+        map.set(key, item);
       }
     }
     return [...map.values()];
   }
-  function svbSetGroup(groupId) {
-    svbRun('group:' + groupId, async () => {
-      const d = await api('PUT', svbBase() + '/group', { groupId });
+  function svbSetGroup(group) {
+    svbRun('group:' + group.key, async () => {
+      const d = await api('PUT', svbBase() + '/group', { groupId: group.id, regionId: group.regionId, addressId: group.addressId });
       chat.settings.svitlobotGroupId = d.groupId;
+      chat.settings.svitlobotRegionId = d.regionId;
+      chat.settings.svitlobotAddressId = d.addressId;
       return d;
     });
   }
@@ -1300,18 +1317,23 @@ function renderEditor(chat) {
     } else {
       const groups = svbGroups();
       const main = chat.settings.svitlobotGroupId;
+      const mainRegionId = chat.settings.svitlobotRegionId || chat.settings.regionId;
+      const selected = groups.find(g => g.id === main && g.regionId === mainRegionId
+        && (!chat.settings.svitlobotAddressId || g.addressId === chat.settings.svitlobotAddressId));
       body = [
         h('div', { class: 'svb-key-status' }, h('span', { class: 'chip green', text: 'Ключ каналу підключено' })),
         h('p', { class: 'hint', text: !groupOf()
           ? 'Оберіть адресу або чергу на вкладці «Основне», щоб увімкнути автоматичне оновлення графіка.'
-          : main ? `Світлобот отримує тижневий графік черги ${main} автоматично.`
+          : main ? new Set(groups.map(g => g.regionId)).size > 1
+            ? `Світлобот отримує тижневий графік: ${regionOf(mainRegionId)?.name || mainRegionId} · черга ${main}.`
+            : `Світлобот отримує тижневий графік черги ${main} автоматично.`
             : 'Тижневий графік надсилається Світлоботу автоматично.' }),
         groups.length > 1 ? h('p', { class: 'hint', text: 'Світлобот зберігає один графік на канал. Оберіть основну чергу:' }) : null,
         ...(groups.length > 1 ? groups.map(g => h('div', { class: 'fl svb-group' },
-          h('span', { text: `Черга ${g.id}` + (g.names.length ? ` · ${g.names.join(', ')}` : '') }),
-          g.id === main
+          h('span', { text: `${regionOf(g.regionId)?.name || g.regionId} · Черга ${g.id}` + (g.names.length ? ` · ${g.names.join(', ')}` : '') }),
+          g.key === selected?.key
             ? h('span', { class: 'chip green', text: 'Основна' })
-            : btn('group:' + g.id, 'ghost sm', 'Зробити основною', () => svbSetGroup(g.id)))) : []),
+            : btn('group:' + g.key, 'ghost sm', 'Зробити основною', () => svbSetGroup(g)))) : []),
         h('div', { class: 'svb-key-actions' },
           btn('check', 'ghost sm', 'Перевірити ключ', svbCheck),
           btn('forget', 'ghost sm', 'Забути ключ', svbForget)),
@@ -1364,8 +1386,9 @@ function renderEditor(chat) {
       panels.main.append(svbNode);
       svbPaint();
     }
-    const r = regionOf(s.regionId);
-    const viewer = card(scheduleViewerButton(s.regionId, groupOf()),
+    const r = regionOf(scheduleRegionOf());
+    const mixedRegions = new Set(s.addresses.map(a => a.regionId)).size > 1;
+    const viewer = card(scheduleViewerButton(scheduleRegionOf(), groupOf()),
       h('p', { class: 'hint', text: 'Будь-який регіон і черга. Збереження налаштувань не потрібне.' }));
     if (!r || !r.hasSchedules) {
       pvSeq++; pv.key = '';
@@ -1393,13 +1416,14 @@ function renderEditor(chat) {
       viewer,
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: isPriv ? 'Графік у чаті з ботом' : 'Графік у Telegram-каналі' }), help('schedulePost')),
-        h('p', { class: 'hint', text: isPriv ? 'Усі черги — в одному повідомленні.' : 'Усі черги — в одному дописі. Основну чергу для Світлобота оберіть у «Основне».' }),
+        h('p', { class: 'hint', text: mixedRegions ? 'Кожен регіон отримує окремий графік. Адресу й чергу для Світлобота оберіть у «Основне».'
+          : isPriv ? 'Усі черги — в одному повідомленні.' : 'Усі черги — в одному дописі. Основну чергу для Світлобота оберіть у «Основне».' }),
         sendNow, scheduleSendStatus),
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Публікація графіка' }), help('schedulePost')),
         toggle('Публікувати графік', 'schedulePost', null, {
           disabled: !has,
-          confirm: 'Надсилати й оновлювати спільний графік усіх черг у цьому чаті?',
+          confirm: mixedRegions ? 'Надсилати й оновлювати окремий графік кожного регіону в цьому чаті?' : 'Надсилати й оновлювати спільний графік усіх черг у цьому чаті?',
         }), lock(),
         h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
         h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), (s.addresses.length > 1 || (s.addresses[0]?.groups?.length || 0) > 1) ? h('p', { class: 'hint', text: 'Об’єднаний графік надсилаємо текстом.' }) : imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),

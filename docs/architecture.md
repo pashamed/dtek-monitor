@@ -175,7 +175,10 @@ out-of-order incoming observations. No automatic clearance is inferred from age.
 2. The Mini App sends `Authorization: tma ...` to `/api/*`; the backend validates
    it and checks management access for protected chat operations.
 3. Saving persists per-chat settings, addresses/groups, templates and posting
-   preferences. A subscription supports up to three addresses in one region.
+   preferences. A subscription supports up to three addresses total across regions.
+   The main region remains the legacy/default selection; each saved address routes
+   alerts, schedules, and checks through its own region. Schedule message state is
+   keyed by chat and region, while Svitlobot follows one selected address/region/group.
 4. The read-only viewer uses `/api/schedules/groups` and `/api/schedules/view`.
    It does not need a linked channel and does not save settings or publish posts;
    Telegram Mini App authentication is still required.

@@ -63,6 +63,7 @@ public sealed class AddressCheckService(
     // Called when a user says the power is off and asks whether it is local.
     public async Task<CheckRequestResult> RequestAsync(Channel channel, CancellationToken ct)
     {
+        if (channel.Addresses.Count == 1) channel = channel.ForRegion(channel.Addresses[0].RegionId);
         var now = time.GetUtcNow();
         if (string.IsNullOrEmpty(channel.AddressStreet) || string.IsNullOrEmpty(channel.AddressHouse))
         {
@@ -159,12 +160,12 @@ public sealed class AddressCheckService(
         {
             if (string.IsNullOrWhiteSpace(address.Street) || string.IsNullOrWhiteSpace(address.House))
             { replies[address.Id] = "Уточніть вулицю й будинок у редакторі."; continue; }
-            var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
+            var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == address.RegionId);
             if (region is null || string.IsNullOrEmpty(region.SiteUrl) || (!region.HasGroups && string.IsNullOrWhiteSpace(address.City)))
             { replies[address.Id] = "Уточніть населений пункт у редакторі."; continue; }
             var city = address.City ?? "";
             var cutoff = now.AddMinutes(-Limits.ResultCacheMinutes);
-            var cached = await db.AddressResults.FirstOrDefaultAsync(r => r.RegionId == channel.RegionId
+            var cached = await db.AddressResults.FirstOrDefaultAsync(r => r.RegionId == address.RegionId
                 && r.City == city && r.Street == address.Street && r.House == address.House && r.CheckedAt >= cutoff, ct);
             if (cached is not null) replies[address.Id] = ShortResult(cached);
             else needed.Add(address);
@@ -186,8 +187,11 @@ public sealed class AddressCheckService(
             var address = needed[i];
             db.AddressChecks.Add(new AddressCheck
             {
-                ChatId = channel.ChatId, AddressId = address.Id, RegionId = channel.RegionId,
-                City = address.City ?? "", Street = address.Street!, House = address.House!, Label = address.Name,
+                ChatId = channel.ChatId, AddressId = address.Id, RegionId = address.RegionId,
+                City = address.City ?? "", Street = address.Street!, House = address.House!,
+                Label = channel.RegionIds().Count > 1
+                    ? $"{address.Name} · {options.CurrentValue.Regions.First(r => r.Id == address.RegionId).Name}"
+                    : address.Name,
                 BatchId = batchId, BudgetCharged = i == 0, Status = AddressCheckStatus.Pending, RequestedAt = now,
             });
             replies[address.Id] = "Перевіряю адресу в ДТЕК. Результат надішлю згодом.";
@@ -270,11 +274,12 @@ public sealed class AddressCheckService(
                 {
                     var groups = entry.GroupIds.Where(id => System.Text.RegularExpressions.Regex.IsMatch(id ?? "", @"^\d{1,2}\.\d{1,2}$"))
                         .Distinct(StringComparer.Ordinal).Take(12).ToArray();
-                    var chats = await db.Channels.Where(c => c.RegionId == street.RegionId && c.Addresses.Any(a =>
-                        (a.City ?? "") == city && a.Street == street.Street && a.House == house)).ToListAsync(ct);
+                    var chats = await db.Channels.Where(c => c.Addresses.Any(a => a.RegionId == street.RegionId
+                        && (a.City ?? "") == city && a.Street == street.Street && a.House == house)).ToListAsync(ct);
                     foreach (var chat in chats)
                     {
-                        foreach (var address in chat.Addresses.Where(a => (a.City ?? "") == city && a.Street == street.Street && a.House == house && a.Groups.Count == 0))
+                        foreach (var address in chat.Addresses.Where(a => a.RegionId == street.RegionId
+                            && (a.City ?? "") == city && a.Street == street.Street && a.House == house && a.Groups.Count == 0))
                             address.Groups.AddRange(groups.Select(id => new ChatAddressGroup { GroupId = id }));
                         chat.MirrorPrimary();
                     }
@@ -293,7 +298,7 @@ public sealed class AddressCheckService(
                 if (check.AddressId is not null)
                 {
                     var saved = await db.ChatAddresses.FirstOrDefaultAsync(a => a.Id == check.AddressId && a.ChatId == check.ChatId, ct);
-                    if (saved is null || (saved.City ?? "") != check.City || saved.Street != check.Street || saved.House != check.House)
+                    if (saved is null || saved.RegionId != check.RegionId || (saved.City ?? "") != check.City || saved.Street != check.Street || saved.House != check.House)
                     {
                         check.Status = AddressCheckStatus.Expired; check.CompletedAt = now;
                         continue;
@@ -325,7 +330,7 @@ public sealed class AddressCheckService(
             foreach (var check in batch)
             {
                 var address = await db.ChatAddresses.FirstOrDefaultAsync(a => a.Id == check.AddressId && a.ChatId == check.ChatId, ct);
-                if (address is null || (address.City ?? "") != check.City
+                if (address is null || address.RegionId != check.RegionId || (address.City ?? "") != check.City
                     || address.Street != check.Street || address.House != check.House) continue;
                 var result = await db.AddressResults.FirstOrDefaultAsync(r => r.RegionId == check.RegionId && r.City == check.City
                     && r.Street == check.Street && r.House == check.House && r.CheckedAt >= check.RequestedAt, ct);

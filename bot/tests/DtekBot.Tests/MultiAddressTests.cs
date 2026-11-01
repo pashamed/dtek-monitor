@@ -290,21 +290,54 @@ public sealed class MultiAddressApiTests : IClassFixture<ApiFactory>
     private static ChatAddressDto Address(string name, string region = "kyiv") => new(0, region, name, null, "Вулиця", "7", [new("45.1")]);
 
     [Fact]
-    public async Task Save_EnforcesCapAndSingleRegion_AndOldSettingsSavePreservesAddresses()
+    public async Task Save_EnforcesCapAndAllowsMixedRegions_AndOldSettingsSavePreservesAddresses()
     {
         var (id, client) = Chat();
         var url = $"/api/chats/{id}/addresses";
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync(url, new SaveAddressesRequest(
             [Address("1"), Address("2"), Address("3"), Address("4")]), ApiJson.Options)).StatusCode);
+        factory.Schedules.Snapshots["kyiv-oblast"] = RealSnapshot();
+        var addresses = new[] { Address("Дім"), Address("Дача", "kyiv-oblast"), Address("Офіс") };
+        (await client.PutAsJsonAsync(url, new SaveAddressesRequest(addresses), ApiJson.Options)).EnsureSuccessStatusCode();
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync(url, new SaveAddressesRequest(
-            [Address("1", "kyiv-oblast")]), ApiJson.Options)).StatusCode);
-        (await client.PutAsJsonAsync(url, new SaveAddressesRequest([Address("Дім"), Address("Офіс")]), ApiJson.Options)).EnsureSuccessStatusCode();
+            [.. addresses, Address("Четверта", "kyiv-oblast")]), ApiJson.Options)).StatusCode);
         var old = new ChatSettingsDto("kyiv", null, true, false, AlertFilter.All, true, true, null);
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/chats/{id}", old with { RegionId = "odesa" }, ApiJson.Options)).StatusCode);
+        (await client.PutAsJsonAsync($"/api/chats/{id}", old with { RegionId = "odesa" }, ApiJson.Options)).EnsureSuccessStatusCode();
         (await client.PutAsJsonAsync($"/api/chats/{id}", old, ApiJson.Options)).EnsureSuccessStatusCode();
         factory.WithDb(db => {
             var channel = db.Channels.Single(c => c.ChatId == id);
-            Assert.Equal(2, channel.Addresses.Count); Assert.Equal("45.1", Assert.Single(channel.GroupIds()));
+            Assert.Equal("kyiv", channel.RegionId);
+            Assert.Equal(addresses.Select(a => (a.Name, a.RegionId)),
+                channel.Addresses.OrderBy(a => a.Id).Select(a => (a.Name, a.RegionId)));
+            Assert.Equal("45.1", Assert.Single(channel.GroupIds()));
+        });
+    }
+
+    [Fact]
+    public async Task LegacyAddressWrites_CannotAddFourthAddressOutsideMainRegion()
+    {
+        var (id, client) = Chat();
+        var addresses = new[] { Address("Дім"), Address("Дача"), Address("Офіс") };
+        (await client.PutAsJsonAsync($"/api/chats/{id}/addresses",
+            new SaveAddressesRequest(addresses), ApiJson.Options)).EnsureSuccessStatusCode();
+        var old = new ChatSettingsDto("odesa", null, true, false, AlertFilter.All, true, true, null,
+            GroupId: "45.1", AddressLabel: "Нова адреса", AddressCity: "м. Одеса");
+        (await client.PutAsJsonAsync($"/api/chats/{id}", old, ApiJson.Options)).EnsureSuccessStatusCode();
+        factory.Schedules.Snapshots["odesa"] = RealSnapshot();
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/chats/{id}/group",
+            new SetGroupRequest("odesa", "45.1"), ApiJson.Options)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/chats/{id}/address/manual",
+            new ManualAddressRequest("odesa", "м. Одеса", "Нова вулиця", "12"), ApiJson.Options)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/chats/{id}/address/dtek",
+            new SetDtekAddressRequest("odesa", "м. Одеса", "Нова вулиця", "12", "45.1"), ApiJson.Options)).StatusCode);
+        factory.WithDb(db =>
+        {
+            var channel = db.Channels.Single(c => c.ChatId == id);
+            Assert.Equal("odesa", channel.RegionId);
+            Assert.Null(channel.GroupId);
+            Assert.Null(channel.AddressLabel);
+            Assert.Equal(addresses.Select(a => (a.Name, a.RegionId)),
+                channel.Addresses.OrderBy(a => a.Id).Select(a => (a.Name, a.RegionId)));
         });
     }
 

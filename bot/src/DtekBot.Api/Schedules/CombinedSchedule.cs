@@ -45,7 +45,7 @@ public static class CombinedSchedule
             });
             sections.Add(heading + "\n\n" + string.Join("\n\n", groups));
         }
-        return string.Join("\n\n", sections);
+        return ScheduleText.LabelRegion(channel, regionName, string.Join("\n\n", sections));
     }
 
     // Long digests use plain text so splitting cannot break HTML tags/entities.

@@ -22,7 +22,18 @@ public sealed class ChatStatusService(
         string? requestedRegionId = null,
         IReadOnlyList<string>? requestedPartIds = null)
     {
-        var regionId = string.IsNullOrWhiteSpace(requestedRegionId) ? channel?.RegionId : requestedRegionId;
+        if (channel is not null && string.IsNullOrWhiteSpace(requestedRegionId) && channel.RegionIds().Count > 1)
+        {
+            var combined = new List<string>();
+            foreach (var id in channel.RegionIds())
+            {
+                var name = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == id)?.Name ?? id;
+                combined.Add($"📍 {name}");
+                combined.AddRange(await BuildAsync(channel.ForRegion(id), ct, id));
+            }
+            return combined;
+        }
+        var regionId = string.IsNullOrWhiteSpace(requestedRegionId) ? channel?.RegionIds().FirstOrDefault() : requestedRegionId;
         var region = string.IsNullOrEmpty(regionId)
             ? null
             : options.CurrentValue.Regions.FirstOrDefault(r => string.Equals(r.Id, regionId, StringComparison.OrdinalIgnoreCase));
@@ -31,8 +42,8 @@ public sealed class ChatStatusService(
             return ["Оберіть регіон, щоб побачити поточний стан."];
         }
 
-        var settingsMatch = channel is not null
-            && string.Equals(channel.RegionId, region.Id, StringComparison.OrdinalIgnoreCase);
+        var settingsMatch = channel is not null && channel.RegionIds().Contains(region.Id, StringComparer.OrdinalIgnoreCase);
+        if (settingsMatch) channel = channel!.ForRegion(region.Id);
         var groupIds = settingsMatch ? channel!.GroupIds() : [];
         var partIds = requestedPartIds ?? (settingsMatch ? channel!.PopupDistrictIds() : []);
         var lines = new List<string>();
@@ -97,6 +108,18 @@ public sealed class ChatStatusService(
             return new(["Підписку ще не налаштовано. Перегляд графіка не потребує підписки."]);
 
         var settings = options.CurrentValue;
+        if (channel.RegionIds().Count > 1)
+        {
+            var combined = new List<string>();
+            foreach (var id in channel.RegionIds())
+            {
+                var name = settings.Regions.FirstOrDefault(r => r.Id == id)?.Name ?? id;
+                combined.Add($"📍 {name}");
+                combined.AddRange((await DiagnosticsAsync(channel.ForRegion(id), ct)).Lines);
+            }
+            return new(combined);
+        }
+        if (channel.Addresses.Count > 0) channel = channel.ForRegion(channel.Addresses[0].RegionId);
         var region = settings.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
         var now = time.GetUtcNow();
         var lines = new List<string>
@@ -178,11 +201,12 @@ public sealed class ChatStatusService(
         }
 
         var deliveries = await db.Deliveries.AsNoTracking()
-            .Where(d => d.ChatId == channel.ChatId && d.TelegramMessageId > 0).Select(d => d.UpdatedAt).ToListAsync(ct);
+            .Where(d => d.ChatId == channel.ChatId && d.TelegramMessageId > 0
+                && (d.RegionId == region.Id || d.RegionId.StartsWith(region.Id + ":group:"))).Select(d => d.UpdatedAt).ToListAsync(ct);
         var posts = await db.SchedulePostThreads.AsNoTracking()
-            .Where(d => d.ChatId == channel.ChatId && d.MessageId > 0).Select(d => d.UpdatedAt).ToListAsync(ct);
+            .Where(d => d.ChatId == channel.ChatId && d.RegionId == region.Id && d.MessageId > 0).Select(d => d.UpdatedAt).ToListAsync(ct);
         var events = await db.ScheduleThreads.AsNoTracking()
-            .Where(d => d.ChatId == channel.ChatId && d.MessageId > 0).Select(d => d.UpdatedAt).ToListAsync(ct);
+            .Where(d => d.ChatId == channel.ChatId && d.RegionId == region.Id && d.MessageId > 0).Select(d => d.UpdatedAt).ToListAsync(ct);
         lines.Add(posts.Count == 0 ? "Збережених успішних публікацій графіка ще немає."
             : $"Остання збережена успішна публікація чи зміна графіка: {KyivTime.Format(posts.Max())}.");
         var last = deliveries.Concat(posts).Concat(events).OrderDescending().FirstOrDefault();

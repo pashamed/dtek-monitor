@@ -304,13 +304,14 @@ public static class SvitlobotApi
                 return Json(NoKey, 400);
             }
 
-            var group = channel.SvitlobotGroup();
+            var target = channel.SvitlobotTarget();
+            var group = target?.GroupId;
             if (string.IsNullOrEmpty(group))
             {
                 return Json(new ApiError("Спершу оберіть чергу для цього чату."), 400);
             }
 
-            var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.HasSchedules && r.Id == channel.RegionId);
+            var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.HasSchedules && r.Id == target!.RegionId);
             if (region is null)
             {
                 return Json(new ApiError("Для регіону цього чату графіки недоступні."), 400);
@@ -408,16 +409,36 @@ public static class SvitlobotApi
             }
 
             var groupId = string.IsNullOrWhiteSpace(request?.GroupId) ? null : request.GroupId.Trim();
-            if (groupId is not null && !channel.GroupIds().Contains(groupId, StringComparer.Ordinal))
+            var regionId = string.IsNullOrWhiteSpace(request?.RegionId) ? null : request.RegionId.Trim();
+            var addressId = request?.AddressId;
+            ChannelGroupTarget? selected = null;
+            if (groupId is not null)
             {
-                return Json(new ApiError($"Черги {groupId} немає серед адрес цього чату."), 400);
+                if (addressId is { } id)
+                {
+                    var address = channel.Addresses.FirstOrDefault(a => a.Id == id
+                        && (regionId is null || a.RegionId == regionId) && a.Groups.Any(g => g.GroupId == groupId));
+                    if (address is not null) selected = new(address.RegionId, groupId, address.Id);
+                }
+                else
+                {
+                    var matches = channel.GroupTargets().Where(t => t.GroupId == groupId
+                        && (regionId is null || t.RegionId == regionId)).ToArray();
+                    selected = matches.Length == 1 ? matches[0]
+                        : regionId is null ? matches.FirstOrDefault(t => t.RegionId == channel.RegionId) : null;
+                }
+                if (selected is null)
+                    return Json(new ApiError($"Оберіть регіон та адресу з чергою {groupId} цього чату."), 400);
             }
 
             channel.SvitlobotGroupId = groupId;
+            channel.SvitlobotRegionId = selected?.RegionId;
+            channel.SvitlobotAddressId = selected?.AddressId;
             await db.SaveChangesAsync(ct);
-            var effective = channel.SvitlobotGroup();
-            return Json(new SvitlobotGroupDto(effective,
-                $"Світлобот тепер отримує графік черги {effective}. Оновимо його під час наступної перевірки."), 200);
+            var effective = channel.SvitlobotTarget();
+            return Json(new SvitlobotGroupDto(effective?.GroupId,
+                $"Світлобот тепер отримує графік черги {effective?.GroupId}. Оновимо його під час наступної перевірки.",
+                effective?.RegionId, effective?.AddressId), 200);
         });
 
         // Removes the schedule in Svitlobot and its message in the Telegram channel.

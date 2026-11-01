@@ -7,7 +7,7 @@ namespace DtekBot.Api.Bot;
 
 // Alerts are posted when the source changes, so a chat that is switched on (or changes its region, districts, group or
 // alert switches) in the middle of an ongoing emergency would otherwise hear nothing until the next change. This runs
-// the same dispatch once for the chat's region and group: chats that already have the alert are left alone, the new one
+// the same dispatch for each address region and group: chats that already have the alert are left alone, the new one
 // gets it. A failure here never fails the save that triggered it.
 public sealed class AlertCatchUp(
     BotDbContext db,
@@ -18,19 +18,19 @@ public sealed class AlertCatchUp(
 {
     public async Task RunAsync(Channel channel, CancellationToken ct)
     {
-        if (!channel.IsActive || channel.IsPaused || string.IsNullOrEmpty(channel.RegionId))
+        if (!channel.IsActive || channel.IsPaused || channel.RegionIds().Count == 0)
         {
             return;
         }
 
-        try
+        foreach (var regionId in channel.RegionIds())
         {
-            await coordinator.RecomputeAsync(channel.RegionId, ct);
-
-            var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == channel.RegionId);
-            if (region is not null)
+            try
             {
-                foreach (var groupId in channel.GroupIds())
+                await coordinator.RecomputeAsync(regionId, ct);
+                var region = options.CurrentValue.Regions.FirstOrDefault(r => r.Id == regionId);
+                if (region is null) continue;
+                foreach (var groupId in channel.ForRegion(regionId).GroupIds())
                 {
                     var group = await db.GroupStates.AsNoTracking()
                         .FirstOrDefaultAsync(g => g.RegionId == region.Id && g.GroupId == groupId, ct);
@@ -40,10 +40,10 @@ public sealed class AlertCatchUp(
                     }
                 }
             }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "Catching up the alerts of chat {ChatId} failed", channel.ChatId);
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Catching up the alerts of chat {ChatId} in {RegionId} failed", channel.ChatId, regionId);
+            }
         }
     }
 }

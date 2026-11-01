@@ -274,6 +274,9 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("SlotSettings")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<long?>("SvitlobotAddressId")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("SvitlobotGroupId")
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
@@ -281,6 +284,10 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("SvitlobotKey")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("SvitlobotRegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
 
                     b.Property<string>("Template")
                         .HasMaxLength(1000)
@@ -567,6 +574,10 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<string>("ContentHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -601,15 +612,10 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("MessageIds")
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("RegionId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.HasKey("ChatId");
+                    b.HasKey("ChatId", "RegionId");
 
                     b.ToTable("SchedulePostThreads");
                 });
@@ -643,6 +649,14 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("RegionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("GroupId")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
                     b.Property<string>("ContentHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -650,11 +664,6 @@ namespace DtekBot.Api.Data.Migrations
 
                     b.Property<long>("EpisodeStart")
                         .HasColumnType("bigint");
-
-                    b.Property<string>("GroupId")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("nvarchar(16)");
 
                     b.Property<string>("ImageKind")
                         .IsRequired()
@@ -677,15 +686,10 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(8)
                         .HasColumnType("nvarchar(8)");
 
-                    b.Property<string>("RegionId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.HasKey("ChatId");
+                    b.HasKey("ChatId", "RegionId", "GroupId");
 
                     b.ToTable("ScheduleThreads");
                 });

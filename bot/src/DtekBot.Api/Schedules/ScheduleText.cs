@@ -13,6 +13,9 @@ public static class ScheduleText
 
     public const string NoOutages = "🟢 Відключень не заплановано";
 
+    public static string LabelRegion(Channel channel, string regionName, string text) =>
+        channel.IsMultiRegion ? $"📍 {System.Net.WebUtility.HtmlEncode(regionName)}\n{text}" : text;
+
     // Only complete calendar days with a known group are comparable. Missing data is not an empty plan.
     public static Dictionary<string, long[][]> PlannedDays(Channel channel, ScheduleSnapshot snapshot, DateTimeOffset now)
     {
