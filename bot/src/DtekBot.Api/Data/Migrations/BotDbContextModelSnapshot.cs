@@ -578,6 +578,10 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("GroupId")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
                     b.Property<string>("ContentHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -587,11 +591,6 @@ namespace DtekBot.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
-
-                    b.Property<string>("GroupId")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("nvarchar(16)");
 
                     b.Property<string>("ImageKind")
                         .IsRequired()
@@ -615,7 +614,7 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.HasKey("ChatId", "RegionId");
+                    b.HasKey("ChatId", "RegionId", "GroupId");
 
                     b.ToTable("SchedulePostThreads");
                 });

@@ -1278,6 +1278,7 @@ function renderEditor(chat) {
         note.className = 'hint' + (st === 'err' ? ' err' : ''); note.textContent = st === 'err' ? msg : st === 'idle' ? msg : '';
         if (st === 'loading' && !text.childNodes.length) { photo.replaceChildren(h('div', { class: 'sk sk-img' })); text.replaceChildren(h('div', { class: 'sk sk-line' }), h('div', { class: 'sk sk-line s' })); }
         if (st !== 'ok') return;
+        wrap.replaceChildren(box);
         photo.replaceChildren();
         if (d.imageUrl && /^(https?:\/\/|\/)/.test(d.imageUrl)) {
           const img = h('img', { src: d.imageUrl, loading: 'lazy', alt: 'Картинка до повідомлення' });
@@ -1285,6 +1286,11 @@ function renderEditor(chat) {
           photo.append(img);
         }
         text.innerHTML = d.html || ''; // pre-validated Telegram HTML from the server, whitelisted tags only
+        for (const message of (d.messages || []).slice(1)) {
+          const extra = tgPreview();
+          extra.set('ok', message);
+          wrap.append(extra.node.querySelector('.tgmsg'));
+        }
       },
     };
   }
@@ -1521,16 +1527,17 @@ function renderEditor(chat) {
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: isPriv ? 'Графік у чаті з ботом' : 'Графік у Telegram-каналі' }), help('schedulePost')),
         h('p', { class: 'hint', text: mixedRegions ? 'Кожен регіон отримує окремий графік. Адресу й чергу для Світлобота оберіть у «Основне».'
-          : isPriv ? 'Усі черги — в одному повідомленні.' : 'Усі черги — в одному дописі. Основну чергу для Світлобота оберіть у «Основне».' }),
+          : 'Формат картинки визначає, чи надсилати черги окремо. Основну чергу для Світлобота оберіть у «Основне».' }),
         sendNow, scheduleSendStatus),
       card(
         h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Публікація графіка' }), help('schedulePost')),
         toggle('Публікувати графік', 'schedulePost', null, {
           disabled: !has,
-          confirm: mixedRegions ? 'Надсилати й оновлювати окремий графік кожного регіону в цьому чаті?' : 'Надсилати й оновлювати спільний графік усіх черг у цьому чаті?',
+          confirm: 'Надсилати й оновлювати графіки обраних черг у цьому чаті?',
         }), lock(),
         h('div', { class: 'fld' }, fieldLabel('Як публікувати', 'postMode'), ...modeSeg('post', () => s.schedulePostMode, v => { s.schedulePostMode = v; }, 'Як публікувати')),
-        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), (s.addresses.length > 1 || (s.addresses[0]?.groups?.length || 0) > 1) ? h('p', { class: 'hint', text: 'Об’єднаний графік надсилаємо текстом.' }) : imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; })),
+        h('div', { class: 'fld' }, fieldLabel('Картинка', 'image'), imgSeg(() => s.schedulePostImage, v => { s.schedulePostImage = v; }),
+          h('p', { class: 'hint', text: 'З картинкою — окремий допис для кожної черги. Без картинки — спільний текст для черг регіону.' })),
         edit('schedule', 'Редагувати шаблон'),
         edit('schedule-line', 'Редагувати рядок графіка'),
         pvx.node),
@@ -1934,13 +1941,14 @@ function renderEditor(chat) {
     testBusy = true; testBtn.disabled = true; testBtn.classList.add('busy'); testOut.replaceChildren();
     const fail = lines => testOut.replaceChildren(...lines.map(t => h('div', { class: 'note err', role: 'alert', text: t })));
     try {
+      const target = ['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id;
       if (!await confirmSetting((isDirty() ? 'Зберегти всі зміни й надіслати тест' : 'Надіслати тест')
-        + ' у «' + channelName + '»?')) return;
+        + ' у «' + channelName + '»?' + (target === 'schedule' && s.schedulePostImage !== 'None'
+          ? '\nБот надішле окремий графік із картинкою для кожної черги.' : ''))) return;
       if (isDirty()) {
         const err = await doSave(true);
         if (err) { fail(err.lines || errorText(err)); return; }
       }
-      const target = ['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id;
       const imageKind = target === 'schedule' || target === 'off' || target === 'on' ? imageKindOf(target) : null;
       await api('POST', `/api/chats/${encodeURIComponent(chat.chatId)}/templates/${encodeURIComponent(target)}/send`,
         { template: target === 'schedule' ? null : customised(x, tpls[id]) ? tpls[id] : null, imageKind });

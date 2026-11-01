@@ -67,6 +67,8 @@ async function openStudio(t, templates = {}) {
     if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/style.css"><div id="app"></div><script type="module" src="/app.js"></script>' });
     if (path === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: source });
     if (path === '/style.css') return route.fulfill({ contentType: 'text/css', body: styles });
+    if (path.startsWith('/preview-image-')) return route.fulfill({ contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64') });
     let data = {};
     if (path === '/api/bootstrap') data = {
       maxTemplateLength: 1000, templateSlots: slots,
@@ -79,6 +81,12 @@ async function openStudio(t, templates = {}) {
       previews.push(body);
       if (failPreview) return route.fulfill({ status: 503, json: { error: 'Сервіс недоступний' } });
       data = { html: 'м. Київ · Черга 45.1<br>Приклад сповіщення', errors: body.template?.includes('{невідомо}') ? ['Невідомий параметр {невідомо}.'] : [] };
+      if (body.slot === 'schedule') {
+        const messages = body.imageKind === 'None'
+          ? [{ html: 'Спільний графік', imageUrl: null }]
+          : [1, 2].map(id => ({ html: `Черга ${id}`, imageUrl: `https://lite.test/preview-image-${body.imageKind}-${id}.png` }));
+        data = { ...data, ...messages[0], messages };
+      }
     } else if (request.method() !== 'GET') {
       writes.push({ path, body: request.postDataJSON() });
       if (path === '/api/chats/-77001') {
@@ -337,5 +345,32 @@ test('structured-only style and backend data chips save without popup or prepare
   assert.equal(saved.includes('{текст}'), false);
   assert.equal(saved.includes('{текст_сайту}'), false);
   assert.equal(f.writes.length, 1);
+  assert.deepEqual(f.errors, []);
+});
+
+test('all schedule image choices remain available for multiple addresses and preview separate posts', async t => {
+  const f = await openStudio(t), { page } = f;
+  await page.locator('#tab-sched').click();
+  const selector = page.getByRole('group', { name: 'Картинка', exact: true });
+  await selector.getByRole('button', { name: 'Таблиця на 2 дні', exact: true }).waitFor();
+  assert.equal(await selector.getByRole('button').count(), 3);
+  await page.locator('.tgphoto img').first().waitFor();
+  assert.equal(await page.locator('.tgmsg:visible').count(), 2);
+  assert.equal(f.writes.length, 0);
+  await selector.getByRole('button', { name: 'Коротка картинка', exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.tgphoto img')].some(img => img.src.includes('Card')));
+  assert.equal(f.previews.at(-1).imageKind, 'Card');
+  assert.equal(f.writes.length, 0);
+  await page.getByRole('button', { name: 'Скасувати', exact: true }).click();
+  await page.locator('#tab-sched').click();
+  assert.equal(await selector.getByRole('button', { name: 'Таблиця на 2 дні', exact: true }).getAttribute('aria-pressed'), 'true');
+  await selector.getByRole('button', { name: 'Без картинки', exact: true }).click();
+  await page.getByText('Спільний графік', { exact: true }).waitFor();
+  assert.equal(await page.locator('.tgphoto img').count(), 0);
+  assert.equal(await page.locator('.tgmsg:visible').count(), 1);
+  await save(page).click();
+  await page.waitForFunction(() => document.querySelector('.savebar button')?.disabled);
+  assert.equal(f.writes.at(-1).body.schedulePostImage, 'None');
+  assert.equal(f.writes.some(w => w.path.endsWith('/send')), false);
   assert.deepEqual(f.errors, []);
 });

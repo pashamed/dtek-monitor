@@ -449,6 +449,7 @@ public static class MiniAppApi
             IOptionsMonitor<DtekSettings> settings,
             TemplatePreviewService previews,
             IScheduleProvider schedules,
+            ScheduleNotifier notifier,
             TimeProvider time,
             CancellationToken ct) =>
         {
@@ -516,14 +517,10 @@ public static class MiniAppApi
                     if (!string.IsNullOrWhiteSpace(headingTemplate))
                         channel.TemplateMap = channel.TemplateMap.Append(new KeyValuePair<string, string>(MessageSlots.ScheduleHeading, headingTemplate))
                             .ToDictionary(p => p.Key, p => p.Value);
-                    var snapshot = await schedules.GetAsync(region.Id, ct);
-                    if (snapshot is null) return Error("Графіки тимчасово недоступні.");
-                    var html = CombinedSchedule.Render(channel, snapshot, region.Name, time.GetUtcNow(), false,
-                        region.DisplayNames(channel.DistrictIds()));
-                    var image = channel.IsCombined() ? null
-                        : ScheduleText.ImageUrl(settings.CurrentValue.Schedules, snapshot.DataFile, channel.GroupIds()[0],
-                            snapshot.Version, request.ImageKind ?? ScheduleImage.Grid);
-                    return Json(new PreviewResponse(html, [], image));
+                    channel.SchedulePostImage = request.ImageKind ?? ScheduleImage.Grid;
+                    var messages = await notifier.PreviewPostsAsync(channel, ct);
+                    if (messages.Count == 0) return Error("Графіки тимчасово недоступні.");
+                    return Json(new PreviewResponse(messages[0].Html, [], messages[0].ImageUrl, messages));
                 }
             }
 
@@ -631,8 +628,14 @@ public static class MiniAppApi
                 return Error("Оберіть регіон.");
             }
 
-            var combined = slot == MessageSlots.Schedule && channel.IsCombined()
-                ? await notifier.PreviewCombinedAsync(channel, ct) : null;
+            IReadOnlyList<PreviewMessageDto>? scheduleMessages = null;
+            if (slot == MessageSlots.Schedule && channel.Addresses.Count > 0)
+            {
+                var target = channel.Copy();
+                target.SchedulePostImage = request?.ImageKind ?? channel.SchedulePostImage;
+                scheduleMessages = await notifier.PreviewPostsAsync(target, ct);
+                if (scheduleMessages.Count == 0) return Error("Графіки тимчасово недоступні.");
+            }
             var rendered = await previews.RenderAsync(
                 slot,
                 template,
@@ -649,8 +652,8 @@ public static class MiniAppApi
 
             try
             {
-                await notifier.SendNewAsync(chatId, "🧪 <b>Тест</b>\n\n" + (combined ?? rendered.Html),
-                    combined is null ? rendered.ImageUrl : null, ct);
+                foreach (var message in scheduleMessages ?? [new PreviewMessageDto(rendered.Html, rendered.ImageUrl)])
+                    await notifier.SendNewAsync(chatId, "🧪 <b>Тест</b>\n\n" + message.Html, message.ImageUrl, ct);
             }
             catch (Telegram.Bot.Exceptions.ApiRequestException ex) when (ex.ErrorCode == 403)
             {

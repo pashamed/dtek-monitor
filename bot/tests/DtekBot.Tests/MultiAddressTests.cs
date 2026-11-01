@@ -164,7 +164,7 @@ public sealed class MultiAddressTests : IDisposable
     public async Task CombinedPost_ModesTrackOneDigestAndSkipUnchanged(PostMode mode)
     {
         var provider = new FakeScheduleProvider(); provider.Snapshots["kyiv"] = RealSnapshot();
-        var channel = f.AddChannel(22, c => { c.GroupId = "45.1"; c.SchedulePost = true; c.SchedulePostMode = mode;
+        var channel = f.AddChannel(22, c => { c.GroupId = "45.1"; c.SchedulePost = true; c.SchedulePostMode = mode; c.SchedulePostImage = ScheduleImage.None;
             c.Addresses = [Address("Дім", "45.1"), Address("Офіс", "2.1")]; });
         var notifier = new ScheduleNotifier(f.Db, f.Bot, provider, f.Options, new TestClock(Kyiv(15, 12)), NullLogger<ScheduleNotifier>.Instance, f.CreateMirror());
         Assert.Equal(1, (await notifier.TickAsync(default)).Sent);
@@ -346,7 +346,7 @@ public sealed class MultiAddressApiTests : IClassFixture<ApiFactory>
     {
         var (id, client) = Chat();
         var request = new PreviewRequest(null, AlertKind.Emergency, "kyiv", null, Slot: MessageSlots.Schedule,
-            Addresses: [Address("Дім <script>"), Address("Офіс")]);
+            Addresses: [Address("Дім <script>"), Address("Офіс")], ImageKind: ScheduleImage.None);
         var response = await client.PostAsJsonAsync("/api/preview", request, ApiJson.Options);
         response.EnsureSuccessStatusCode();
         var preview = await response.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options);
@@ -363,14 +363,19 @@ public sealed class MultiAddressApiTests : IClassFixture<ApiFactory>
             new SaveAddressesRequest(addresses), ApiJson.Options)).EnsureSuccessStatusCode();
         const string heading = "⚡ {header}\n{weekday} {date}";
         const string line = "🕒 {start}  →  {end}";
-        factory.WithDb(db => db.Channels.Single(c => c.ChatId == id).TemplateMap = new Dictionary<string, string>
+        factory.WithDb(db =>
         {
-            [MessageSlots.ScheduleHeading] = heading,
-            [MessageSlots.ScheduleLine] = line,
+            var channel = db.Channels.Single(c => c.ChatId == id);
+            channel.SchedulePostImage = ScheduleImage.None;
+            channel.TemplateMap = new Dictionary<string, string>
+            {
+                [MessageSlots.ScheduleHeading] = heading,
+                [MessageSlots.ScheduleLine] = line,
+            };
         });
         var response = await client.PostAsJsonAsync("/api/preview",
             new PreviewRequest(null, AlertKind.Emergency, "kyiv", null, Slot: MessageSlots.Schedule,
-                Addresses: addresses, ScheduleLineTemplate: line, ScheduleHeadingTemplate: heading), ApiJson.Options);
+                Addresses: addresses, ScheduleLineTemplate: line, ScheduleHeadingTemplate: heading, ImageKind: ScheduleImage.None), ApiJson.Options);
         response.EnsureSuccessStatusCode();
         var preview = (await response.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options))!;
         Assert.Empty(preview.Errors);

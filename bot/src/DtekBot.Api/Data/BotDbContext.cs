@@ -210,7 +210,7 @@ public sealed class ScheduleThread
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
-// Each region keeps its latest daily schedule post for independent edits or replacement.
+// Each regional group keeps its schedule post; an empty group identifies a combined text digest.
 public sealed class SchedulePostThread
 {
     public string? MessageIds { get; set; }
@@ -417,7 +417,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
         modelBuilder.Entity<Channel>().Navigation(x => x.Addresses).AutoInclude();
         modelBuilder.Entity<SchedulePostThread>(e =>
         {
-            e.HasKey(x => new { x.ChatId, x.RegionId });
+            e.HasKey(x => new { x.ChatId, x.RegionId, x.GroupId });
             e.Property(x => x.ChatId).ValueGeneratedNever();
             e.Property(x => x.RegionId).HasMaxLength(64);
             e.Property(x => x.GroupId).HasMaxLength(16);

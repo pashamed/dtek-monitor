@@ -35,6 +35,20 @@ public static class ChannelTargets
         channel.RegionIds().SelectMany(id => channel.ForRegion(id).GroupIds()
             .Select(group => new ChannelGroupTarget(id, group))).ToArray();
 
+    public static Channel ForGroup(this Channel channel, string groupId)
+    {
+        var copy = channel.Copy();
+        copy.Addresses = channel.Addresses.Where(a => a.Groups.Any(g => g.GroupId == groupId))
+            .Select(a => new ChatAddress
+            {
+                Id = a.Id, ChatId = a.ChatId, RegionId = a.RegionId, Name = a.Name,
+                City = a.City, Street = a.Street, House = a.House, Label = a.Label, PartIds = a.PartIds,
+                Groups = a.Groups.Where(g => g.GroupId == groupId).ToList(),
+            }).ToList();
+        copy.GroupId = groupId;
+        return copy;
+    }
+
     public static IReadOnlyList<string> GroupIds(this Channel channel) => channel.Addresses.Count == 0
         ? (string.IsNullOrEmpty(channel.GroupId) ? [] : [channel.GroupId])
         : channel.Addresses.SelectMany(a => a.Groups).Select(g => g.GroupId)

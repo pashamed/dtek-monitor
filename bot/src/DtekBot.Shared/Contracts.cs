@@ -203,7 +203,9 @@ public sealed record PreviewRequest(
     string? ScheduleHeadingTemplate = null);
 
 // ImageUrl is set for slots that come with a picture (the schedule post).
-public sealed record PreviewResponse(string Html, IReadOnlyList<string> Errors, string? ImageUrl = null);
+public sealed record PreviewMessageDto(string Html, string? ImageUrl = null);
+public sealed record PreviewResponse(string Html, IReadOnlyList<string> Errors, string? ImageUrl = null,
+    IReadOnlyList<PreviewMessageDto>? Messages = null);
 
 // Posts the slot's message (the given template, or the chat's current one) into the chat, marked as a test.
 public sealed record SendTestRequest(string? Template, ScheduleImage? ImageKind = null);

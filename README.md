@@ -699,12 +699,20 @@ new address list. Replace the full list through
 field is optional. Blazor remains compatible for general settings, while
 address-list management is available in the lite Mini App.
 
-All groups within a region are published in **one text post** with sections and labels.
+Choose **Table for two days**, **Compact image**, or **No image** under Schedule →
+Publishing → Image. Image modes publish a separate schedule and picture for each
+region/group, including channels with multiple addresses. With no image, all groups
+within a region are published in **one text post** with sections and labels.
 A group shared by several addresses in that region appears once. Different regions
 have independently tracked posts and reminders; mixed-region messages name the region.
 Identical group numbers in different regions are separate subscriptions. Edit, new-message, and
 replace-with-deletion modes are preserved. Long posts are split to fit Telegram
-limits. A single address with one group retains its existing format and image.
+limits. Previews and confirmed test sends show the same separate group posts in
+image modes. Each group post has independent delivery tracking; failed groups retry
+without republishing successful groups. The `GroupScheduleImages` migration expands
+the post key to chat/region/group and preserves existing tracked messages. Back up
+the database before deployment; reverting the migration requires consolidating
+multiple group records per region first.
 There is no building-wide ANY/ALL aggregate: each group is shown separately.
 An advance warning for a shared outage start is sent once for all matching
 groups. Quiet hours mean silent delivery, not delayed delivery.
