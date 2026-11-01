@@ -288,6 +288,14 @@ The lite Mini App combines ready-made styles with a visual editor:
   or unsupported syntax opens here unchanged rather than being silently converted.
   Merely switching modes does not rewrite a saved template.
 
+The editors offer Ukrainian placeholder names only. Bootstrap metadata carries
+both the Ukrainian `name` and English canonical `key`; no duplicate message text
+is needed. Known legacy English tokens display in Ukrainian, while Save, Preview,
+and Send test translate only placeholder tokens (including conditional markers)
+to English keys before calling the API. Literal text, escaped braces and Telegram
+markup are preserved. The API still accepts Ukrainian aliases for older clients;
+storage and rendering use English keys.
+
 The schedule interval editor remains plain text with data chips, without HTML
 formatting. The API still validates and renders every preview using the existing
 slot-specific contract; no new storage format or migration is needed. Previews
@@ -358,6 +366,7 @@ subscriptions or Telegram messages are changed.
   "ConnectionStrings": { "Default": "…" },
   "Database": { "AutoMigrate": false },
   "Bot": { "Token": "…", "WebhookSecret": "…" },
+  "Feedback": { "RecipientChatId": 0 },
   "Ingest": { "Secret": "…" },
   "App": { "PublicUrl": "https://your-host.example" },
   "GitHub": { "Repository": "owner/dtek-monitor", "DispatchToken": "…" }
@@ -365,6 +374,8 @@ subscriptions or Telegram messages are changed.
 ```
 
 Use `AutoMigrate: true` only for initial setup and updates requiring database migrations. **The `ResetApplicationData` migration deletes all application data**: connected chats and administrators, addresses, schedules, Svitlobot keys, and check state. Tables and migration history remain. This is irreversible; back up the database before applying it. Hosting configuration secrets are outside the database and are not deleted. `App:PublicUrl` is the site's HTTPS URL, used for the “Редактор” menu button and the button under the greeting.
+
+Set `Feedback:RecipientChatId` to the positive numeric Telegram user ID that should receive Mini App feedback; `0` disables delivery until configured. The recipient must open the bot and send `/start` before feedback can be delivered. Feedback includes the submitted text and the app/UI versions, and is sent only after the user explicitly submits the form. Requests require valid Mini App authentication, are limited to three per user per minute, and accept at most 2,000 characters. The recipient ID is configuration only and is not stored in the database.
 
 **District recognition in DTEK notices.** The shared bot interprets nonempty public popups **LLM first in the API**, for both direct collection and browser ingestion. Its forced `submit_popup_interpretation` function takes only machine-readable arguments: state kinds (`emergency`, `accident`, `stabilization`, `cancelled`), explicit scope, and district IDs from `dtek-settings.json`. It is an internal model tool, not a public HTTP/MCP endpoint. The standalone monitor is unchanged.
 

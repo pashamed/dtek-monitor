@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
@@ -41,6 +42,60 @@ public static class MiniAppApi
         });
 
         api.MapSvitlobotApi();
+
+        api.MapPost("/feedback", async (
+            HttpContext http,
+            IConfiguration configuration,
+            ITelegramBotClient bot,
+            FeedbackRateLimiter limiter,
+            TimeProvider time,
+            ILogger<FeedbackRequest> logger,
+            CancellationToken ct) =>
+        {
+            FeedbackRequest? request;
+            try
+            {
+                request = await http.Request.ReadFromJsonAsync<FeedbackRequest>(ApiJson.Options, ct);
+            }
+            catch (JsonException)
+            {
+                return Results.Json(new ApiError("Перевірте текст відгуку та повторіть спробу."), ApiJson.Options, statusCode: 400);
+            }
+
+            var text = request?.Text?.Trim();
+            if (string.IsNullOrEmpty(text))
+                return Results.Json(new ApiError("Напишіть відгук, перш ніж надсилати."), ApiJson.Options, statusCode: 400);
+            if (text.Length > FeedbackMaxLength)
+                return Results.Json(new ApiError($"Відгук має містити не більше {FeedbackMaxLength} символів."), ApiJson.Options, statusCode: 400);
+
+            var appVersion = FeedbackVersion(request?.AppVersion);
+            var uiVersion = FeedbackVersion(request?.UiVersion);
+            if (appVersion is null || uiVersion is null)
+                return Results.Json(new ApiError("Не вдалося визначити версії застосунку. Оновіть сторінку."), ApiJson.Options, statusCode: 400);
+
+            if (!long.TryParse(configuration["Feedback:RecipientChatId"], out var recipientChatId) || recipientChatId <= 0)
+                return Results.Json(new ApiError("Надсилання відгуків тимчасово недоступне."), ApiJson.Options, statusCode: 503);
+
+            var now = time.GetUtcNow();
+            if (limiter.IsLimited(UserId(http), now))
+                return Results.Json(new ApiError("Забагато відгуків. Спробуйте за хвилину."), ApiJson.Options, statusCode: 429);
+
+            var message = $"Mini App feedback\nApp: {appVersion}\nUI: {uiVersion}\n\n{text}";
+            try
+            {
+                await bot.SendMessage(recipientChatId, message, cancellationToken: ct);
+                return Results.NoContent();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                logger.LogWarning("Mini App feedback delivery failed.");
+                return Results.Json(new ApiError("Відгук поки не можна надіслати. Адміністратор має відкрити бота й натиснути /start."), ApiJson.Options, statusCode: 502);
+            }
+        });
 
         api.MapPut("/chats/{chatId:long}/addresses", async (
             long chatId, HttpContext http, BotDbContext db, ChatAccessService access,
@@ -1513,6 +1568,17 @@ public static class MiniAppApi
 
     private static long UserId(HttpContext http) => (long)http.Items[UserIdKey]!;
 
+    private const int FeedbackMaxLength = 2000;
+
+    private static string? FeedbackVersion(string? value)
+    {
+        var version = value?.Trim();
+        return version is { Length: > 0 and <= 32 }
+            && version.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or '+')
+                ? version
+                : null;
+    }
+
     private static IResult Json<T>(T value) => Results.Json(value, ApiJson.Options);
 
     private static IResult Error(string message) => Results.Json(new ApiError(message), ApiJson.Options, statusCode: 400);
@@ -1561,6 +1627,8 @@ public static class MiniAppApi
             c.SvitlobotAddressId);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
+
+    public sealed record FeedbackRequest(string? Text, string? AppVersion, string? UiVersion);
 
     // The older single template counts as the customised text of every alert slot that has none of its own.
     private static Dictionary<string, string> MergedTemplates(Channel c)

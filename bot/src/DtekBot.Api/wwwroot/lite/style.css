@@ -275,6 +275,11 @@ textarea{min-height:170px;resize:vertical;font-family:ui-monospace,Menlo,Consola
 .pd,.rd2{flex:none;width:8px;height:8px;border-radius:50%}
 .pd{background:var(--purple);box-shadow:0 0 8px var(--purple)}
 .rd2{background:var(--red);box-shadow:0 0 8px var(--red)}
+.feedback-footer{position:relative;z-index:1;display:flex;flex-direction:column;gap:10px;max-width:480px;margin:0 auto}
+.feedback-toggle{align-self:center}
+.feedback-form{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--glass)}
+.feedback-form textarea{min-height:100px;resize:vertical;font-family:var(--font)}
+.feedback-status.ok{color:var(--green)}
 .studio textarea{min-height:92px}
 #panel-msg .card{gap:8px;padding:12px 14px}
 #panel-msg .slotbar{margin:0 -14px;padding:0 14px 6px}

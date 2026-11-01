@@ -33,6 +33,7 @@ builder.Services.AddDbContext<BotDbContext>(o =>
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<BackgroundStatus>();
+builder.Services.AddSingleton<FeedbackRateLimiter>();
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IYasnoClient, YasnoClient>(client =>
 {

@@ -103,6 +103,11 @@ const entityText = text => text.replace(/&(amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi,
   return area.value;
 });
 
+function translateTemplate(text, names) {
+  return (text || '').replace(/{{|}}|{([#/]?)([^{}]*)}/g, (token, prefix, name) =>
+    name === undefined ? token : '{' + prefix + (names.get(name) || name) + '}');
+}
+
 function templateStyles(slot) {
   const token = key => {
     const p = slot.placeholders.find(p => (p.key || p.name) === key);
@@ -210,6 +215,47 @@ function show(...nodes) {
 
 function versionFooter() {
   return h('footer', { class: 'ui-version', text: 'Версія застосунку: ' + APP_VERSION + ' · Версія інтерфейсу: ' + UI_VERSION });
+}
+
+function feedbackFooter() {
+  const toggle = h('button', { type: 'button', class: 'btn ghost sm feedback-toggle', text: 'Надіслати відгук', 'aria-expanded': 'false' });
+  const text = h('textarea', { id: 'feedback-text', name: 'text', maxlength: 2000, rows: 4, required: true,
+    placeholder: 'Що можна покращити?', 'aria-label': 'Текст відгуку' });
+  const submit = h('button', { type: 'submit', class: 'btn', text: 'Надіслати' });
+  const status = h('p', { class: 'msg feedback-status', role: 'status', 'aria-live': 'polite' });
+  const form = h('form', { class: 'feedback-form', hidden: true },
+    h('p', { class: 'hint', text: 'Відгук надішлеться лише після натискання кнопки.' }),
+    h('label', { class: 'fld', for: 'feedback-text' }, h('span', { text: 'Ваш відгук' }), text),
+    submit, status);
+  toggle.addEventListener('click', () => {
+    form.hidden = !form.hidden;
+    toggle.setAttribute('aria-expanded', String(!form.hidden));
+    if (!form.hidden) text.focus();
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const message = text.value.trim();
+    if (!message) {
+      status.textContent = 'Напишіть відгук, перш ніж надсилати.';
+      return;
+    }
+
+    submit.disabled = true;
+    status.classList.remove('ok');
+    status.textContent = 'Надсилаємо відгук…';
+    try {
+      await api('POST', '/api/feedback', { text: message, appVersion: APP_VERSION, uiVersion: UI_VERSION });
+      text.value = '';
+      status.classList.add('ok');
+      status.textContent = 'Відгук надіслано. Дякуємо!';
+      haptic('success');
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  return h('section', { class: 'feedback-footer' }, toggle, form);
 }
 
 async function api(method, path, body) {
@@ -541,12 +587,17 @@ function renderList(note, errNote) {
         h('li', { text: 'Оберіть регіон і адресу.' })),
       h('div', { class: 'or', text: 'Або вставте посилання t.me чи @імʼя публічного каналу' }),
       h('div', { class: 'linkrow' }, input, btn), msg),
-    versionFooter());
+    versionFooter(), feedbackFooter());
 }
 
 // ---------- chat editor ----------
 function renderEditor(chat) {
   const { boot } = state;
+  const placeholders = [...(boot.placeholders || []), ...(boot.templateSlots || []).flatMap(x => x.placeholders || [])];
+  const displayNames = new Map(placeholders.filter(p => p.key).map(p => [p.key, p.name]));
+  const canonicalNames = new Map(placeholders.filter(p => p.key).map(p => [p.name, p.key]));
+  const displayTemplate = text => translateTemplate(text, displayNames);
+  const canonicalTemplate = text => translateTemplate(text, canonicalNames);
   const isPriv = !!chat.isPrivate;
   const slots = (boot.templateSlots || []).filter(x => x.id !== 'off' && x.id !== 'on');
   const hiddenEventTemplates = Object.fromEntries(
@@ -574,7 +625,7 @@ function renderEditor(chat) {
     tab = savedPosition?.chatId === String(chat.chatId) && TABS.some(([id]) => id === savedPosition.tab) ? savedPosition.tab : 'main',
     uid = 0, cs = slots.length ? slots[0].id : null;
   // Per-slot editor state: current text (the default text when not customised), errors from preview / from the server.
-  const tpls = Object.fromEntries(slots.map(x => [x.id, (chat.settings.templates || {})[x.id] || x.defaultTemplate]));
+  const tpls = Object.fromEntries(slots.map(x => [x.id, displayTemplate((chat.settings.templates || {})[x.id] || x.defaultTemplate)]));
   const perr = {}, serr = {};
 
   const scheduleAddressOf = () => s.addresses.find(a => a.regionId === s.regionId && regionOf(a.regionId)?.hasSchedules && a.groups?.length)
@@ -594,7 +645,8 @@ function renderEditor(chat) {
       regionId: src.regionId || null, partIds: partIdsOf(src), isActive: !!src.isActive, isPaused: !!src.isPaused,
       addresses: src.regionId ? src.addresses.map(a => ({ ...a, label: [a.city, a.street, a.house].filter(Boolean).join(', ') || a.label || null })) : null,
       slotSettings, notifyOnEnd: slotSettings.ended.enabled, editInPlace: slotSettings.emergency.editInPlace, // the two mirror the old fields for older servers
-      outageTrigger: !!src.outageTrigger, outageTriggerPattern: (src.outageTriggerPattern || '').trim() || null, templates,
+      outageTrigger: !!src.outageTrigger, outageTriggerPattern: (src.outageTriggerPattern || '').trim() || null,
+      templates: Object.fromEntries(Object.entries(templates).map(([id, text]) => [id, canonicalTemplate(text)])),
       scheduleNotify: !!src.scheduleNotify, scheduleImage: src.scheduleImage || 'None', scheduleEventMode: src.scheduleEventMode || 'Edit',
       scheduleReminder: !!src.scheduleReminder, scheduleReminderMinutes: Number(src.scheduleReminderMinutes) || 15,
       schedulePost: !!src.schedulePost, schedulePostMode: src.schedulePostMode || 'New', schedulePostImage: src.schedulePostImage || 'Grid',
@@ -605,7 +657,7 @@ function renderEditor(chat) {
   };
 
   const cur = () => form(s, tplMap(id => tpls[id]));
-  let base = JSON.stringify(form(s, tplMap(id => (chat.settings.templates || {})[id])));
+  let base = JSON.stringify(form(s, tplMap(id => displayTemplate((chat.settings.templates || {})[id]))));
   const isDirty = () => JSON.stringify(cur()) !== base;
   const slotErrs = id => [...(perr[id] || []), ...(serr[id] || [])];
   const blocking = () => Object.values(perr).some(a => a && a.length);
@@ -1297,13 +1349,13 @@ function renderEditor(chat) {
   const imageKindOf = id => id === 'schedule' ? s.schedulePostImage : 'None';
   const previewBody = id => ({
     slot: ['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id,
-    template: ['schedule-heading', 'schedule-line'].includes(id) ? null : customised(slotOf(id), tpls[id]) ? tpls[id] : null,
+    template: ['schedule-heading', 'schedule-line'].includes(id) ? null : customised(slotOf(id), tpls[id]) ? canonicalTemplate(tpls[id]) : null,
     regionId: ['schedule', 'schedule-heading', 'schedule-line'].includes(id) ? scheduleRegionOf() : s.regionId,
     partIds: ['schedule', 'schedule-heading', 'schedule-line'].includes(id) && scheduleRegionOf() !== s.regionId ? [] : partIdsOf(s),
     addresses: s.addresses, groupId: groupOf(), kind: KIND_OF[id] || 'Emergency',
     imageKind: imageKindOf(['schedule-heading', 'schedule-line'].includes(id) ? 'schedule' : id),
-    scheduleLineTemplate: tpls['schedule-line'] || null,
-    scheduleHeadingTemplate: tpls['schedule-heading'] || null,
+    scheduleLineTemplate: tpls['schedule-line'] ? canonicalTemplate(tpls['schedule-line']) : null,
+    scheduleHeadingTemplate: tpls['schedule-heading'] ? canonicalTemplate(tpls['schedule-heading']) : null,
   });
 
   // ----- tab: Графік -----
@@ -1951,7 +2003,7 @@ function renderEditor(chat) {
       }
       const imageKind = target === 'schedule' || target === 'off' || target === 'on' ? imageKindOf(target) : null;
       await api('POST', `/api/chats/${encodeURIComponent(chat.chatId)}/templates/${encodeURIComponent(target)}/send`,
-        { template: target === 'schedule' ? null : customised(x, tpls[id]) ? tpls[id] : null, imageKind });
+        { template: target === 'schedule' ? null : customised(x, tpls[id]) ? canonicalTemplate(tpls[id]) : null, imageKind });
       haptic('success');
       testOut.replaceChildren(h('div', { class: 'toast ok', role: 'status', text: 'Надіслано ✓' }));
       setTimeout(() => testOut && testOut.querySelector('.toast') && testOut.replaceChildren(), 4000);
@@ -2021,7 +2073,7 @@ function renderEditor(chat) {
   show(h('div', { class: 'ed' },
     h('header', { class: 'topbar glass' }, back, h('h1', { class: 'tt', text: chatTitle(chat) }), topPill),
     h('nav', { class: 'tabs glass', role: 'tablist', 'aria-label': 'Розділи налаштувань' }, tabBtns),
-    TABS.map(([id]) => panels[id]), versionFooter(), bar));
+    TABS.map(([id]) => panels[id]), versionFooter(), feedbackFooter(), bar));
   refreshAll();
   setTab(tab);
   window.scrollTo(0, 0);

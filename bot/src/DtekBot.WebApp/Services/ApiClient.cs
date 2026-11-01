@@ -22,7 +22,11 @@ public sealed class ApiClient(HttpClient http, TelegramService telegram)
         SendAsync<ChatSummaryDto>(HttpMethod.Post, "api/chats/link", new LinkChatRequest(chat));
 
     public Task<ApiResult<ChatSummaryDto>> SaveChatAsync(long chatId, ChatSettingsDto settings) =>
-        SendAsync<ChatSummaryDto>(HttpMethod.Put, $"api/chats/{chatId}", settings);
+        SendAsync<ChatSummaryDto>(HttpMethod.Put, $"api/chats/{chatId}", settings with
+        {
+            Template = settings.Template is null ? null : PlaceholderNames.ToCanonical(settings.Template),
+            Templates = settings.Templates?.ToDictionary(p => p.Key, p => PlaceholderNames.ToCanonical(p.Value)),
+        });
 
     private async Task<ApiResult<T>> SendAsync<T>(HttpMethod method, string url, object? body = null)
     {

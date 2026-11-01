@@ -82,7 +82,7 @@
 
     // Only called when Validate returned no errors, so the result is safe for MarkupString.
     private string PreviewHtml() => MessageTemplate.RenderPreviewHtml(
-        Value,
+        PlaceholderNames.ToCanonical(Value),
         _kind,
         Region?.Name ?? "Регіон",
         Part is null ? [] : [Part.Name],

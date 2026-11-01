@@ -151,8 +151,8 @@ test('read-only viewer, saved diagnostics and opt-in presets preserve subscripti
     await page.getByRole('button', { name: 'Зберегти', exact: true }).click();
     await page.getByText('Збережено ✓', { exact: true }).waitFor();
     const compact = writes.slice(count).find(w => w.path === '/api/chats/-123').body;
-    assert.equal(compact.templates.emergency, '{значок} {заголовок}\n{місце}\n{текст}');
-    assert.equal(compact.templates['before-off'], '⏳ Планове відключення о {час} (через {хвилин} хв)');
+    assert.equal(compact.templates.emergency, '{emoji} {title}\n{where}\n{message}');
+    assert.equal(compact.templates['before-off'], '⏳ Планове відключення о {time} (через {minutes} хв)');
     assert.equal(compact.templates['schedule-heading'], 'Власний графік');
     assert.equal(compact.isActive, false);
     assert.equal(compact.isPaused, true);

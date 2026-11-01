@@ -13,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Requests;
 using Telegram.Bot.Types.Enums;
+using Microsoft.Extensions.Configuration;
 using static DtekBot.Tests.ScheduleFixtures;
 using ChatFullInfo = Telegram.Bot.Types.ChatFullInfo;
 
@@ -123,6 +124,9 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
             && channel.AddressStreet == "вул. Дерибасівська")));
     }
 
+    private void SetFeedbackRecipient(string? chatId) =>
+        _factory.Services.GetRequiredService<IConfiguration>()["Feedback:RecipientChatId"] = chatId;
+
     // ================= authorization =================
 
     [Fact]
@@ -158,6 +162,140 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         var (_, client) = NewUser();
 
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/bootstrap")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Feedback_RequiresAuthorizedMiniAppRequest()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = "Feedback",
+            appVersion = "1.2.3",
+            uiVersion = "0123456789abcdef",
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(_factory.Bot.Sent);
+    }
+
+    [Fact]
+    public async Task Feedback_SubmitSendsTextAndVersionsToConfiguredRecipient()
+    {
+        SetFeedbackRecipient("123456789");
+        var (_, client) = NewUser();
+        const string text = "The schedule preview is clear.";
+
+        var response = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text,
+            appVersion = "3.2.1",
+            uiVersion = "0123456789abcdef",
+        });
+
+        Assert.True(response.StatusCode == HttpStatusCode.NoContent, await response.Content.ReadAsStringAsync());
+        var sent = Assert.Single(_factory.Bot.SentTo(123456789));
+        Assert.Contains("App: 3.2.1", sent.Text);
+        Assert.Contains("UI: 0123456789abcdef", sent.Text);
+        Assert.Contains(text, sent.Text);
+    }
+
+    [Fact]
+    public async Task Feedback_RejectsEmptyOversizedAndMalformedVersion()
+    {
+        SetFeedbackRecipient("123456789");
+        var (_, client) = NewUser();
+
+        var empty = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = "  ",
+            appVersion = "3.2.1",
+            uiVersion = "0123456789abcdef",
+        });
+        var oversized = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = new string('x', 2001),
+            appVersion = "3.2.1",
+            uiVersion = "0123456789abcdef",
+        });
+        var invalidVersion = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = "Feedback",
+            appVersion = "3.2.1",
+            uiVersion = "invalid/version",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
+        Assert.Equal("Напишіть відгук, перш ніж надсилати.", (await empty.ReadAsync<ApiError>())!.Error);
+        Assert.Equal(HttpStatusCode.BadRequest, oversized.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidVersion.StatusCode);
+        Assert.Empty(_factory.Bot.Sent);
+    }
+
+    [Fact]
+    public async Task Feedback_RequiresConfiguredRecipient()
+    {
+        SetFeedbackRecipient("0");
+        var (_, client) = NewUser();
+
+        var response = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = "Feedback",
+            appVersion = "3.2.1",
+            uiVersion = "0123456789abcdef",
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("Надсилання відгуків тимчасово недоступне.", (await response.ReadAsync<ApiError>())!.Error);
+        Assert.Empty(_factory.Bot.Sent);
+    }
+
+    [Fact]
+    public async Task Feedback_TelegramDeliveryFailureReturnsExplicitError()
+    {
+        SetFeedbackRecipient("123456789");
+        _factory.Bot.Failure = _ => FakeTelegramBotClient.Forbidden();
+        var (_, client) = NewUser();
+
+        var response = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = "Feedback",
+            appVersion = "3.2.1",
+            uiVersion = "0123456789abcdef",
+        });
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("/start", (await response.ReadAsync<ApiError>())!.Error);
+        Assert.Single(_factory.Bot.SentTo(123456789));
+    }
+
+    [Fact]
+    public async Task Feedback_IsRateLimitedPerTelegramUser()
+    {
+        SetFeedbackRecipient("123456789");
+        var (_, client) = NewUser();
+        for (var i = 0; i < 3; i++)
+        {
+            var accepted = await client.PostAsJsonAsync("/api/feedback", new
+            {
+                text = $"Feedback {i}",
+                appVersion = "3.2.1",
+                uiVersion = "0123456789abcdef",
+            });
+            Assert.Equal(HttpStatusCode.NoContent, accepted.StatusCode);
+        }
+
+        var limited = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            text = "Feedback 4",
+            appVersion = "3.2.1",
+            uiVersion = "0123456789abcdef",
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Equal("Забагато відгуків. Спробуйте за хвилину.", (await limited.ReadAsync<ApiError>())!.Error);
+        Assert.Equal(3, _factory.Bot.SentTo(123456789).Count());
     }
 
     // ================= bootstrap =================

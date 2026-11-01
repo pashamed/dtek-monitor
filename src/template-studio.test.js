@@ -32,6 +32,11 @@ const slots = [
     placeholders: [placeholder('group', 'черга', '45.1'), placeholder('time', 'час', '14:00'),
       placeholder('minutes', 'хвилин', '15'), placeholder('region', 'регіон', 'м. Київ')] },
 ];
+const names = slots.flatMap(s => s.placeholders);
+const canonical = text => text.replace(/{{|}}|{([#/]?)([^{}]*)}/g, (token, marker, name) =>
+  name === undefined ? token : '{' + marker + (names.find(p => p.name === name)?.key || name) + '}');
+const display = text => text.replace(/{{|}}|{([#/]?)([^{}]*)}/g, (token, marker, name) =>
+  name === undefined ? token : '{' + marker + (names.find(p => p.key === name)?.name || name) + '}');
 
 async function openStudio(t, templates = {}) {
   const [source, styles] = await Promise.all([
@@ -107,7 +112,7 @@ const visual = page => page.locator('.visual-template');
 const raw = page => page.locator('#tpl');
 const save = page => page.getByRole('button', { name: 'Зберегти', exact: true });
 async function waitTemplate(f, expected) {
-  await f.page.waitForRequest(request => request.url().endsWith('/api/preview') && request.postDataJSON().template === expected);
+  await f.page.waitForRequest(request => request.url().endsWith('/api/preview') && request.postDataJSON().template === canonical(expected));
 }
 
 test('ready-made styles are drafts; mode changes, Cancel and Save do not send', async t => {
@@ -139,7 +144,7 @@ test('ready-made styles are drafts; mode changes, Cancel and Save do not send', 
   await page.getByRole('button', { name: 'Стиль: Короткий' }).click();
   await save(page).click();
   await page.getByText('Збережено', { exact: false }).waitFor();
-  assert.equal(f.chat().settings.templates.emergency, '{значок} {текст}');
+  assert.equal(f.chat().settings.templates.emergency, '{emoji} {message}');
   assert.equal(f.chat().settings.addresses.length, 2);
   assert.deepEqual(f.previews.at(-1).addresses.map(a => a.regionId), ['kyiv', 'kyiv-oblast']);
   assert.equal(f.writes.length, 1);
@@ -148,12 +153,14 @@ test('ready-made styles are drafts; mode changes, Cancel and Save do not send', 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
-test('visual tokens preserve aliases, conditional blocks and formatting without rewriting on view', async t => {
-  const source = '<strong>{emoji}</strong> {текст}{#address}\n<b>{address}</b>{/address}\n{{буквально}} &amp; &lt;текст&gt;\n<a href="{site}">ДТЕК</a>';
+test('legacy aliases display in Ukrainian and retain formatting with English API keys', async t => {
+  const source = '<strong>{emoji}</strong> {текст}{#address}\n<b>{address}</b>{/address}\n{{message}} {{текст}} message &amp; &lt;текст&gt;\n<a href="{site}">ДТЕК</a>';
   const f = await openStudio(t, { emergency: source, local: 'Незмінний {message}' }), { page } = f;
   await visual(page).waitFor();
   await mode(page, 'Розширений');
-  assert.equal(await raw(page).inputValue(), source);
+  assert.equal(await raw(page).inputValue(), display(source));
+  const visibleTokens = await page.locator('.template-editor .ph code, .template-editor .chips .chip span').allTextContents();
+  assert.equal(visibleTokens.some(token => /{[#/]?[a-z]/i.test(token)), false);
   await mode(page, 'Налаштувати');
   assert.equal(await save(page).isDisabled(), true);
   const expected = source + '!';
@@ -164,11 +171,13 @@ test('visual tokens preserve aliases, conditional blocks and formatting without 
   await request;
   await mode(page, 'Розширений');
   const edited = await raw(page).inputValue();
-  assert.equal(edited, expected);
+  assert.equal(edited, display(expected));
   await save(page).click();
   await page.getByText('Збережено', { exact: false }).waitFor();
   assert.equal(f.chat().settings.templates.local, 'Незмінний {message}');
-  assert.equal(f.chat().settings.templates.emergency, expected);
+  assert.equal(f.chat().settings.templates.emergency, canonical(expected));
+  assert.equal(f.previews.at(-1).template, canonical(expected));
+  assert.equal(f.writes.at(-1).body.templates.emergency, canonical(expected));
   assert.deepEqual(f.errors, []);
 });
 
@@ -288,7 +297,7 @@ test('schedule parts keep their contract; visual length limit, newlines and prev
   await page.getByText('Текст задовгий. Скоротіть його; останню зміну скасовано.', { exact: true }).waitFor();
   assert.equal(await raw(page).inputValue(), '{початок}–{кінець}\nТекст\n\nЩе');
   assert.equal(f.previews.some(p => p.slot === 'schedule-heading' || p.slot === 'schedule-line'), false);
-  assert.equal(f.previews.at(-1).scheduleHeadingTemplate.includes('{#адреса}'), true);
+  assert.equal(f.previews.at(-1).scheduleHeadingTemplate.includes('{#address}'), true);
   f.failPreview(true);
   await mode(page, 'Розширений');
   await page.getByText(/Не вдалося отримати попередній перегляд: Сервіс недоступний/).waitFor();
@@ -307,7 +316,7 @@ test('Send test names its destination and confirms saving drafts; all other edit
   await mode(page, 'Надіслати тест у канал');
   await page.getByText('Надіслано ✓', { exact: true }).waitFor();
   assert.deepEqual(f.writes.map(w => w.path), ['/api/chats/-77001', '/api/chats/-77001/templates/emergency/send']);
-  assert.equal(f.writes[1].body.template, '{значок} {текст}');
+  assert.equal(f.writes[1].body.template, '{emoji} {message}');
   assert.deepEqual(f.errors, []);
 });
 
@@ -340,7 +349,7 @@ test('structured-only style and backend data chips save without popup or prepare
   await save(page).click();
   await page.getByText('Збережено', { exact: false }).waitFor();
   const saved = f.chat().settings.templates.emergency;
-  for (const token of ['{регіон}', '{місто}', '{черга}', '{статус}', '{код_статусу}', '{код_регіону}'])
+  for (const token of ['{region}', '{city}', '{group}', '{status}', '{statusCode}', '{regionId}'])
     assert.equal(saved.includes(token), true);
   assert.equal(saved.includes('{текст}'), false);
   assert.equal(saved.includes('{текст_сайту}'), false);

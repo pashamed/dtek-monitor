@@ -169,17 +169,20 @@
         _deletePreviousAlert = s.DeletePreviousAlert ?? false;
         _notifyOnEnd = s.NotifyOnEnd;
         _editInPlace = s.EditInPlace;
-        _template = s.Templates?.GetValueOrDefault("emergency")
-            ?? (string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template);
-        _errors = MessageTemplate.Validate(_template);
+        _template = PlaceholderNames.ToDisplay(s.Templates?.GetValueOrDefault("emergency")
+            ?? (string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template));
+        _errors = ValidateTemplate(_template);
     }
 
     private void OnTemplateChanged(string value)
     {
         _template = value;
-        _errors = MessageTemplate.Validate(value);
+        _errors = ValidateTemplate(value);
         _saved = false;
     }
+
+    private static IReadOnlyList<string> ValidateTemplate(string value) =>
+        MessageTemplate.Validate(PlaceholderNames.ToCanonical(value)).Select(PlaceholderNames.ToDisplay).ToList();
 
     private async Task SaveAsync()
     {
@@ -195,8 +198,8 @@
 
         var template = string.IsNullOrWhiteSpace(_template) || _template == Bootstrap.DefaultTemplate ? null : _template;
         var current = Chat.Settings;
-        var initialTemplate = current.Templates?.GetValueOrDefault("emergency")
-            ?? (string.IsNullOrWhiteSpace(current.Template) ? Bootstrap.DefaultTemplate : current.Template);
+        var initialTemplate = PlaceholderNames.ToDisplay(current.Templates?.GetValueOrDefault("emergency")
+            ?? (string.IsNullOrWhiteSpace(current.Template) ? Bootstrap.DefaultTemplate : current.Template));
         var templates = current.Templates is null ? null : new Dictionary<string, string>(current.Templates);
         if (_template != initialTemplate && templates is not null)
         {
