@@ -106,8 +106,10 @@ public sealed class MonitoringCycleTests
         Assert.Single(factory.WithDb(db => db.RegionStates.ToArray()));
         Assert.Single(factory.WithDb(db => db.GridStates.ToArray()));
         Assert.Single(factory.WithDb(db => db.GroupStates.ToArray()));
-        Assert.Equal(2, factory.Bot.SentTo(123).Count());
-        Assert.Contains("ДТЕК", factory.Bot.SentTo(123).First().Text); // No intermediate Ukrenergo-only post.
+        Assert.Contains("ДТЕК", Assert.Single(factory.Bot.SentTo(123)).Text); // No intermediate Ukrenergo-only or redundant group post.
+        var delivery = Assert.Single(factory.WithDb(db => db.Deliveries.ToArray()));
+        Assert.Equal("kyiv", delivery.RegionId);
+        Assert.Equal("[]", delivery.EmergencyPartsJson);
     }
 
     [Fact]

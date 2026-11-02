@@ -409,6 +409,9 @@ namespace DtekBot.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("EmergencyPartsJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<bool>("IsClosed")
                         .HasColumnType("bit");
 

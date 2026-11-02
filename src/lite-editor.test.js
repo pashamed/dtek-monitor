@@ -646,7 +646,7 @@ test('svitlobot main group buttons pick one group of a multi-address channel', a
     ];
     const chat = {
       chatId: -100777, title: 'Канал', isPrivate: false,
-      settings: { regionId: 'kyiv', groupId: '45.1', isActive: true, addresses, partIds: [], templates: {}, hasSvitlobotKey: true, svitlobotGroupId: '45.1' },
+      settings: { regionId: 'kyiv', groupId: '45.1', isActive: true, addresses, partIds: [], templates: {}, hasSvitlobotKey: false, svitlobotGroupId: '45.1' },
     };
     await page.addInitScript(() => {
       window.Telegram = { WebApp: { initData: 'test', ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick() {} } } };
@@ -668,12 +668,36 @@ test('svitlobot main group buttons pick one group of a multi-address channel', a
       else if (path === '/api/chats') data = [chat];
       else if (path === '/api/schedules/groups') data = [{ id: '45.1', name: '45.1' }, { id: '2.2', name: '2.2' }];
       else if (path === '/api/preview') data = { html: 'Приклад', errors: [] };
+      else if (path.endsWith('/svitlobot/key')) data = { hasKey: true };
       else if (path.endsWith('/svitlobot/group')) data = { groupId: '45.1', regionId: 'kyiv-oblast', addressId: 2,
         message: 'Світлобот тепер отримує графік черги 45.1. Оновимо його під час наступної перевірки.' };
       await route.fulfill({ json: data });
     });
     await page.goto('https://lite.test/');
     const card = page.locator('#svb');
+    await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).waitFor();
+    assert.equal(writes.length, 0);
+    await page.getByRole('tab', { name: 'Графік', exact: true }).click();
+    await page.getByRole('button', { name: 'Налаштувати Світлобот і ключ каналу', exact: true }).click();
+    assert.equal(await page.getByRole('tab', { name: 'Основне', exact: true }).getAttribute('aria-selected'), 'true');
+    await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).fill('test-svitlobot-key');
+    await card.getByRole('button', { name: 'Зберегти ключ', exact: true }).click();
+    await card.getByText('Ключ каналу підключено', { exact: true }).waitFor();
+    assert.deepEqual(writes, [{ method: 'PUT', path: '/api/chats/-100777/svitlobot/key', body: { key: 'test-svitlobot-key' } }]);
+    writes.length = 0;
+    await card.getByRole('button', { name: 'Змінити ключ', exact: true }).click();
+    assert.equal(await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).inputValue(), '');
+    await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).fill('cancelled-new-key');
+    await card.getByRole('button', { name: 'Скасувати зміну ключа', exact: true }).click();
+    assert.equal(await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).count(), 0);
+    assert.equal(writes.length, 0);
+    await card.getByRole('button', { name: 'Змінити ключ', exact: true }).click();
+    assert.equal(await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).inputValue(), '');
+    await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).fill('replacement-synthetic-key');
+    await card.getByRole('button', { name: 'Зберегти новий ключ', exact: true }).click();
+    await card.getByLabel('Ключ каналу (channel_key)', { exact: true }).waitFor({ state: 'detached' });
+    assert.deepEqual(writes, [{ method: 'PUT', path: '/api/chats/-100777/svitlobot/key', body: { key: 'replacement-synthetic-key' } }]);
+    writes.length = 0;
     await card.getByText('Київ · Черга 45.1 · Дім', { exact: true }).waitFor();
     await card.getByText('Київська область · Черга 45.1 · Офіс · під’їзд 2', { exact: true }).waitFor();
     assert.equal(await card.getByText('Основна', { exact: true }).count(), 1);

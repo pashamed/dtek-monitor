@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using DtekBot.Api.Data;
 using DtekBot.Api.Parsing;
 using DtekBot.Api.Settings;
@@ -90,7 +91,7 @@ public sealed class AlertDispatcher(
                 var text = Render(channel, region, kind, PartNames(region, resolved), popupText, now, source: source, affectedPartIds: resolved.PartIds);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, slot, region.Id, delivery, text, RenderHash(channel, resolved.Hash, text), now, ct),
+                    () => SendRegionalAsync(channel, region, resolved, slot, delivery, text, now, ct),
                     ct);
             }
             else if (regionWideFallback is { IsAlert: true } fallback
@@ -107,8 +108,7 @@ public sealed class AlertDispatcher(
                     source: AlertSource.Ukrenergo, affectedPartIds: fallback.PartIds);
                 outcome = await TrySendAsync(
                     channel,
-                    () => SendOrEditAsync(channel, fallbackSlot, region.Id, delivery, text,
-                        RenderHash(channel, fallback.Hash, text), now, ct),
+                    () => SendRegionalAsync(channel, region, fallback, fallbackSlot, delivery, text, now, ct),
                     ct);
             }
             else if (delivery is not null && resolved.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
@@ -121,7 +121,8 @@ public sealed class AlertDispatcher(
             {
                 // A switched-off alert type closes its open thread silently.
                 var announce = !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
-                    && !(resolved.IsAlert && !slotOn);
+                    && !(resolved.IsAlert && !slotOn)
+                    && !await HasCoveredGroupEmergencyAsync(channel, region, delivery, ct);
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
@@ -180,6 +181,9 @@ public sealed class AlertDispatcher(
         var openDeliveries = await db.Deliveries
             .Where(d => d.RegionId == key && !d.IsClosed)
             .ToListAsync(ct);
+        var regionalDeliveries = await db.Deliveries.AsNoTracking()
+            .Where(d => d.RegionId == region.Id && !d.IsClosed && d.EmergencyPartsJson != null)
+            .ToDictionaryAsync(d => d.ChatId, ct);
 
         // Chats that dropped this group or unsubscribed: close silently.
         var chatIds = channels.Select(c => c.ChatId).ToHashSet();
@@ -193,6 +197,20 @@ public sealed class AlertDispatcher(
         foreach (var channel in channels)
         {
             var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
+            var covered = regionalDeliveries.TryGetValue(channel.ChatId, out var regional)
+                && CoversGroup(channel, region, groupId, regional);
+            if (isEmergency && covered)
+            {
+                if (delivery is not null)
+                {
+                    delivery.IsClosed = true;
+                    delivery.UpdatedAt = now;
+                    closed++;
+                }
+                logger.LogInformation("Chat {ChatId}: group {Region}/{Group} emergency is covered by regional message {MessageId}",
+                    channel.ChatId, region.Id, groupId, regional!.TelegramMessageId);
+                continue;
+            }
             Outcome outcome;
             if (isEmergency && !channel.IsPaused && channel.SlotEnabled(MessageSlots.Local))
             {
@@ -205,7 +223,7 @@ public sealed class AlertDispatcher(
             else if (delivery is not null)
             {
                 var announce = !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
-                    && !(isEmergency && !channel.SlotEnabled(MessageSlots.Local));
+                    && !(isEmergency && !channel.SlotEnabled(MessageSlots.Local)) && !covered;
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
@@ -236,6 +254,46 @@ public sealed class AlertDispatcher(
 
         await db.SaveChangesAsync(ct);
         return new DispatchSummary(sent, edited, closed, failed);
+    }
+
+    private async Task<Outcome> SendRegionalAsync(Channel channel, RegionSettings region, PopupClassification result,
+        string slot, Delivery? delivery, string text, DateTimeOffset now, CancellationToken ct)
+    {
+        var outcome = await SendOrEditAsync(channel, slot, region.Id, delivery, text,
+            RenderHash(channel, result.Hash, text), now, ct);
+        var stored = delivery ?? db.Deliveries.Local.Single(d =>
+            d.ChatId == channel.ChatId && d.RegionId == region.Id && !d.IsClosed);
+        stored.EmergencyPartsJson = result.Kind == PopupKind.Emergency
+            ? JsonSerializer.Serialize(result.PartIds.Count == 0 ? [] : PopupInterpretation.Expand(region, result.PartIds).ToArray())
+            : null;
+        return outcome;
+    }
+
+    private static bool CoversGroup(Channel channel, RegionSettings region, string groupId, Delivery delivery)
+    {
+        if (delivery.TelegramMessageId <= 0 || delivery.EmergencyPartsJson is null) return false;
+        var coverage = JsonSerializer.Deserialize<string[]>(delivery.EmergencyPartsJson);
+        if (coverage is null) return false;
+        if (coverage.Length == 0) return true;
+        var addresses = channel.Addresses.Where(a => a.Groups.Any(g => g.GroupId == groupId)).ToArray();
+        IEnumerable<IReadOnlyList<string>> scopes = addresses.Length == 0 ? [channel.PartIdList]
+            : addresses.Select(a => (IReadOnlyList<string>)(a.PartIds?.Split(',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? channel.PartIdList.ToArray()));
+        return scopes.All(scope => scope.Count > 0 && PopupInterpretation.Expand(region, scope)
+            .Where(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Children is not { Count: > 0 })
+            .All(id => coverage.Contains(id, StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private async Task<bool> HasCoveredGroupEmergencyAsync(Channel channel, RegionSettings region, Delivery delivery, CancellationToken ct)
+    {
+        var covered = channel.GroupIds().Where(id => CoversGroup(channel, region, id, delivery)).ToArray();
+        if (covered.Length == 0) return false;
+        var states = await db.GroupStates.AsNoTracking().Where(s => s.RegionId == region.Id
+            && covered.Contains(s.GroupId)).ToListAsync(ct);
+        if (states.Any(s => s.Today == GroupStatuses.Emergency)) return true;
+        var known = states.Select(s => s.GroupId).ToHashSet(StringComparer.Ordinal);
+        var keys = covered.Where(id => !known.Contains(id)).Select(id => GroupDeliveryKey(region.Id, id)).ToArray();
+        return await db.Deliveries.AnyAsync(d => d.ChatId == channel.ChatId && !d.IsClosed && keys.Contains(d.RegionId), ct);
     }
 
     private async Task<Outcome> SendOrEditAsync(

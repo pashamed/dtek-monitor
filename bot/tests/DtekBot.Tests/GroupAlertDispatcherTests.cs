@@ -298,11 +298,11 @@ public sealed class GroupAlertDispatcherTests : IDisposable
     // ---- coexistence with region-wide deliveries ----
 
     [Fact]
-    public async Task GroupAndRegionWideThreads_CoexistForTheSameChat()
+    public async Task GroupAndRegionalAccidentThreads_CoexistForTheSameChat()
     {
         _f.AddChannel(ChatA, c => c.GroupId = Group);
 
-        var regionWide = await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var regionWide = await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
         var group = await GroupAsync(emergency: true);
 
         Assert.Equal(new(1, 0, 0, 0), regionWide);
@@ -320,11 +320,11 @@ public sealed class GroupAlertDispatcherTests : IDisposable
     public async Task RepeatingEitherAlert_StaysANoOp_WhenBothThreadsAreOpen()
     {
         _f.AddChannel(ChatA, c => c.GroupId = Group);
-        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
         await GroupAsync(emergency: true);
         var requests = _f.Bot.Requests.Count;
 
-        var regionWide = await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var regionWide = await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
         var group = await GroupAsync(emergency: true);
 
         Assert.Equal(new(0, 0, 0, 0), regionWide);
@@ -337,7 +337,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
     public async Task EndingTheGroupAlert_LeavesTheRegionWideThreadOpen()
     {
         _f.AddChannel(ChatA, c => c.GroupId = Group);
-        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
         await GroupAsync(emergency: true);
         var groupDelivery = AllDeliveries(ChatA).Single(d => d.RegionId == _key);
 
@@ -354,7 +354,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
     public async Task EndingTheRegionWideAlert_LeavesTheGroupThreadOpen()
     {
         _f.AddChannel(ChatA, c => c.GroupId = Group);
-        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        await _f.DispatchAsync(DispatcherFixture.AccidentRightBankText);
         await GroupAsync(emergency: true);
         var regionDelivery = AllDeliveries(ChatA).Single(d => d.RegionId == "kyiv");
 

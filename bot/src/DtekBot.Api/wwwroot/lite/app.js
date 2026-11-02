@@ -1388,7 +1388,7 @@ function renderEditor(chat) {
   const imgSeg = (get, set) => seg([['Grid', 'Таблиця на 2 дні'], ['Card', 'Коротка картинка'], ['None', 'Без картинки']], get, v => { set(v); touch(); loadPv(); }, 'Картинка');
 
   // ----- Світлобот (channels only) -----
-  const svb = { hasKey: !!chat.settings.hasSvitlobotKey, busy: '', msg: null, scrollMsg: false };
+  const svb = { hasKey: !!chat.settings.hasSvitlobotKey, editingKey: false, busy: '', msg: null, scrollMsg: false };
   const svbNode = isPriv ? null : h('section', { class: 'card glass', id: 'svb' });
   const keyIn = h('input', { type: 'password', id: 'svbKey', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: 'channel_key', 'aria-label': 'Ключ каналу (channel_key)' });
   keyIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); svbConnect(); } });
@@ -1418,6 +1418,7 @@ function renderEditor(chat) {
     svbRun('key', async () => {
       const d = await api('PUT', svbBase() + '/key', { key });
       keyIn.value = '';
+      svb.editingKey = false;
       return {
         ...d,
         message: groupOf()
@@ -1468,12 +1469,16 @@ function renderEditor(chat) {
     const head = h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Світлобот' }), help('svb'));
     const msg = svb.msg ? h('div', { class: 'toast ' + (svb.msg.kind === 'ok' ? 'ok' : 'err'), role: svb.msg.kind === 'ok' ? 'status' : 'alert', text: svb.msg.text }) : null;
     keyIn.disabled = busy;
+    const keyEntry = () => h('div', { class: 'svb-key-entry' },
+      h('div', { class: 'fld' }, fieldLabel('Ключ каналу', 'svbKey', 'svbKey'), keyIn),
+      btn('key', 'primary', svb.hasKey ? 'Зберегти новий ключ' : 'Зберегти ключ', svbConnect),
+      svb.hasKey ? btn('cancel-key', 'ghost sm', 'Скасувати зміну ключа', () => {
+        keyIn.value = ''; svb.editingKey = false; svbPaint();
+      }) : null);
     let body;
     if (!svb.hasKey) {
       body = [
-        h('div', { class: 'svb-key-entry' },
-          h('div', { class: 'fld' }, fieldLabel('Ключ каналу', 'svbKey', 'svbKey'), keyIn),
-          btn('key', 'primary', 'Зберегти ключ', svbConnect)),
+        keyEntry(),
         h('p', { class: 'hint', text: 'Ключ потрібен, щоб бот регулярно перевіряв нові графіки та передавав тижневий розклад у Світлобот. Знайдіть channel_key у налаштуваннях потрібного каналу в Світлоботі.' }),
       ];
     } else {
@@ -1497,8 +1502,12 @@ function renderEditor(chat) {
             ? h('span', { class: 'chip green', text: 'Основна' })
             : btn('group:' + g.key, 'ghost sm', 'Зробити основною', () => svbSetGroup(g)))) : []),
         h('div', { class: 'svb-key-actions' },
+          btn('change-key', 'ghost sm', 'Змінити ключ', () => {
+            svb.editingKey = true; svbPaint(); keyIn.focus();
+          }),
           btn('check', 'ghost sm', 'Перевірити ключ', svbCheck),
           btn('forget', 'ghost sm', 'Забути ключ', svbForget)),
+        svb.editingKey ? keyEntry() : null,
       ];
     }
     svbNode.replaceChildren(...[head, msg, ...body].filter(Boolean));
@@ -1550,8 +1559,14 @@ function renderEditor(chat) {
     }
     const r = regionOf(scheduleRegionOf());
     const mixedRegions = new Set(s.addresses.map(a => a.regionId)).size > 1;
+    const svbLink = () => isPriv ? null : h('button', { type: 'button', class: 'btn ghost sm',
+      text: 'Налаштувати Світлобот і ключ каналу', onclick: () => {
+        setTab('main');
+        svbNode.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (!svb.hasKey) keyIn.focus({ preventScroll: true });
+      } });
     const viewer = card(scheduleViewerButton(scheduleRegionOf(), groupOf()),
-      h('p', { class: 'hint', text: 'Будь-який регіон і черга. Збереження налаштувань не потрібне.' }));
+      h('p', { class: 'hint', text: 'Будь-який регіон і черга. Збереження налаштувань не потрібне.' }), svbLink());
     if (!r || !r.hasSchedules) {
       pvSeq++; pv.key = '';
       panels.sched.replaceChildren(viewer, empty(r ? 'Графіки відключень для цього регіону поки недоступні.' : 'Для налаштування публікацій оберіть регіон на вкладці «Основне».', r ? null : 'main'));

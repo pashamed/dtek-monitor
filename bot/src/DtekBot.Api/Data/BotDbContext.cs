@@ -370,6 +370,8 @@ public sealed class Delivery
     public int TelegramMessageId { get; set; }
     public string ContentHash { get; set; } = "";
     public bool IsClosed { get; set; }
+    // Null means no emergency coverage; [] covers the region, otherwise these are delivered district IDs.
+    public string? EmergencyPartsJson { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
