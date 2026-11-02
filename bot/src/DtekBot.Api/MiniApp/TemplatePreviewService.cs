@@ -1,4 +1,5 @@
 using DtekBot.Api.Schedules;
+using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
 using DtekBot.Api.Settings;
 using DtekBot.Shared;
@@ -40,6 +41,7 @@ public sealed class TemplatePreviewService(
         var now = time.GetUtcNow();
         var values = MessageSlots.Samples(slot).ToDictionary(p => p.Key, p => p.Value);
         string? imageUrl = null;
+        var source = slot == MessageSlots.Local ? AlertSource.Yasno : AlertSource.Dtek;
         var context = channel?.ForRegion(region.Id) ?? new Channel { RegionId = region.Id, GroupId = groupId, AddressLabel = address };
 
         if (MessageSlots.IsAlert(slot))
@@ -54,6 +56,7 @@ public sealed class TemplatePreviewService(
             {
                 values[pair.Key] = pair.Value;
             }
+            values["message"] = AlertSourceText.Tag(values["message"], source);
             var matching = context.Addresses.Where(a =>
             {
                 if (slot == MessageSlots.Local) return a.Groups.Any(g => g.GroupId == (groupId ?? "45.1"));
@@ -119,6 +122,7 @@ public sealed class TemplatePreviewService(
         }
 
         var html = MessageTemplate.Render(template, values, definition.DefaultTemplate);
+        if (MessageSlots.IsAlert(slot)) html = AlertSourceText.EnsureAttribution(html, source);
         return new RenderedTemplate(html, imageUrl);
     }
 }

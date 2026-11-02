@@ -25,18 +25,18 @@ public sealed class OutageAssessmentService(
 
         var state = await db.RegionStates.FirstOrDefaultAsync(s => s.RegionId == channel.RegionId, ct);
         var wanted = channel.PopupDistrictIds();
-        var classified = state?.Classification().Resolve(wanted);
-        var dtekAlert = classified?.IsAlert == true;
+        var observed = state?.Classification();
+        var classified = observed?.Resolve(wanted);
+        var grid = await db.GridStates.AsNoTracking().FirstOrDefaultAsync(g => g.RegionId == channel.RegionId, ct);
+        var gridEmergency = grid is { IsAlert: true }
+            && !(region is not null && observed?.ExplicitlyClears(region, wanted) == true);
+        var dtekAlert = classified?.IsAlert == true && !(classified.Kind == PopupKind.Unknown && gridEmergency);
 
         // A popup that names districts only concerns them; "in other districts the schedules apply".
         IReadOnlyList<string> named = dtekAlert ? classified!.PartIds : [];
         var districtScoped = named.Count > 0;
         var mine = wanted.Where(p => named.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
         var regionalEmergency = dtekAlert && !districtScoped;
-
-        // Ukrenergo reports emergencies earlier than the DTEK site, and explains an outage just as well.
-        var grid = await db.GridStates.AsNoTracking().FirstOrDefaultAsync(g => g.RegionId == channel.RegionId, ct);
-        var gridEmergency = grid is { IsAlert: true };
 
         // 0. The chat's own district is under emergency outages: the schedule does not apply there, the DTEK site
         // is not asked, and the user is told so.
@@ -76,17 +76,20 @@ public sealed class OutageAssessmentService(
             foreach (var address in regionAddresses)
             {
                 var parts = address.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? scoped.PartIdList;
-                var classified = state?.Classification().Resolve(parts);
-                var dtek = classified?.IsAlert == true;
+                var observed = state?.Classification();
+                var classified = observed?.Resolve(parts);
+                var gridEmergency = grid?.IsAlert == true
+                    && !(region is not null && observed?.ExplicitlyClears(region, parts) == true);
+                var dtek = classified?.IsAlert == true && !(classified.Kind == PopupKind.Unknown && gridEmergency);
                 var named = classified?.PartIds ?? [];
                 var district = dtek && named.Count > 0 && named.Intersect(parts, StringComparer.OrdinalIgnoreCase).Any();
-                var general = dtek && named.Count == 0 || grid?.IsAlert == true;
+                var general = dtek && named.Count == 0 || gridEmergency;
                 var off = address.Groups.Where(g => snapshot?.StatusAt(g.GroupId, time.GetUtcNow())?.IsOff == true).Select(g => g.GroupId).ToArray();
                 var emergency = address.Groups.Where(g => emergencies.Any(e => e.GroupId == g.GroupId && e.IsEmergency)).Select(g => g.GroupId).ToArray();
-                if (district) answers[address.Id] = "Екстрені відключення в районі. Графік не діє.";
-                else if (general) answers[address.Id] = "Екстрені відключення в регіоні. Графік може не діяти.";
+                if (district) answers[address.Id] = "Екстрені відключення в районі (за даними ДТЕК). Графік не діє.";
+                else if (general) answers[address.Id] = $"Екстрені відключення в регіоні (за даними {(dtek ? "ДТЕК" : "Укренерго")}). Графік може не діяти.";
                 else if (off.Length > 0) answers[address.Id] = $"Відключення за графіком: {string.Join(", ", off)}.";
-                else if (emergency.Length > 0) answers[address.Id] = $"Екстрені відключення черги {string.Join(", ", emergency)}.";
+                else if (emergency.Length > 0) answers[address.Id] = $"Екстрені відключення черги {string.Join(", ", emergency)} (за даними Yasno).";
                 else needed.Add(address);
             }
         }

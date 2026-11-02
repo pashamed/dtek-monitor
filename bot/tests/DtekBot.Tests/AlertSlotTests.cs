@@ -299,7 +299,7 @@ public sealed class AlertSlotTests : IDisposable
 
         await GroupAsync(emergency: true);
 
-        Assert.Equal("L 45.1|вул. А &amp; Б|м. Київ", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal("L 45.1|вул. А &amp; Б|м. Київ\n\n(за даними Yasno)", Assert.Single(_f.Bot.Sent).Text);
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public sealed class AlertSlotTests : IDisposable
         await GroupAsync(emergency: false);
 
         var reply = _f.Bot.Sent.Last();
-        Assert.Equal("END м. Київ", reply.Text);
+        Assert.Equal("END м. Київ\n\n(за даними Yasno)", reply.Text);
         Assert.NotNull(reply.ReplyParameters);
     }
 
@@ -326,7 +326,7 @@ public sealed class AlertSlotTests : IDisposable
 
         await GroupAsync(emergency: true);
 
-        Assert.Equal("LEG 45.1", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal("LEG 45.1\n\n(за даними Yasno)", Assert.Single(_f.Bot.Sent).Text);
     }
 
     [Fact]
@@ -341,7 +341,7 @@ public sealed class AlertSlotTests : IDisposable
 
         await GroupAsync(emergency: true);
 
-        Assert.Equal("LOC 45.1", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal("LOC 45.1\n\n(за даними Yasno)", Assert.Single(_f.Bot.Sent).Text);
     }
 
     [Fact]

@@ -58,7 +58,7 @@ public sealed class PopupRoutingTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task MixedNotice_ClosesLeftBankWithSchedulesWording_UnlessUkrenergoStillActive(bool gridActive)
+    public async Task MixedNotice_ClosesLeftBankWithSchedulesWording_EvenWhenUkrenergoStillActive(bool gridActive)
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateClient();
@@ -76,15 +76,13 @@ public sealed class PopupRoutingTests
         {
             var chat = region.Parts.FindIndex(p => p.Id == id) + 1;
             var delivery = factory.WithDb(db => db.Deliveries.Single(d => d.ChatId == chat));
-            Assert.Equal(!gridActive, delivery.IsClosed);
-            if (!gridActive)
-            {
-                var end = factory.Bot.SentTo(chat).Last().Text;
-                Assert.Contains("графік", end, StringComparison.OrdinalIgnoreCase);
-                Assert.DoesNotContain("відновлено електропостачання", end, StringComparison.OrdinalIgnoreCase);
-            }
+            Assert.True(delivery.IsClosed);
+            var end = factory.Bot.SentTo(chat).Last().Text;
+            Assert.Contains("графік", end, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("(за даними ДТЕК)", end);
+            Assert.DoesNotContain("відновлено електропостачання", end, StringComparison.OrdinalIgnoreCase);
         }
-        Assert.Equal(gridActive ? 11 : 8, factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed)));
+        Assert.Equal(8, factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed)));
     }
 
     [Fact]

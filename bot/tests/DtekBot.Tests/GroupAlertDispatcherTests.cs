@@ -271,7 +271,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         await GroupAsync(emergency: true);
 
         var request = Assert.Single(_f.Bot.Sent);
-        Assert.Equal("<b>м. Київ (черга 45.1)</b>", request.Text);
+        Assert.Equal("<b>м. Київ (черга 45.1)</b>\n\n(за даними Yasno)", request.Text);
         Assert.Equal(ParseMode.Html, request.ParseMode);
     }
 

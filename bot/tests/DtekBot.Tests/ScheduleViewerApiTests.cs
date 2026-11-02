@@ -261,6 +261,27 @@ public sealed class ScheduleViewerApiTests
     }
 
     [Fact]
+    public async Task Viewer_ExplicitDtekStabilization_SuppressesConflictingGridWarning()
+    {
+        using var api = new ApiFactory();
+        api.Clock.Now = Kyiv(15, 12);
+        api.Schedules.Snapshots["kyiv"] = RealSnapshot(api.Clock.Now);
+        using var client = api.ClientFor(123);
+        api.WithDb(db =>
+        {
+            db.RegionStates.Add(new RegionState { RegionId = "kyiv", Kind = PopupKind.Stabilization, ObservedAt = api.Clock.Now });
+            db.GridStates.Add(new GridState
+            {
+                RegionId = "kyiv", Status = GridStatuses.EmergencyOutages, FeedGeneratedAt = api.Clock.Now,
+            });
+        });
+
+        var view = (await client.GetFromJsonAsync<ScheduleViewDto>(View))!;
+        Assert.DoesNotContain(view.Warnings!, w => w.Contains("Укренерго"));
+        AssertNoDelivery(api);
+    }
+
+    [Fact]
     public async Task Viewer_YasnoWarning_IsScopedToSelectedGroup()
     {
         using var api = new ApiFactory();

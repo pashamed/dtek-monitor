@@ -168,6 +168,41 @@ public sealed class OutageAssessmentServiceTests : IDisposable
     // ---- region-wide popup ----
 
     [Theory]
+    [InlineData(PopupKind.Stabilization, true)]
+    [InlineData(PopupKind.Cancelled, true)]
+    [InlineData(PopupKind.None, false)]
+    [InlineData(PopupKind.Unknown, false)]
+    public async Task ExplicitDtekClearance_OverridesGridEmergencyInAddressAssessment(PopupKind kind, bool cleared)
+    {
+        StoreRegionState(kind);
+        _f.Db.GridStates.Add(new() { RegionId = "kyiv", Status = "emergency_outages", UpdatedAt = _clock.Now });
+        await _f.Db.SaveChangesAsync();
+        var text = await AssessAsync(AddChannel());
+
+        if (cleared) Assert.Equal(StabilizationAt12, text);
+        else Assert.Contains("Укренерго повідомляє", text);
+        Assert.Equal(0, CheckRows());
+    }
+
+    [Theory]
+    [InlineData("darnytskyi", true)]
+    [InlineData("holosiivskyi", false)]
+    public async Task DistrictClearance_OverridesGridOnlyForCoveredAddresses(string part, bool cleared)
+    {
+        _f.Db.RegionStates.Add(new()
+        {
+            RegionId = "kyiv", Kind = PopupKind.Stabilization, PartIdList = ["darnytskyi"],
+            Hash = "stabilization", ObservedAt = _clock.Now, UpdatedAt = _clock.Now,
+        });
+        _f.Db.GridStates.Add(new() { RegionId = "kyiv", Status = "emergency_outages", UpdatedAt = _clock.Now });
+        await _f.Db.SaveChangesAsync();
+
+        var text = await AssessAsync(AddChannel(c => c.PartIdList = [part]));
+        if (cleared) Assert.Equal(StabilizationAt12, text);
+        else Assert.Contains("Укренерго повідомляє", text);
+    }
+
+    [Theory]
     [InlineData(PopupKind.Emergency)]
     [InlineData(PopupKind.Accident)]
     [InlineData(PopupKind.Unknown)]

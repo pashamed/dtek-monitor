@@ -96,7 +96,7 @@ public sealed class StructuredTemplateTests
         Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
         var result = await preview.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options);
         Assert.Empty(result!.Errors);
-        Assert.Equal("м. Київ · Київ · 45.1, 45.2\nЕкстрені відключення (Emergency)", result.Html);
+        Assert.Equal("м. Київ · Київ · 45.1, 45.2\nЕкстрені відключення (Emergency)\n\n(за даними ДТЕК)", result.Html);
         Assert.Empty(api.Bot.Sent);
     }
 
@@ -107,7 +107,7 @@ public sealed class StructuredTemplateTests
         var service = new TemplatePreviewService(f.Options, new FakeScheduleProvider(), f.Clock);
         var rendered = await service.RenderAsync(MessageSlots.Emergency, Fields, f.Kyiv, [], null, null,
             ScheduleImage.None, null, default);
-        Assert.Equal("kyiv|м. Київ|||Екстрені відключення|Emergency", rendered.Html);
+        Assert.Equal("kyiv|м. Київ|||Екстрені відключення|Emergency\n\n(за даними ДТЕК)", rendered.Html);
     }
 
     [Fact]
@@ -159,6 +159,8 @@ public sealed class StructuredTemplateTests
         var service = new TemplatePreviewService(f.Options, new FakeScheduleProvider(), f.Clock);
         var rendered = await service.RenderAsync(slot, Fields, f.Kyiv, ["holosiivskyi"], "45.1", null,
             ScheduleImage.None, null, default, channel: channel);
-        Assert.Equal($"kyiv|м. Київ|Київ|45.1|{status}|{code}", rendered.Html);
+        var source = slot == MessageSlots.Local ? "Yasno" : "ДТЕК";
+        var attribution = MessageSlots.IsAlert(slot) ? $"\n\n(за даними {source})" : "";
+        Assert.Equal($"kyiv|м. Київ|Київ|45.1|{status}|{code}{attribution}", rendered.Html);
     }
 }

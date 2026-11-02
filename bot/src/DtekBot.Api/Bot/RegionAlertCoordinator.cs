@@ -8,9 +8,8 @@ using Microsoft.Extensions.Options;
 
 namespace DtekBot.Api.Bot;
 
-// The one place that decides what a region's alert is. DTEK popup text and districts take priority;
-// Ukrenergo is the region-wide fallback and can keep an alert open after the popup clears.
-// Both /ingest and the grid tick call RecomputeAsync, so an alert ends only after both sources clear.
+// Explicit DTEK statuses take priority for their territory. Ukrenergo covers unresolved areas;
+// an absent or unparsed popup cannot override an active grid alert.
 public sealed class RegionAlertCoordinator(
     BotDbContext db,
     AlertDispatcher dispatcher,
@@ -43,24 +42,13 @@ public sealed class RegionAlertCoordinator(
             logger.LogInformation(
                 "Region {Region}: dtek={DtekKind} grid={GridStatus}", region.Id, dtek.Kind, grid?.Status ?? "none");
 
-            if (dtek.IsAlert)
-            {
-                // Narrowing to districts must not end a region-wide Ukrenergo alert for chats outside them.
-                var gridFallback = gridActive ? GridClassification(grid!) : null;
-                return await dispatcher.DispatchAsync(
-                    region, dtek, state?.PopupText, ct, AlertSource.Dtek, regionWideActive: gridActive,
-                    regionWideFallback: gridFallback,
-                    regionWideFallbackText: gridActive ? GridPopupText(grid!) : null);
-            }
-
-            if (gridActive)
-            {
-                var synthetic = GridClassification(grid!);
-                return await dispatcher.DispatchAsync(
-                    region, synthetic, GridPopupText(grid!), ct, AlertSource.Ukrenergo, regionWideActive: true);
-            }
-
-            return await dispatcher.DispatchAsync(region, dtek, state?.PopupText, ct);
+            var fallback = gridActive ? GridFallback(region, dtek, grid!) : null;
+            var source = dtek.Kind != PopupKind.None || (grid is null && state is not null) ? AlertSource.Dtek
+                : grid is not null ? AlertSource.Ukrenergo : AlertSource.None;
+            return await dispatcher.DispatchAsync(
+                region, dtek, state?.PopupText, ct, source, regionWideActive: fallback is not null,
+                regionWideFallback: fallback,
+                regionWideFallbackText: fallback is not null ? GridPopupText(grid!) : null);
         }
         finally
         {
@@ -83,6 +71,20 @@ public sealed class RegionAlertCoordinator(
     // The hash only depends on the status, so a refreshed "since" never edits the message again.
     public static PopupClassification GridClassification(GridState grid) =>
         new(grid.Kind, [], grid.Title ?? "", $"grid:{grid.Status}");
+
+    private static PopupClassification? GridFallback(RegionSettings region, PopupClassification dtek, GridState grid)
+    {
+        var fallback = GridClassification(grid);
+        var cleared = dtek.ExplicitClearanceParts(region);
+        if (cleared.Count == 0) return fallback;
+        var remaining = region.Parts.Where(p => p.Children.Count == 0 && !cleared.Contains(p.Id))
+            .Select(p => p.Id).ToArray();
+        return remaining.Length == 0 ? null : fallback with
+        {
+            PartIds = remaining,
+            Hash = $"{fallback.Hash}:districts:{string.Join(",", remaining)}",
+        };
+    }
 
     public static string GridPopupText(GridState grid)
     {

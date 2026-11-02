@@ -434,7 +434,7 @@ public sealed class GridAlertTests : IDisposable
     }
 
     [Fact]
-    public async Task StabilizationPopup_DoesNotCloseAUkrenergoAlert_AndIsNotAnAlertItself()
+    public async Task ExplicitStabilization_ClosesUkrenergoAlert_AndLaterGridTicksCannotReopenIt()
     {
         AddChannel(All);
         SetGrid(GridStatuses.EmergencyOutages);
@@ -442,9 +442,128 @@ public sealed class GridAlertTests : IDisposable
 
         await IngestAsync(DispatcherFixture.StabilizationText);
 
+        var ended = Sent(All);
+        Assert.Equal(2, ended.Count);
+        Assert.Contains("діють стабілізаційні графіки", ended[1].Text);
+        Assert.Contains(DtekTag, ended[1].Text);
+        Assert.DoesNotContain("Статус emergency_outages", ended[1].Text);
+        Assert.NotNull(ended[1].ReplyParameters);
+        Assert.Empty(Edits(All));
+        Assert.True(Assert.Single(Deliveries(All)).IsClosed);
+
+        await TickAsync();
+        await TickAsync();
+        Assert.Equal(2, Sent(All).Count);
+        Assert.Equal(GridStatuses.EmergencyOutages,
+            _f.WithDb(db => db.GridStates.Single(s => s.RegionId == "kyiv").Status));
+    }
+
+    [Theory]
+    [InlineData(DispatcherFixture.StabilizationText)]
+    [InlineData("Екстрені відключення скасовано.")]
+    public async Task ExplicitDtekClearance_BeforeGridEmergency_PreventsAnAlert(string text)
+    {
+        AddChannel(All);
+        await IngestAsync(text);
+        SetGrid(GridStatuses.EmergencyOutages);
+
+        await TickAsync();
+
+        Assert.Empty(Sent(All));
+        Assert.Empty(Deliveries(All));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Шановні клієнти! Щось нове і незрозуміле.")]
+    public async Task EmptyOrUnparsedDtek_UsesUkrenergoRatherThanClaimingCancellation(string? text)
+    {
+        AddChannel(All);
+        SetGrid(GridStatuses.EmergencyOutages);
+        await TickAsync();
+
+        await IngestAsync(text);
+
         Assert.Single(Sent(All));
         Assert.Empty(Edits(All));
+        Assert.Contains(Tag, Sent(All)[0].Text);
         Assert.False(Assert.Single(Deliveries(All)).IsClosed);
+    }
+
+    [Fact]
+    public async Task MixedBankStatus_DtekClearsLeftBankDespiteGridEmergency()
+    {
+        AddChannel(All);
+        AddChannel(Darnytskyi, ["darnytskyi"]);
+        AddChannel(Holosiivskyi, ["holosiivskyi"]);
+        SetGrid(GridStatuses.EmergencyOutages);
+        await TickAsync();
+
+        await IngestAsync("На правому березі Києва введені екстрені відключення. На лівому березі Києва діють графіки стабілізаційних відключень.");
+
+        Assert.Contains(DtekTag, Assert.Single(Edits(Holosiivskyi)).Text);
+        var ended = Sent(Darnytskyi);
+        Assert.Equal(2, ended.Count);
+        Assert.Contains(DtekTag, ended[1].Text);
+        Assert.Contains("діють стабілізаційні графіки", ended[1].Text);
+        Assert.True(Assert.Single(Deliveries(Darnytskyi)).IsClosed);
+        Assert.False(Assert.Single(Deliveries(Holosiivskyi)).IsClosed);
+        Assert.False(Assert.Single(Deliveries(All)).IsClosed);
+        await TickAsync();
+        Assert.Equal(2, Sent(Darnytskyi).Count);
+    }
+
+    [Fact]
+    public async Task DistrictOnlyStabilization_PreservesGridFallbackForUnmentionedDistricts()
+    {
+        AddChannel(All);
+        AddChannel(Darnytskyi, ["darnytskyi"]);
+        AddChannel(Holosiivskyi, ["holosiivskyi"]);
+        SetGrid(GridStatuses.EmergencyOutages);
+        await TickAsync();
+
+        await IngestAsync(DispatcherFixture.StabilizationText, "darnytskyi");
+
+        Assert.True(Assert.Single(Deliveries(Darnytskyi)).IsClosed);
+        Assert.False(Assert.Single(Deliveries(Holosiivskyi)).IsClosed);
+        Assert.Contains(Tag, Assert.Single(Edits(Holosiivskyi)).Text);
+        var regionText = Assert.Single(Edits(All)).Text;
+        Assert.Contains(Tag, regionText);
+        Assert.DoesNotContain("Дарницький", regionText);
+        Assert.DoesNotContain("darnytskyi", Assert.Single(Deliveries(All)).EmergencyPartsJson ?? "");
+    }
+
+    [Fact]
+    public async Task YasnoGroupCancellation_DoesNotOverrideUkrenergoRegionalEmergency()
+    {
+        AddChannel(All);
+        _f.WithDb(db => db.Channels.Single(c => c.ChatId == All).GroupId = "45.1");
+        SetGrid(GridStatuses.EmergencyOutages);
+        await TickAsync();
+        _f.WithDb(db => db.GroupStates.Add(new()
+        {
+            RegionId = "kyiv", GroupId = "45.1", Today = "ScheduleApplies", UpdatedAt = _f.Clock.Now,
+        }));
+
+        await TickAsync();
+
+        Assert.Contains(Tag, Assert.Single(Sent(All)).Text);
+        Assert.Empty(Edits(All));
+        Assert.False(Assert.Single(Deliveries(All)).IsClosed);
+    }
+
+    [Fact]
+    public async Task CustomTemplatesWithoutMessage_StillIdentifyTheActualSource()
+    {
+        AddChannel(All, template: "<b>{region}</b>: {status}");
+        SetGrid(GridStatuses.EmergencyOutages);
+        await TickAsync();
+
+        Assert.Contains(Tag, Assert.Single(Sent(All)).Text);
+        await IngestAsync(DispatcherFixture.EmergencyText);
+        Assert.Contains(DtekTag, Assert.Single(Edits(All)).Text);
+        Assert.DoesNotContain(Tag, Edits(All)[0].Text);
     }
 
     // ---- endpoint ----

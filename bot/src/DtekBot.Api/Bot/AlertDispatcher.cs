@@ -83,7 +83,9 @@ public sealed class AlertDispatcher(
             var eligible = resolved.IsAlert
                 && !channel.IsPaused
                 && Matches(channel, resolved)
-                && slotOn;
+                && slotOn
+                && !(resolved.Kind == PopupKind.Unknown && regionWideFallback is { IsAlert: true } unknownFallback
+                    && Matches(channel, unknownFallback));
 
             Outcome outcome;
             if (eligible)
@@ -127,7 +129,7 @@ public sealed class AlertDispatcher(
                     ? await TrySendAsync(
                         channel,
                         () => SendEndAsync(channel, region, delivery, OwnPartNames(region, channel, result), popupText, now, ct,
-                            stabilizationActive: resolved.Kind == PopupKind.Stabilization),
+                            stabilizationActive: resolved.Kind == PopupKind.Stabilization, source: source),
                         ct)
                     : Outcome.Closed;
 
@@ -416,9 +418,9 @@ public sealed class AlertDispatcher(
         string? popupText,
         DateTimeOffset now,
         CancellationToken ct,
-        bool isGroup = false, string? groupId = null, bool stabilizationActive = false)
+        bool isGroup = false, string? groupId = null, bool stabilizationActive = false, AlertSource source = AlertSource.None)
     {
-        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup, groupId: groupId,
+        var text = Render(channel, region, AlertKind.Ended, partNames, popupText, now, isGroup, source, groupId: groupId,
             stabilizationActive: stabilizationActive);
         var style = channel.SlotEndStyle(MessageSlots.Ended);
 
@@ -495,7 +497,8 @@ public sealed class AlertDispatcher(
         var slot = SlotFor(kind, isGroup);
         var values = AlertText.Values(kind, region.Name, partNames, region.SiteUrl, now, popupText, stabilizationActive)
             .ToDictionary(p => p.Key, p => p.Value);
-        values["message"] = AlertSourceText.Tag(values["message"], source, kind);
+        if (isGroup) source = AlertSource.Yasno;
+        values["message"] = AlertSourceText.Tag(values["message"], source);
         var matching = channel.Addresses.Where(a =>
         {
             if (isGroup) return a.Groups.Any(g => g.GroupId == (groupId ?? channel.GroupId));
@@ -513,6 +516,7 @@ public sealed class AlertDispatcher(
             var names = matching.Select(a => a.Name).Where(n => n != "").Distinct().ToArray();
             if (names.Length > 0) rendered += "\n📍 " + System.Net.WebUtility.HtmlEncode(string.Join(", ", names));
         }
+        rendered = AlertSourceText.EnsureAttribution(rendered, source);
         return channel.IsMultiRegion ? $"📍 {System.Net.WebUtility.HtmlEncode(region.Name)}\n{rendered}" : rendered;
     }
 

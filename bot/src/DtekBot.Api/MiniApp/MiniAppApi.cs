@@ -1390,7 +1390,8 @@ public static class MiniAppApi
                     ? $"ДТЕК повідомляє про екстрені відключення або аварію: {string.Join(", ", region.DisplayNames(affected))}. План у цих районах може не діяти."
                     : "У регіоні є повідомлення ДТЕК про екстрені відключення або аварію. План може не діяти; перевірте, яких районів стосується повідомлення.");
             var grid = await db.GridStates.AsNoTracking().FirstOrDefaultAsync(s => s.RegionId == region.Id, ct);
-            if (grid?.IsAlert == true && now - grid.FeedGeneratedAt <= TimeSpan.FromMinutes(settings.CurrentValue.Grid.MaxAgeMinutes))
+            if (grid?.IsAlert == true && now - grid.FeedGeneratedAt <= TimeSpan.FromMinutes(settings.CurrentValue.Grid.MaxAgeMinutes)
+                && popup?.Classification().ExplicitlyClears(region, []) != true)
                 warnings.Add("Укренерго повідомляє про екстрені обмеження або пошкодження мережі. План може не діяти.");
             var groupState = await db.GroupStates.AsNoTracking().FirstOrDefaultAsync(s => s.RegionId == region.Id && s.GroupId == groupId, ct);
             if (groupState?.IsEmergency == true)

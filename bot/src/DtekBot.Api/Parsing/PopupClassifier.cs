@@ -33,6 +33,23 @@ public sealed record PopupClassification(
     public PopupClassification Resolve(IReadOnlyList<string> parts) =>
         Interpretation?.Resolve(this, parts) ?? this;
 
+    public HashSet<string> ExplicitClearanceParts(RegionSettings region)
+    {
+        if (Interpretation is { Status: "parsed" } interpretation)
+            return PopupInterpretation.Expand(region, interpretation.States
+                .Where(s => s.Kind is "stabilization" or "cancelled").SelectMany(s => s.Districts));
+        if (Kind is not (PopupKind.Stabilization or PopupKind.Cancelled)) return [];
+        return PopupInterpretation.Expand(region, PartIds.Count == 0 ? region.Parts.Select(p => p.Id) : PartIds);
+    }
+
+    public bool ExplicitlyClears(RegionSettings region, IReadOnlyList<string> parts)
+    {
+        var cleared = ExplicitClearanceParts(region);
+        var wanted = PopupInterpretation.Expand(region, parts.Count == 0 ? region.Parts.Select(p => p.Id) : parts);
+        return wanted.Count > 0 && wanted.Where(id => region.Parts.FirstOrDefault(p => p.Id == id)?.Children is not { Count: > 0 })
+            .All(cleared.Contains);
+    }
+
     // Unknown popups are treated as alerts so nothing is silently dropped.
     public bool IsAlert => Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown;
 }
