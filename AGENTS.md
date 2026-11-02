@@ -35,8 +35,8 @@ repository-specific rules; update commands and paths when the implementation cha
   providers and Telegram transport, plus explicitly enabled live Telegram tests.
 - `bot/src/DtekBot.Api/dtek-settings.json`: region IDs, district aliases,
   classification rules, source mappings, limits, and timing defaults.
-- `.github/workflows/`: operational monitoring, schedule refresh, and release-please.
-  These workflows are not a build/test CI suite.
+- `.github/workflows/`: operational monitoring, schedule refresh, read-only
+  build/test CI, PR title validation, and CI-gated release-please/IIS packaging.
 
 Use `README.md` for setup and operational details. Read the relevant implementation
 and nearby tests before changing behavior; the code and configuration define the
@@ -112,8 +112,10 @@ prerequisites accurately; do not describe skipped tests as passed.
   need more space.
 - Update README instructions when public behavior, configuration, or setup changes.
   Release-please manages versions and release notes; do not bump versions as a
-  side effect of unrelated work. Use English Conventional Commit titles when
-  preparing commits or PRs for this release workflow.
+  side effect of unrelated work. It synchronizes the root Node package with
+  `bot/Directory.Build.props`, which supplies every .NET project's version.
+  Use English Conventional Commit titles when preparing commits or PRs for
+  squash merging. Releases package artifacts; production deployment stays manual.
 
 ## Behavior that must be preserved
 

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node and Mini App tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Check release version consistency
+        run: node scripts/check-release-version.mjs
+      - name: Run offline collector and browser tests
+        run: node --test src/*.test.js
+
+  dotnet:
+    name: .NET build and tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DTEK_LIVE_TELEGRAM: "0"
+      DTEK_LIVE_LLM: "0"
+    defaults:
+      run:
+        working-directory: bot
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: bot/global.json
+      - run: dotnet restore DtekBot.sln
+      - run: dotnet build DtekBot.sln --configuration Release --no-restore -p:ContinuousIntegrationBuild=true
+      - name: Run offline .NET tests
+        run: dotnet test tests/DtekBot.Tests/DtekBot.Tests.csproj --configuration Release --no-build --filter "FullyQualifiedName!~LiveTelegramTests" --logger trx --results-directory TestResults
+      - name: Smoke-test IIS packaging
+        run: |
+          $version = (Get-Content ..\.release-please-manifest.json -Raw | ConvertFrom-Json).'.'
+          ..\scripts\package-release.ps1 -Tag "v$version" -OutputDirectory "$env:RUNNER_TEMP\release-smoke"
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: bot/TestResults/*.trx
+          if-no-files-found: warn
+          retention-days: 14

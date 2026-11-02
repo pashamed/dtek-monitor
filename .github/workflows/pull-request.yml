@@ -1,0 +1,38 @@
+name: Pull request
+
+on:
+  merge_group:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Release PR title to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Validate squash commit title
+        if: github.event_name != 'merge_group'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title || inputs.title }}
+        run: |
+          node --input-type=module <<'NODE'
+          const title = process.env.PR_TITLE;
+          if (!/^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: \S.*$/.test(title)) {
+            console.error('Use a Conventional Commit PR title, e.g. feat: add schedule previews or fix(api): preserve unknown states.');
+            process.exit(1);
+          }
+          NODE

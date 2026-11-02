@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Kept in sync with the root package by release-please. -->
+    <Version>3.0.0</Version> <!-- x-release-please-version -->
+  </PropertyGroup>
+</Project>

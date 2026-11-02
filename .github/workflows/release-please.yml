@@ -4,16 +4,90 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and upload (for example v4.0.0)
+        required: true
+        type: string
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
+  ci:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
 
+  release-please:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Create release PR or release
+        id: release
         uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      # GITHUB_TOKEN does not trigger pull_request CI, but workflow_dispatch does.
+      - name: Run CI on the release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          branch=$(jq -er '.headBranchName' <<< "$RELEASE_PR")
+          title=$(jq -er '.title' <<< "$RELEASE_PR")
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/dispatches" -f ref="$branch"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/pull-request.yml/dispatches" -f ref="$branch" -f "inputs[title]=$title"
+
+  package:
+    needs: [ci, release-please]
+    if: >-
+      always() && !cancelled() &&
+      ((needs.ci.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate existing release
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected a stable release tag, e.g. v4.0.0.' }
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'The GitHub release does not exist.' }
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: bot/global.json
+      - name: Verify tagged versions
+        run: node scripts/check-release-version.mjs "$env:RELEASE_TAG"
+      - name: Build IIS release package
+        run: .\scripts\package-release.ps1 -Tag $env:RELEASE_TAG -OutputDirectory "$env:RUNNER_TEMP\release"
+      - name: Upload package and checksum
+        run: |
+          gh release upload $env:RELEASE_TAG "$env:RUNNER_TEMP\release\dtek-bot-$env:RELEASE_TAG-iis.zip" "$env:RUNNER_TEMP\release\SHA256SUMS.txt" --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed.' }

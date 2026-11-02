@@ -593,7 +593,108 @@ The standalone script retries failed operations:
 
 ## 🆕 Updates
 
-See [Releases](https://github.com/mr-devboy/dtek-monitor/releases) for upstream version changes and upgrade instructions.
+See this repository's [Releases](https://github.com/pashamed/dtek-monitor/releases)
+and [CHANGELOG.md](CHANGELOG.md) for version changes. Upstream changes remain
+available in [upstream releases](https://github.com/mr-devboy/dtek-monitor/releases).
+
+## CI, versioning, and releases
+
+GitHub Actions runs the pipeline; a Copilot subscription is not needed to execute
+it. Copilot review can be enabled separately, but does not replace passing tests
+or approval of a release.
+
+### One-time GitHub setup
+
+1. In **Settings → Actions → General → Workflow permissions**, enable
+   **Allow GitHub Actions to create and approve pull requests**. The release
+   workflow requests its own scoped write permissions; ordinary CI is read-only.
+   No additional PAT or deployment credential is needed.
+2. In **Settings → General → Pull Requests**, enable squash merging and select
+   **Pull request title** as the default squash commit message. Prefer disabling
+   merge commits and rebase merging so the validated title reaches `main`.
+3. Protect `main` with a ruleset requiring pull requests and passing checks:
+   **Node and Mini App tests**, **.NET build and tests**, and
+   **Conventional PR title**. Select the actual check contexts shown after the
+   first workflow run. Merge groups run CI too; their title check succeeds without
+   revalidating GitHub's generated merge-queue commit title.
+4. Optionally require a human review or automatic Copilot review. Never add
+   production credentials to CI, and do not enable live Telegram/LLM tests.
+
+### Change and release flow
+
+- Open a PR with an English Conventional Commit title: `fix(api): preserve unknown
+  states`, `feat: add schedule previews`, or `feat!: change the ingest contract`.
+  Squash-merge with that title; ordinary titles such as `improvements` cannot be
+  categorized by release-please. Direct pushes bypass the title check and should
+  be blocked by the ruleset.
+- PR CI installs the locked Node dependencies and Chromium, runs every
+  `src/*.test.js` test, checks version consistency, builds the full .NET solution,
+  runs offline xUnit tests, and smoke-tests the IIS package. Test results are
+  retained as an Actions artifact for 14 days. The production collectors and
+  notification workflows are not run as tests.
+- On `main`, **Release** runs the same CI before release-please updates a release
+  PR. `fix` and `perf` produce patch releases, `feat` produces minor releases,
+  and `!` / `BREAKING CHANGE:` produces a major release. Documentation and other
+  maintenance entries can appear alongside releasable changes; they do not
+  independently force a release.
+- Release-please updates `package.json`, `package-lock.json`,
+  `.release-please-manifest.json`, `bot/Directory.Build.props`, and the changelog.
+  The API, shared library, and alternative Blazor editor inherit the same .NET
+  version. Do not edit version numbers or create release tags manually.
+- The default `GITHUB_TOKEN` cannot trigger PR workflows through a bot-created
+  PR. The release workflow explicitly dispatches CI and title validation on the
+  release PR branch, so these checks run without a PAT.
+- Review the release PR's changelog and breaking changes, then squash-merge it.
+  After CI passes on `main`, release-please creates `vX.Y.Z` and a GitHub Release.
+  The same workflow checks out that tag and attaches
+  `dtek-bot-vX.Y.Z-iis.zip` and `SHA256SUMS.txt`. It does not rely on a separate
+  `release` event, which `GITHUB_TOKEN` would not trigger.
+
+Release notes/tag creation happens before packaging. Wait for the **package** job
+to pass and both assets to appear before deploying. If packaging/upload fails,
+use **Actions → Release → Run workflow**, select `main`, and enter the existing
+tag to rebuild its assets without making another version. This requires a tag
+that already contains the packaging scripts. A retry replaces the ZIP and its
+checksum; always download the matching pair.
+
+### Manual IIS deployment
+
+Deployment remains manual: no runner connects to the server, no workflow changes
+the webhook, and no workflow applies database migrations.
+
+**Recommended:** download the ZIP and checksum from a successful release. Verify
+the ZIP with `Get-FileHash .\dtek-bot-vX.Y.Z-iis.zip -Algorithm SHA256` and compare
+it with `SHA256SUMS.txt`. The archive contains the framework-dependent API, Mini
+App, `web.config`, default `appsettings.json`, and `dtek-settings.json`. IIS needs
+the .NET 10 Hosting Bundle. Environment-specific `appsettings.*.json` files are
+excluded: keep production credentials/configuration on the server.
+
+If continuing the existing git-pull-and-publish process, deploy the release tag,
+not the moving `main` branch. In a clean deployment checkout, run:
+
+```powershell
+git pull --ff-only
+git fetch --tags origin
+git switch --detach vX.Y.Z
+node scripts\check-release-version.mjs vX.Y.Z
+.\scripts\package-release.ps1 -Tag vX.Y.Z
+```
+
+Replace `vX.Y.Z` with the reviewed release tag. The script writes the same package
+shape and checksum to ignored `artifacts/releases/`; it does not deploy. Prefer
+the CI-produced ZIP for the exact tested artifact. Return this checkout to
+`main` before the next `git pull`; use a separate checkout if it contains local
+development changes. To build locally, the .NET SDK selected by `bot/global.json`
+and Node.js are required.
+
+Before copying files, back up the database, production settings, and the previous
+application package. Review pending EF migrations and apply them only through
+the authorized deployment process; the API currently applies pending migrations
+at startup. Stop the IIS application pool while replacing binaries, preserve
+server-only configuration and logs, then start the pool and check `GET /health`
+and the startup log's version. Never run old binaries against an incompatible
+schema: rollback may require a reviewed database restore as well as the previous
+package.
 
 ## 📄 License
 
@@ -637,6 +738,11 @@ the complete post. Substitution uses the existing brace-template parser,
 not regular expressions.
 Accident templates also support `{дата}`, `{день_тижня}`, and `{частина_доби}`,
 all based on Kyiv time.
+
+The Svitlobot settings card explains that unpublished days use a typical weekly
+plan, not a confirmed daily schedule. Showing the full week does not mean DTEK
+has published daily schedules through Sunday. This explanation is in the Mini
+App; Svitlobot controls its own graph labels.
 
 ### Schedule viewing and clear notifications
 

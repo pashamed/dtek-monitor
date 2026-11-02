@@ -6,13 +6,18 @@
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance Improvements" },
     { "type": "refactor", "section": "Code Refactoring" },
     { "type": "docs", "section": "Documentation" },
-    { "type": "ci", "section": "Continuous Integration" }
+    { "type": "ci", "section": "Continuous Integration" },
+    { "type": "build", "section": "Build System" },
+    { "type": "test", "section": "Tests" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "chore", "section": "Maintenance", "hidden": true }
   ],
   "packages": {
     ".": {
-      "extra-files": ["bot/src/DtekBot.Api/DtekBot.Api.csproj"]
+      "extra-files": ["bot/Directory.Build.props"]
     }
   }
 }
