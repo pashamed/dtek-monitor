@@ -1858,7 +1858,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         Assert.Contains("черга 45.1", result.Html);
         Assert.DoesNotContain("📍", result.Html);
-        Assert.Contains("Деталі: https://www.dtek-kem.com.ua/ua/shutdowns", result.Html);
+        Assert.DoesNotContain("Деталі:", result.Html);
     }
 
     [Fact]
@@ -1919,7 +1919,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.True(body.RootElement.GetProperty("ok").GetBoolean());
         var message = Assert.Single(_factory.Bot.SentTo(chatId));
         Assert.StartsWith("🧪 <b>Тест</b>\n\n🚨 ", message.Text);
-        Assert.Contains("Деталі: https://www.dtek-kem.com.ua/ua/shutdowns", message.Text);
+        Assert.DoesNotContain("Деталі:", message.Text);
         Assert.Equal(ParseMode.Html, message.ParseMode);
     }
 

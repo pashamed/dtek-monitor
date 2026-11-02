@@ -13,7 +13,7 @@ public static class AlertSourceText
 {
     public static string Tag(string message, AlertSource source)
     {
-        if (source == AlertSource.None)
+        if (source is AlertSource.None or AlertSource.Dtek)
         {
             return message;
         }
@@ -25,7 +25,7 @@ public static class AlertSourceText
 
     public static string EnsureAttribution(string html, AlertSource source)
     {
-        if (source == AlertSource.None) return html;
+        if (source is AlertSource.None or AlertSource.Dtek) return html;
         var label = Attribution(source);
         return html.Contains(label, StringComparison.Ordinal) ? html : $"{html}\n\n{label}";
     }

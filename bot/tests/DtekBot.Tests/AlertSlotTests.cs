@@ -96,7 +96,8 @@ public sealed class AlertSlotTests : IDisposable
             c => c.TemplateMap = Map(("emergency", "EMG {message}")));
 
         Assert.StartsWith("⚠️ ", text);
-        Assert.Contains("Деталі: https://www.dtek-kem.com.ua/ua/shutdowns", text);
+        Assert.DoesNotContain("Деталі:", text);
+        Assert.DoesNotContain("(за даними ДТЕК)", text);
         Assert.DoesNotContain("EMG", text);
     }
 
@@ -125,9 +126,11 @@ public sealed class AlertSlotTests : IDisposable
         var reply = _f.Bot.Sent.Last();
         Assert.StartsWith("ℹ️ ", reply.Text);
         Assert.Contains("запис про екстрені відключення більше не відображається", reply.Text);
-        Assert.Contains("не підтверджує, що електропостачання відновлено", reply.Text);
+        Assert.Contains("Скасування не підтверджене", reply.Text);
+        Assert.Contains("не підтверджує наявність світла", reply.Text);
         Assert.DoesNotContain("✅", reply.Text);
-        Assert.Contains("Деталі:", reply.Text);
+        Assert.DoesNotContain("Деталі:", reply.Text);
+        Assert.DoesNotContain("(за даними ДТЕК)", reply.Text);
     }
 
     [Fact]
@@ -185,7 +188,7 @@ public sealed class AlertSlotTests : IDisposable
             c => c.TemplateMap = Map(("schedule", "{outages}"), ("off", "OFF"), ("on", "ON")));
 
         Assert.StartsWith("🚨 ", text);
-        Assert.Contains("Деталі:", text);
+        Assert.DoesNotContain("Деталі:", text);
     }
 
     // ---- districts in the text ----
@@ -272,7 +275,8 @@ public sealed class AlertSlotTests : IDisposable
 
         var text = Assert.Single(_f.Bot.Sent).Text;
         Assert.StartsWith("🚨 Локальне відключення, черга 45.1\n", text);
-        Assert.Contains("\n📍 вул. Хрещатик, 1\n\nДеталі: https://www.dtek-kem.com.ua/ua/shutdowns", text);
+        Assert.EndsWith("\n📍 вул. Хрещатик, 1", text);
+        Assert.DoesNotContain("Деталі:", text);
     }
 
     [Fact]
@@ -284,7 +288,7 @@ public sealed class AlertSlotTests : IDisposable
 
         var text = Assert.Single(_f.Bot.Sent).Text;
         Assert.DoesNotContain("📍", text);
-        Assert.Contains("\n\nДеталі:", text);
+        Assert.DoesNotContain("Деталі:", text);
     }
 
     [Fact]

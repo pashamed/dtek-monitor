@@ -50,7 +50,7 @@ public sealed class PopupInterpreter(
             return new(fallback.Interpret(regionId, text), "deterministic");
         }
         var cacheKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"v1\n{regionId}\n{model}\n{baseUrl}\n{JsonSerializer.Serialize(options.CurrentValue)}\n{text.Replace("\r\n", "\n").Trim()}")));
+            $"v2\n{regionId}\n{model}\n{baseUrl}\n{JsonSerializer.Serialize(options.CurrentValue)}\n{text.Replace("\r\n", "\n").Trim()}")));
         await gate.WaitAsync(ct);
         try
         {
@@ -155,6 +155,11 @@ public sealed class PopupInterpreter(
             emergency means unscheduled restrictions or schedules not applying; accident means an explicitly reported accident.
             Equipment damage plus schedules not applying, without an explicit accident, is emergency.
             stabilization means schedules apply; cancelled means restrictions explicitly cancelled.
+            Report only what the notice establishes: never invent causes, restoration times, or measured power availability.
+            Distinguish an affirmative state from a negated transition. "Екстрені відключення не скасовано."
+            alone is unable_to_parse, not cancelled and not a new emergency declaration.
+            If another clause explicitly establishes an active state, retain that state despite a negated cancellation.
+            A published schedule, missing notice, or cancellation never proves that electricity is physically available.
             Distinguish affected districts from areas mentioned as unaffected, exceptions, or following schedules.
             Resolve each clause separately, including continuation such as "Тут". Do not infer stabilization for unmentioned areas.
             Whole-region scope is "all" with EVERY configured district ID. Otherwise use "districts" with nonempty IDs.
@@ -162,11 +167,24 @@ public sealed class PopupInterpreter(
             When a parent's children have different states, list those children individually instead of an overlapping parent.
             Kyiv city and Kyiv oblast are different regions. Only interpret the requested region.
             If an outage is clear but its geography cannot be resolved, use the whole requested region.
+            Do not write alert prose, advice, explanations, or message templates. The application renders messages separately.
             """;
         return
         [
             new { role = "system", content = instructions + "\nRegion and allowed geography: " + JsonSerializer.Serialize(region)
-                + "\nConfigured classification examples: " + JsonSerializer.Serialize(rules) + $"\nNotice delimiters: <{marker}> </{marker}>" },
+                + "\nConfigured classification examples: " + JsonSerializer.Serialize(rules) + """
+
+                Mandatory decision rule: a negated transition alone does not establish a current state.
+                Apply this rule before matching configured keywords. Do not assume a prior alert.
+                Even if "not cancelled" colloquially suggests an ongoing outage, this parser requires
+                an affirmative statement to classify an active state. For a notice containing only
+                "Екстрені відключення не скасовано." call submit_popup_interpretation with exactly:
+                {"status":"unable_to_parse","states":[]}
+                For "Дякуємо за розуміння." use exactly:
+                {"status":"no_information","states":[]}
+                An explicit declaration such as "Введені екстрені відключення. Їх не скасовано."
+                still establishes emergency; the bare-negation rule does not remove that declaration.
+                """ + $"\nNotice delimiters: <{marker}> </{marker}>" },
             new { role = "user", content = $"<{marker}>\n{safeText}\n</{marker}>" },
         ];
     }

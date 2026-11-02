@@ -287,6 +287,10 @@ public sealed class PopupInterpretationTests
         Assert.DoesNotContain(injected, messages[0].GetProperty("content").GetString());
         Assert.Contains(injected, messages[1].GetProperty("content").GetString());
         Assert.Contains("untrusted", messages[0].GetProperty("content").GetString());
+        Assert.Contains("alone is unable_to_parse", messages[0].GetProperty("content").GetString());
+        Assert.Contains("retain that state despite a negated cancellation", messages[0].GetProperty("content").GetString());
+        Assert.Contains("never invent causes", messages[0].GetProperty("content").GetString());
+        Assert.Contains("application renders messages separately", messages[0].GetProperty("content").GetString());
     }
 
     private static RegionSettings Kyiv() => RealSettings.Load().Regions.Single(r => r.Id == "kyiv");

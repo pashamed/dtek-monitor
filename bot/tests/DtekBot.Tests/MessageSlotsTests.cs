@@ -285,7 +285,7 @@ public class MessageSlotsTests
     {
         var values = Values(("emoji", "🚨"), ("message", "m"), ("site", "s"));
 
-        Assert.Equal("🚨 m\n\nДеталі: s", MessageTemplate.Render("  ", values));
+        Assert.Equal("🚨 m", MessageTemplate.Render("  ", values));
         Assert.Equal("fb m", MessageTemplate.Render(null, values, "fb {message}"));
         Assert.Equal("tpl", MessageTemplate.Render("tpl", values, "fb {message}"));
     }

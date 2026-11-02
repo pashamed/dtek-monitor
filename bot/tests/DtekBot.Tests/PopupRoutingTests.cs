@@ -79,7 +79,7 @@ public sealed class PopupRoutingTests
             Assert.True(delivery.IsClosed);
             var end = factory.Bot.SentTo(chat).Last().Text;
             Assert.Contains("графік", end, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("(за даними ДТЕК)", end);
+            Assert.DoesNotContain("(за даними ДТЕК)", end);
             Assert.DoesNotContain("відновлено електропостачання", end, StringComparison.OrdinalIgnoreCase);
         }
         Assert.Equal(8, factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed)));

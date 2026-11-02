@@ -65,7 +65,7 @@ const HELP = {
   cond: ['Умовні блоки', 'Фрагмент {#назва}…{/назва} лишається в тексті, лише якщо значення параметра «назва» не порожнє. Наприклад: {#світло_було}🕓 Воно було {світло_було}{/світло_було}. Блоки не можна вкладати.'],
   test: ['Тестове повідомлення', 'Бот надішле це повідомлення в канал (або в чат із ботом) зі зразковими чи вашими даними й позначкою 🧪 Тест, щоб ви побачили його справжній вигляд. Кількість тестів обмежена: якщо зʼявиться повідомлення про ліміт, зачекайте трохи й повторіть.'],
   connect: ['Підключити канал', 'Додайте бота адміністратором у канал із правом публікувати повідомлення — канал зʼявиться тут автоматично (за потреби натисніть «Оновити список»). Підтримуються лише канали, не групи. Для публічного каналу також можна вставити https://t.me/імʼя або @імʼя. Приватні посилання-запрошення (t.me/+…) не підходять.'],
-  svb: ['Світлобот', 'Ключ каналу потрібен, щоб бот міг регулярно оновлювати тижневий графік Світлоботу для обраної черги. Коли дані графіка зʼявляються або змінюються, бот передає актуальний тижневий розклад автоматично. Повідомлення «світло зникло / зʼявилося» та публікаціями у каналі керує сам Світлобот. Ключ зберігається на сервері в зашифрованому вигляді; нікому його не передавайте.'],
+  svb: ['Світлобот', 'Бот автоматично оновлює тижневий графік обраної черги: опубліковані добові графіки мають пріоритет, решта днів — типовий план, не підтверджений добовий графік. Повідомленнями «світло зникло / зʼявилося» та публікаціями керує Світлобот. Ключ зберігається зашифрованим; нікому його не передавайте.'],
   svbKey: ['Ключ каналу', 'Ключ channel_key потрібен, щоб передавати актуальний тижневий графік у Світлобот. Він доступний у налаштуваннях вашого каналу в чат-боті Світлобот. Бот перевірить ключ, збереже його зашифрованим і більше не покаже.'],
   svbCheck: ['Перевірити ключ', 'Показує, який саме ключ збережено, не розкриваючи його: вісім крапок і останні два символи, а також короткий «відбиток». Відбиток однаковий для того самого ключа, тож ним можна звірити ключ зі Світлобота. Сам ключ ніколи не повертається.'],
   svbForget: ['Забути ключ', 'Видаляє збережений ключ лише тут, у боті. Графік і пост у каналі лишаються як є. Щоб знову керувати Світлоботом, введіть ключ ще раз.'],
@@ -742,6 +742,26 @@ function renderEditor(chat) {
 
   function touch() { setErr([]); updateUi(); }
 
+  function districtPicker(region, get, set, label, defaultLabel) {
+    const many = region.parts.length > 12;
+    const search = h('input', { type: 'text', placeholder: 'Пошук району', autocomplete: 'off', 'aria-label': 'Пошук району', hidden: !many });
+    const list = h('div', { class: 'dchips' + (many ? ' scroll' : ''), role: 'group', 'aria-label': label });
+    const paint = () => {
+      const selected = new Set(get()), query = search.value.trim().toLowerCase(), top = list.scrollTop;
+      const choose = ids => { set(ids); paint(); };
+      const chip = (text, on, onclick) => h('button', { type: 'button', class: 'dchip' + (on ? ' on' : ''), 'aria-pressed': String(on), text, onclick });
+      list.replaceChildren(
+        ...(defaultLabel ? [chip(defaultLabel, !selected.size, () => choose([]))] : []),
+        chip('Обрати всі райони', selected.size === region.parts.length, () => choose(region.parts.map(p => p.id))),
+        ...region.parts.filter(p => !query || p.name.toLowerCase().includes(query)).map(p =>
+          chip(p.name, selected.has(p.id), () => choose(selected.has(p.id) ? [...selected].filter(id => id !== p.id) : [...selected, p.id]))));
+      list.scrollTop = top;
+    };
+    search.addEventListener('input', paint);
+    paint();
+    return h('div', {}, search, list);
+  }
+
   // ----- tab: Основне -----
   const regionSel = h('select', { 'aria-label': 'Регіон', id: 'regionSel' });
   regionSel.replaceChildren(h('option', { value: '', text: '— Оберіть регіон —' }), ...boot.regions.map(r => h('option', { value: r.id, text: r.name })));
@@ -750,32 +770,26 @@ function renderEditor(chat) {
   const activeRow = toggle('Підписка активна', 'isActive', 'active');
 
   // Districts: active subscriptions with district options must select at least one.
-  let dq = '';
-  const dqIn = h('input', { type: 'text', placeholder: 'Пошук району', autocomplete: 'off', 'aria-label': 'Пошук району', hidden: true });
-  const dList = h('div', { class: 'dchips' });
+  const districtControl = h('div');
   const dSum = h('p', { class: 'hint' });
-  const distBox = h('div', { class: 'fld' }, fieldLabel('Райони', 'parts'), dqIn, dList, dSum);
-  dqIn.addEventListener('input', () => { dq = dqIn.value; renderDistricts(); });
+  const distBox = h('div', { class: 'fld' }, fieldLabel('Райони', 'parts'), districtControl, dSum);
 
   function renderDistricts() {
     const r = regionOf(s.regionId);
     distBox.hidden = !r || !r.parts.length;
     if (distBox.hidden) return;
-    const many = r.parts.length > 12, sel = new Set(partIdsOf(s)), q = many ? dq.trim().toLowerCase() : '';
-    dqIn.hidden = !many;
-    dList.classList.toggle('scroll', many);
-    const chip = (label, on, fn) => h('button', { type: 'button', class: 'dchip' + (on ? ' on' : ''), 'aria-pressed': String(on), text: label, onclick: fn });
-    const flip = id => { sel.has(id) ? sel.delete(id) : sel.add(id); s.partIds = [...sel]; touch(); renderDistricts(); syncStatus(); };
-    const top = dList.scrollTop;
-    dList.replaceChildren(chip('Обрати всі райони', sel.size === r.parts.length, () => { s.partIds = r.parts.map(p => p.id); touch(); renderDistricts(); syncStatus(); }),
-      ...r.parts.filter(p => !q || p.name.toLowerCase().includes(q)).map(p => chip(p.name, sel.has(p.id), () => flip(p.id))));
-    dList.scrollTop = top;
-    const names = partNames(s);
-    dSum.textContent = names.length === r.parts.length
-      ? 'Сповіщення про екстрені відключення для всіх районів.'
-      : names.length
-        ? 'Сповіщення про екстрені відключення для: ' + names.join(', ')
-        : 'Оберіть принаймні один район, щоб отримувати районні екстрені сповіщення.';
+    const summary = () => {
+      const names = partNames(s);
+      dSum.textContent = names.length === r.parts.length
+        ? 'Сповіщення про екстрені відключення для всіх районів.'
+        : names.length
+          ? 'Сповіщення про екстрені відключення для: ' + names.join(', ')
+          : 'Оберіть принаймні один район, щоб отримувати районні екстрені сповіщення.';
+    };
+    districtControl.replaceChildren(districtPicker(r, () => partIdsOf(s), ids => {
+      s.partIds = ids; touch(); summary(); syncStatus();
+    }, 'Райони'));
+    summary();
   }
 
   // Current state card (what DTEK and the schedules say right now).
@@ -822,7 +836,7 @@ function renderEditor(chat) {
   }
 
   regionSel.addEventListener('change', async () => {
-    s.regionId = regionSel.value || null; s.partIds = []; dq = ''; dqIn.value = '';
+    s.regionId = regionSel.value || null; s.partIds = [];
     if (s.regionId && !s.isActive) { s.isActive = true; activeRow.cb.checked = true; }
     setErr([]); refreshAll();
   });
@@ -1266,10 +1280,10 @@ function renderEditor(chat) {
             ? addressPicker(address.regionId, searchContext)
             : dtekAddressPicker(address.regionId, searchContext));
         }
-        const districts = h('select', { 'aria-label': 'Район адреси' }, h('option', { value: '', text: address.regionId === s.regionId ? 'Райони з основних налаштувань' : 'Весь регіон' }),
-          ...(region?.parts || []).map(part => h('option', { value: part.id, text: part.name })));
-        districts.value = address.partIds || '';
-        districts.addEventListener('change', () => { address.partIds = districts.value || null; touch(); });
+        const districts = region?.parts.length ? h('div', { class: 'fld' }, h('label', { text: 'Райони' }),
+          districtPicker(region, () => (address.partIds || '').split(',').map(id => id.trim()).filter(Boolean), ids => {
+            address.partIds = ids.length ? ids.join(',') : null; touch();
+          }, 'Райони адреси', address.regionId === s.regionId ? 'Райони з основних налаштувань' : 'Весь регіон')) : null;
         const groups = h('div');
         const paintGroups = () => groups.replaceChildren(...address.groups.map(group => {
           const label = h('input', { type: 'text', value: group.label || '', maxlength: '64', placeholder: "Наприклад, Під'їзд 1", 'aria-label': 'Підпис черги ' + group.groupId });
@@ -1290,7 +1304,7 @@ function renderEditor(chat) {
         return card(h('h3', { class: 'ct', text: `Адреса ${index + 1} · ${region?.name || ''}` }),
           h('div', { class: 'fld address-region' }, h('label', { text: 'Регіон адреси' }), addressRegion),
           region?.siteUrl ? search : null, searchBox, ...inputs,
-          h('div', { class: 'fld' }, h('label', { text: 'Район' }), districts), groups, select,
+          districts, groups, select,
           h('button', { type: 'button', class: 'btn ghost sm', text: 'Прибрати адресу', onclick: () => { s.addresses = s.addresses.filter(a => a !== address); paint(); renderSched(); touch(); } }));
       }));
     };
@@ -1467,6 +1481,7 @@ function renderEditor(chat) {
     const busy = !!svb.busy;
     const btn = (name, cls, text, fn, off) => h('button', { type: 'button', class: 'btn ' + cls + (svb.busy === name ? ' busy' : ''), text, disabled: busy || !!off, onclick: fn });
     const head = h('div', { class: 'fl big' }, h('h3', { class: 'ct', text: 'Світлобот' }), help('svb'));
+    const planNote = h('p', { class: 'hint', text: 'Опубліковані добові графіки мають пріоритет. Решта днів — типовий тижневий план, а не підтверджений графік; бот оновить їх після публікації.' });
     const msg = svb.msg ? h('div', { class: 'toast ' + (svb.msg.kind === 'ok' ? 'ok' : 'err'), role: svb.msg.kind === 'ok' ? 'status' : 'alert', text: svb.msg.text }) : null;
     keyIn.disabled = busy;
     const keyEntry = () => h('div', { class: 'svb-key-entry' },
@@ -1480,6 +1495,7 @@ function renderEditor(chat) {
       body = [
         keyEntry(),
         h('p', { class: 'hint', text: 'Ключ потрібен, щоб бот регулярно перевіряв нові графіки та передавав тижневий розклад у Світлобот. Знайдіть channel_key у налаштуваннях потрібного каналу в Світлоботі.' }),
+        planNote,
       ];
     } else {
       const groups = svbGroups();
@@ -1495,6 +1511,7 @@ function renderEditor(chat) {
             ? `Світлобот отримує тижневий графік: ${regionOf(mainRegionId)?.name || mainRegionId} · черга ${main}.`
             : `Світлобот отримує тижневий графік черги ${main} автоматично.`
             : 'Тижневий графік надсилається Світлоботу автоматично.' }),
+        planNote,
         groups.length > 1 ? h('p', { class: 'hint', text: 'Світлобот зберігає один графік на канал. Оберіть основну чергу:' }) : null,
         ...(groups.length > 1 ? groups.map(g => h('div', { class: 'fl svb-group' },
           h('span', { text: `${regionOf(g.regionId)?.name || g.regionId} · Черга ${g.id}` + (g.names.length ? ` · ${g.names.join(', ')}` : '') }),

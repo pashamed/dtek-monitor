@@ -253,6 +253,11 @@ omitted or null; a list replaces them (an empty list clears them). Older clients
 retain their separate address endpoint. The alternative editor preserves
 settings it does not expose instead of replacing them with defaults.
 
+Address districts use the same searchable multi-select buttons as the main
+district selector. Each address can select several districts or all districts;
+the default uses the main districts in the same region, or the whole address
+region otherwise. These selections apply only after saving.
+
 Private-copy failures are recorded for retry on later delivery/check ticks;
 unchanged source messages need not be reposted to retry their copies. These
 retries do not provide exactly-once Telegram delivery: cancellation or a crash
@@ -354,7 +359,7 @@ unaffected addresses. Ukrainian identifiers and legacy English aliases both work
 
 Placeholder identifiers are Ukrainian application data and must not be translated. Legacy English aliases (`{emoji}`, `{message}`, `{time}`, `{site}`, `{region}`, `{part}`, `{where}`, `{popup}`, `{title}`, `{group}`, etc.) still work, can be mixed with Ukrainian identifiers, and do not require rewriting saved templates.
 
-The default emergency template is `{значок} {текст}` followed by `Деталі: {сайт}` on a new line. Use `{{` and `}}` for literal braces.
+The default emergency template is `{значок} {текст}`, without a details link or DTEK attribution footer. Custom templates can still include `{сайт}`. Use `{{` and `}}` for literal braces.
 
 A **conditional block**, `{#назва}…{/назва}`, is shown only when its placeholder is nonempty, for example `{#світло_було}🕓 Воно було {світло_було}{/світло_було}`. Blocks cannot be nested.
 
@@ -405,6 +410,19 @@ Tool arguments have three distinct outcomes:
 ```
 
 `parsed` requires nonempty valid states. `unable_to_parse` means ambiguous/uninterpretable text; `no_information` means no relevant status information. Neither empty result means all-clear. Whole-region states use `"scope":"all"` and list every configured district; an empty district list never implicitly means the whole region in this tool contract. Legacy aggregate ingest responses keep their empty-parts-means-region-wide convention.
+
+The parsing prompt returns structured states only, not Telegram wording.
+A bare negated transition such as “Екстрені відключення не скасовано.” is
+ambiguous unless another clause explicitly establishes the active state.
+Default regional alerts use a concise status without a details link or DTEK
+attribution footer, followed by optional address/region context. Ukrenergo and
+Yasno attribution is retained so those sources remain distinguishable.
+Unknown notices explicitly say that the outage status is undetermined.
+A disappeared notice says cancellation is unconfirmed; a return to schedules
+reports schedules applying without claiming a regional emergency has ended.
+Neither confirms measured power. Alert copy states what the bot monitors next;
+Svitlobot sensor events remain separate from regional notices and planned schedules.
+Saved custom templates and their placeholders remain unchanged.
 
 Missing credentials, provider timeout, exhausted credit/quota, unsupported tool calling, invalid results, or an unable-to-parse answer trigger deterministic clause-aware parsing. A model's empty-information answer also falls back if the deterministic parser recognizes a state. Inputs over 4,000 characters are parsed completely by fallback rather than sending a misleading truncated notice. Unknown IDs, conflicting district states, and ungrounded geographic selections are rejected, not silently filtered. Successful model results are cached in API memory for 24 hours (up to 256 entries), keyed by region, text, settings, model, provider, and schema version. Provider failures have a 30-minute cooldown; restarting the API clears this cache. The workflow no longer maintains a popup cache on `bot-artifacts`.
 
@@ -650,6 +668,13 @@ test process without printing them. Never use a production bot token.
 
 These tests use an isolated SQLite database, labelled simulated events, actual
 Telegram sends/edits/deletes, and finally delete the messages they created.
+`PowerLossWebhook_ChecksScheduleBeforeQueueingAddressLookup` injects labelled
+channel posts into the isolated `/webhook` endpoint. It verifies planned-outage
+replies without address requests, outside-schedule queueing and result delivery,
+and district-emergency explanations without another lookup. Telegram delivery
+is real; the clock, schedule, workflow trigger, and address results are controlled.
+It does not verify Telegram forwarding an external sensor post to the hosted
+webhook or execute the live DTEK browser collector.
 The transport rejects requests targeting another chat and does not change the
 bot's webhook or menu. The Mini App API test signs local test authentication
 data and checks the test bot's real admin membership; it is not a real Telegram

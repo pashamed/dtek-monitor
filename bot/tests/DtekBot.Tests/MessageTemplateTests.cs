@@ -91,7 +91,7 @@ public class MessageTemplateTests
 
         var result = MessageTemplate.Render(template, values);
 
-        Assert.Equal("🚨 Повідомлення\n\nДеталі: https://x.y", result);
+        Assert.Equal("🚨 Повідомлення", result);
         Assert.Equal(MessageTemplate.Render(MessageTemplate.Default, values), result);
     }
 
@@ -284,7 +284,7 @@ public class MessageTemplateTests
 
         Assert.Contains(emoji, html);
         Assert.Contains("м. Київ", html);
-        Assert.Contains("https://x.y", html);
+        Assert.DoesNotContain("https://x.y", html);
     }
 
     [Fact]

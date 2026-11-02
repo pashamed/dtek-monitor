@@ -152,7 +152,7 @@ public sealed class OblastDistrictRoutingMatrixTests
         foreach (var chat in matrix.AllLocal)
         {
             var text = matrix.LatestText(chat);
-            Assert.Contains("(за даними ДТЕК)", text);
+            Assert.DoesNotContain("(за даними ДТЕК)", text);
             Assert.Contains("parts=[]", text);
             Assert.False(matrix.Delivery(chat).IsClosed);
         }
@@ -312,7 +312,7 @@ public sealed class OblastDistrictRoutingMatrixTests
         {
             var text = LatestText(chat);
             Assert.StartsWith($"DTEK-{chat}|", text);
-            Assert.Contains(DtekTag, text);
+            Assert.DoesNotContain(DtekTag, text);
             Assert.DoesNotContain(GridTag, text);
             Assert.Contains("MATRIX-DTEK-DETAIL.", text);
             Assert.Contains($"region=[{Region.Name}]", text);

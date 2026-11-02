@@ -6,6 +6,7 @@ using DtekBot.Api.Parsing;
 using DtekBot.Api.Schedules;
 using DtekBot.Api.Settings;
 using DtekBot.Api.Svitlobot;
+using DtekBot.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -106,7 +107,10 @@ public sealed class MonitoringCycleTests
         Assert.Single(factory.WithDb(db => db.RegionStates.ToArray()));
         Assert.Single(factory.WithDb(db => db.GridStates.ToArray()));
         Assert.Single(factory.WithDb(db => db.GroupStates.ToArray()));
-        Assert.Contains("ДТЕК", Assert.Single(factory.Bot.SentTo(123)).Text); // No intermediate Ukrenergo-only or redundant group post.
+        var region = options.CurrentValue.Regions.Single(r => r.Id == "kyiv");
+        var expected = MessageTemplate.Render(null, AlertText.Values(
+            AlertKind.Emergency, region.Name, [], region.SiteUrl, factory.Clock.Now, null));
+        Assert.Equal(expected, Assert.Single(factory.Bot.SentTo(123)).Text);
         var delivery = Assert.Single(factory.WithDb(db => db.Deliveries.ToArray()));
         Assert.Equal("kyiv", delivery.RegionId);
         Assert.Equal("[]", delivery.EmergencyPartsJson);

@@ -8,7 +8,7 @@ namespace DtekBot.Shared;
 public static partial class MessageTemplate
 {
     public const int MaxLength = 1000;
-    public const string Default = "{emoji} {message}\n\nДеталі: {site}";
+    public const string Default = "{emoji} {message}";
 
     public static readonly IReadOnlyList<PlaceholderDto> Placeholders =
     [

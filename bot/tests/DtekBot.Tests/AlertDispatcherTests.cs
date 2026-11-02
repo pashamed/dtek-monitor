@@ -40,7 +40,7 @@ public sealed class AlertDispatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task NewAlert_DefaultTemplate_RendersEmojiRegionAndSite()
+    public async Task NewAlert_DefaultTemplate_RendersEmojiAndRegionWithoutFooter()
     {
         _f.AddChannel(ChatA);
 
@@ -49,7 +49,8 @@ public sealed class AlertDispatcherTests : IDisposable
         var text = Assert.Single(_f.Bot.Sent).Text;
         Assert.Contains("🚨", text);
         Assert.Contains("м. Київ", text);
-        Assert.Contains(_f.Kyiv.SiteUrl, text);
+        Assert.DoesNotContain(_f.Kyiv.SiteUrl, text);
+        Assert.DoesNotContain("(за даними ДТЕК)", text);
     }
 
     [Fact]
@@ -199,9 +200,9 @@ public sealed class AlertDispatcherTests : IDisposable
         await _f.DispatchAsync(DispatcherFixture.StabilizationText);
 
         var ending = _f.Bot.Sent.Last().Text;
-        Assert.Contains("екстрені відключення завершено", ending);
+        Assert.DoesNotContain("екстрені відключення завершено", ending);
         Assert.Contains("діють стабілізаційні графіки", ending);
-        Assert.Contains("не означає, що електроенергія вже є", ending);
+        Assert.Contains("не підтверджує наявність світла", ending);
         Assert.DoesNotContain("світло повернулося", ending);
         Assert.True(Assert.Single(_f.Deliveries(ChatA)).IsClosed);
     }
@@ -216,7 +217,8 @@ public sealed class AlertDispatcherTests : IDisposable
 
         var ending = _f.Bot.Sent.Last().Text;
         Assert.Contains("запис про екстрені відключення більше не відображається", ending);
-        Assert.Contains("не підтверджує, що електропостачання відновлено", ending);
+        Assert.Contains("Скасування не підтверджене", ending);
+        Assert.Contains("не підтверджує наявність світла", ending);
         Assert.DoesNotContain("діють стабілізаційні графіки", ending);
         Assert.DoesNotContain("світло повернулося", ending);
     }

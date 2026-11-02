@@ -97,7 +97,7 @@ public static class MessageSlots
             "local",
             "Локальне відключення",
             "Сповіщення про аварійне чи екстрене відключення саме вашої черги (за даними Yasno).",
-            "{emoji} Локальне відключення, черга {group}\n{message}{#address}\n📍 {address}{/address}\n\nДеталі: {site}",
+            "{emoji} Локальне відключення, черга {group}\n{message}{#address}\n📍 {address}{/address}",
             MessageTemplate.Placeholders),
         new(
             Schedule,

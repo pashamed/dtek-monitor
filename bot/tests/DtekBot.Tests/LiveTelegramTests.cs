@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Net.Http.Json;
 using DtekBot.Api.Bot;
+using DtekBot.Api.Checks;
 using DtekBot.Api.Data;
 using DtekBot.Api.Grid;
 using DtekBot.Api.Groups;
@@ -10,6 +11,9 @@ using DtekBot.Shared;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Telegram.Bot;
 using Xunit.Abstractions;
 using static DtekBot.Tests.ScheduleFixtures;
@@ -27,6 +31,119 @@ public sealed class LiveTelegramFactAttribute : FactAttribute
 
 public sealed class LiveTelegramTests(ITestOutputHelper output)
 {
+    [LiveTelegramFact]
+    public async Task PowerLossWebhook_ChecksScheduleBeforeQueueingAddressLookup()
+    {
+        const long chatId = -1004471996729;
+        const string webhookSecret = "isolated-power-loss-test";
+        Assert.Equal(chatId.ToString(), Environment.GetEnvironmentVariable("TELEGRAM_TEST_CHAT_ID"));
+        var token = Environment.GetEnvironmentVariable("Bot__Token");
+        Assert.False(string.IsNullOrWhiteSpace(token));
+        using var transport = new TestChannelTransport(chatId);
+        using var telegramHttp = new HttpClient(transport);
+        var bot = new TelegramBotClient(token!, telegramHttp);
+        Assert.Equal("emergencyCheckBot", (await bot.GetMe()).Username, ignoreCase: true);
+        var trigger = new FakeWorkflowTrigger();
+        using var root = new ApiFactory(bot);
+        using var api = root.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration(config => config.AddInMemoryCollection(
+                new Dictionary<string, string?> { ["Bot:WebhookSecret"] = webhookSecret }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IWorkflowTrigger>();
+                services.AddSingleton<IWorkflowTrigger>(trigger);
+            });
+        });
+        using var client = api.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Ingest-Secret", ApiFactory.IngestSecret);
+        client.DefaultRequestHeaders.Add("X-Telegram-Bot-Api-Secret-Token", webhookSecret);
+        using var scope = api.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
+        db.Channels.Add(new Channel
+        {
+            ChatId = chatId, RegionId = "kyiv", GroupId = "45.1",
+            PartIdList = ["darnytskyi"], IsActive = true, OutageTrigger = true,
+            AddressStreet = "Тестова", AddressHouse = "1", AddressLabel = "🧪 Тестова адреса",
+        });
+        await db.SaveChangesAsync();
+        var snapshot = RealSnapshot(root.Clock.Now);
+        root.Schedules.Snapshots["kyiv"] = snapshot with
+        {
+            Groups = new Dictionary<string, GroupSchedule>(snapshot.Groups)
+            {
+                ["45.1"] = snapshot.Groups["45.1"] with
+                {
+                    Outages = [new OutageInterval(Kyiv(15, 12, 30), Kyiv(15, 19, 30))],
+                },
+            },
+        };
+        try
+        {
+            root.Clock.Now = Kyiv(15, 12, 32);
+            await Post("🔴 12:30 Світло зникло\n🕓 Воно було 3год 14хв\n🗓️ Очікуємо за розкладом о 19:30");
+            Assert.Contains("планове стабілізаційне", transport.LastText);
+            Assert.Contains("19:30", transport.LastText);
+            Assert.Empty(db.AddressChecks);
+            Assert.Empty(trigger.Events);
+            output.WriteLine("PASS planned 12:30–19:30: real Telegram reply, no address lookup or workflow.");
+
+            root.Clock.Now = Kyiv(15, 20);
+            await Post("🔴 20:00 Світло зникло\n🗓️ Очікуємо за розкладом о 19:30");
+            Assert.Contains("Відключення поза графіком", transport.LastText);
+            Assert.Contains("Перевіряю локальну аварію", transport.LastText);
+            Assert.Equal(AddressCheckStatus.Pending, Assert.Single(db.AddressChecks).Status);
+            Assert.Equal(["check-addresses"], trigger.Events);
+            using var pending = await client.GetAsync("/ingest/addresses/pending");
+            pending.EnsureSuccessStatusCode();
+            var pendingJson = await pending.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("Тестова", Assert.Single(pendingJson.GetProperty("streets").EnumerateArray()).GetProperty("street").GetString());
+            using var completed = await client.PostAsJsonAsync("/ingest/addresses",
+                new AddressResultsRequest([new StreetResult("kyiv", "", "Тестова",
+                    new() { ["1"] = new(true, "2", null, null, null) })]), ApiJson.Options);
+            completed.EnsureSuccessStatusCode();
+            Assert.Equal(1, (await completed.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("answered").GetInt32());
+            db.ChangeTracker.Clear();
+            Assert.DoesNotContain(db.AddressChecks, c => c.Status == AddressCheckStatus.Pending);
+            output.WriteLine("PASS outside schedule: real Telegram queued reply → pending API → simulated collector result → real Telegram result.");
+
+            root.Clock.Now = Kyiv(15, 21);
+            using var emergency = await client.PostAsJsonAsync("/ingest",
+                new IngestRequest("kyiv", "У Дарницькому районі введені екстрені відключення.", root.Clock.Now),
+                ApiJson.Options);
+            emergency.EnsureSuccessStatusCode();
+            await Post("🔴 21:00 Світло зникло");
+            Assert.Contains("У вашому районі", transport.LastText);
+            Assert.Contains("Перевірку за адресою не запускаю", transport.LastText);
+            Assert.Single(db.AddressChecks);
+            Assert.Single(trigger.Events);
+            output.WriteLine("PASS outside schedule with district emergency: explanation, no additional address lookup.");
+        }
+        finally
+        {
+            foreach (var id in transport.LiveIds.ToArray()) await bot.DeleteMessage(chatId, id);
+            Assert.Empty(transport.LiveIds);
+            output.WriteLine($"CLEANUP verified: {transport.Deletes} test messages deleted; no tracked messages remain.");
+        }
+
+        async Task Post(string text)
+        {
+            var post = await bot.SendMessage(chatId, "🧪 ТЕСТ — не реальна подія\n" + text);
+            var update = new
+            {
+                update_id = post.Id,
+                channel_post = new
+                {
+                    message_id = post.Id, date = root.Clock.Now.ToUnixTimeSeconds(),
+                    chat = new { id = chatId, type = "channel", title = "Тест" }, text = post.Text,
+                },
+            };
+            using var response = await client.PostAsJsonAsync("/webhook", update);
+            response.EnsureSuccessStatusCode();
+            Assert.Equal(post.Id, transport.LastReplyId);
+        }
+    }
+
     [LiveTelegramFact]
     public async Task BrowserSettings_SaveReloadValidateAndSendToRealTestChannel()
     {
@@ -161,13 +278,14 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
             Assert.Contains("екстрені", transport.LastText, StringComparison.OrdinalIgnoreCase);
             await Ingest("");
             Assert.Contains("запис про екстрені відключення більше не відображається", transport.LastText);
-            Assert.Contains("не підтверджує, що електропостачання відновлено", transport.LastText);
+            Assert.Contains("Скасування не підтверджене", transport.LastText);
+            Assert.Contains("не підтверджує наявність світла", transport.LastText);
             Assert.DoesNotContain("діють стабілізаційні графіки", transport.LastText);
             await Ingest(DispatcherFixture.EmergencyText);
             await Ingest(DispatcherFixture.StabilizationText);
-            Assert.Contains("екстрені відключення завершено", transport.LastText);
+            Assert.DoesNotContain("екстрені відключення завершено", transport.LastText);
             Assert.Contains("діють стабілізаційні графіки", transport.LastText);
-            Assert.Contains("не означає, що електроенергія вже є", transport.LastText);
+            Assert.Contains("не підтверджує наявність світла", transport.LastText);
             output.WriteLine("PASS live Telegram emergency disappearance vs affirmative stabilization; neither claims actual restored power.");
 
             api.WithDb(db =>
@@ -179,7 +297,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                 // The default heading has no change summary; opt in to check the planned delta.
                 channel.TemplateMap = new Dictionary<string, string>
                 {
-                    [MessageSlots.ScheduleHeading] = "❗️ {header}\n📅 {weekday} {date}{#changes}\n\n{changes}{/changes}",
+                    [MessageSlots.ScheduleHeading] = "🧪 ТЕСТ — не реальна подія\n❗️ {header}\n📅 {weekday} {date}{#changes}\n\n{changes}{/changes}",
                 };
             });
             var original = RealSnapshot(api.Clock.Now);

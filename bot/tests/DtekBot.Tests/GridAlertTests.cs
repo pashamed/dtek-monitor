@@ -253,7 +253,7 @@ public sealed class GridAlertTests : IDisposable
         Assert.Single(Sent(All));
         var edit = Assert.Single(Edits(All));
         Assert.Equal(original, edit.MessageId);
-        Assert.Contains(DtekTag, edit.Text);
+        Assert.DoesNotContain(DtekTag, edit.Text);
         Assert.DoesNotContain(Tag, edit.Text);
         Assert.False(Assert.Single(Deliveries(All)).IsClosed);
     }
@@ -269,7 +269,7 @@ public sealed class GridAlertTests : IDisposable
 
         Assert.Equal(2, Sent(All).Count);
         Assert.Empty(Edits(All));
-        Assert.Contains(DtekTag, Sent(All)[1].Text);
+        Assert.DoesNotContain(DtekTag, Sent(All)[1].Text);
     }
 
     [Fact]
@@ -282,7 +282,7 @@ public sealed class GridAlertTests : IDisposable
         Assert.True(result.GetProperty("changed").GetBoolean());
         Assert.Equal("Emergency", result.GetProperty("kind").GetString());
         Assert.Equal(1, result.GetProperty("dispatch").GetProperty("sent").GetInt32());
-        Assert.Contains(DtekTag, Assert.Single(Sent(All)).Text);
+        Assert.DoesNotContain(DtekTag, Assert.Single(Sent(All)).Text);
     }
 
     [Fact]
@@ -294,7 +294,7 @@ public sealed class GridAlertTests : IDisposable
 
         await IngestAsync(DispatcherFixture.EmergencyText);
 
-        Assert.Contains(DtekTag, Assert.Single(Sent(All)).Text);
+        Assert.DoesNotContain(DtekTag, Assert.Single(Sent(All)).Text);
     }
 
     [Fact]
@@ -445,7 +445,7 @@ public sealed class GridAlertTests : IDisposable
         var ended = Sent(All);
         Assert.Equal(2, ended.Count);
         Assert.Contains("діють стабілізаційні графіки", ended[1].Text);
-        Assert.Contains(DtekTag, ended[1].Text);
+        Assert.DoesNotContain(DtekTag, ended[1].Text);
         Assert.DoesNotContain("Статус emergency_outages", ended[1].Text);
         Assert.NotNull(ended[1].ReplyParameters);
         Assert.Empty(Edits(All));
@@ -502,10 +502,10 @@ public sealed class GridAlertTests : IDisposable
 
         await IngestAsync("На правому березі Києва введені екстрені відключення. На лівому березі Києва діють графіки стабілізаційних відключень.");
 
-        Assert.Contains(DtekTag, Assert.Single(Edits(Holosiivskyi)).Text);
+        Assert.DoesNotContain(DtekTag, Assert.Single(Edits(Holosiivskyi)).Text);
         var ended = Sent(Darnytskyi);
         Assert.Equal(2, ended.Count);
-        Assert.Contains(DtekTag, ended[1].Text);
+        Assert.DoesNotContain(DtekTag, ended[1].Text);
         Assert.Contains("діють стабілізаційні графіки", ended[1].Text);
         Assert.True(Assert.Single(Deliveries(Darnytskyi)).IsClosed);
         Assert.False(Assert.Single(Deliveries(Holosiivskyi)).IsClosed);
@@ -562,7 +562,7 @@ public sealed class GridAlertTests : IDisposable
 
         Assert.Contains(Tag, Assert.Single(Sent(All)).Text);
         await IngestAsync(DispatcherFixture.EmergencyText);
-        Assert.Contains(DtekTag, Assert.Single(Edits(All)).Text);
+        Assert.DoesNotContain(DtekTag, Assert.Single(Edits(All)).Text);
         Assert.DoesNotContain(Tag, Edits(All)[0].Text);
     }
 

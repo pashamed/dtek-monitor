@@ -223,7 +223,7 @@ public sealed class CityDistrictRoutingMatrixTests
         Assert.Contains("regional|region=м. Київ|part=" + Encode(district.Name)
             + "|address=Вулиця &lt;1&gt; &amp; будинок|", request.Text);
         Assert.Contains(Encode(popup), request.Text);
-        Assert.Contains(DtekTag, request.Text);
+        Assert.DoesNotContain(DtekTag, request.Text);
         Assert.Contains("📍 Дім &lt;1&gt;", request.Text);
         Assert.DoesNotContain("Чужа адреса", request.Text);
         Assert.DoesNotContain("Офіс", request.Text);
@@ -353,7 +353,8 @@ public sealed class CityDistrictRoutingMatrixTests
             var id = chat == RegionChat ? "region" : DistrictChats.Single(p => p.Value == chat).Key;
             Assert.StartsWith(slot + "|region=" + Encode(Region.Name)
                 + "|part=" + Encode(part) + "|address=" + Encode(AddressLabel(id)) + "|", text);
-            Assert.Contains(tag, text);
+            if (tag == DtekTag) Assert.DoesNotContain(tag, text);
+            else Assert.Contains(tag, text);
             Assert.Contains(Encode(popup), text);
             Assert.DoesNotContain("{region}", text);
             Assert.DoesNotContain("{part}", text);
