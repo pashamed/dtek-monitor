@@ -227,10 +227,11 @@ public sealed class MultiAddressTests : IDisposable
             c.Addresses = [Address("Дім", "45.1"), Address("Офіс", "45.1")]; });
         var clock = new TestClock(Kyiv(15, 12)); var provider = new FakeScheduleProvider();
         provider.Snapshots["kyiv"] = RealSnapshot();
-        var checks = new AddressCheckService(f.Db, f.Bot, new FakeWorkflowTrigger(), f.Options, clock, NullLogger<AddressCheckService>.Instance, f.CreateMirror(time: clock));
+        var workflow = new FakeWorkflowTrigger();
+        var checks = new AddressCheckService(f.Db, f.Bot, workflow, f.Options, clock, NullLogger<AddressCheckService>.Instance, f.CreateMirror(time: clock));
         var assessment = new OutageAssessmentService(f.Db, checks, provider, f.Options, clock);
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
-        var handler = new DtekBot.Api.Bot.BotUpdateHandler(f.Bot, f.Db, assessment, config, clock,
+        var handler = new DtekBot.Api.Bot.BotUpdateHandler(f.Bot, f.Db, assessment, workflow, config, clock,
             NullLogger<DtekBot.Api.Bot.BotUpdateHandler>.Instance, f.CreateMirror(time: clock));
         await handler.HandleAsync(new Telegram.Bot.Types.Update { ChannelPost = new Telegram.Bot.Types.Message {
             Id = 123, Chat = new Telegram.Bot.Types.Chat { Id = channel.ChatId, Type = Telegram.Bot.Types.Enums.ChatType.Channel },

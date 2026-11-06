@@ -50,6 +50,10 @@ export function isEmergencyMessage(message) {
   )
 }
 
+export function isLocalEmergencyMessage(message) {
+  return message?.messageType === "local-emergency"
+}
+
 export function loadLastMessage() {
   if (!fs.existsSync(LAST_MESSAGE_FILE)) return null
 
@@ -69,6 +73,7 @@ export function loadLastMessage() {
     if (
       messageDay < today &&
       !isEmergencyMessage(lastMessage) &&
+      !isLocalEmergencyMessage(lastMessage) &&
       lastMessage.messageType !== "emergency-canceled"
     ) {
       deleteLastMessage()

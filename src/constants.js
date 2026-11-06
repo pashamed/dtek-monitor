@@ -9,6 +9,10 @@ export const {
   HOUSE,
   CHECK_ADDRESS,
   CHECK_GRID_STATUS,
+  CHANNEL_TRIGGER,
+  CHANNEL_TRIGGER_CHAT_ID,
+  CHANNEL_TRIGGER_MESSAGE_ID,
+  STANDALONE_MONITOR_CHAT_ID,
 } = process.env
 
 export const SHOULD_CHECK_GRID_STATUS =
@@ -27,6 +31,7 @@ export const SHUTDOWNS_PAGE =
 
 export const LAST_MESSAGE_FILE = path.resolve("artifacts", `last-message.json`)
 export const SHOULD_CHECK_ADDRESS = CHECK_ADDRESS !== "false"
+export const IS_CHANNEL_TRIGGER = CHANNEL_TRIGGER === "true"
 
 // Pause before the second popup check that confirms a cancellation
 export const CANCEL_RECHECK_DELAY = 30 * 1000

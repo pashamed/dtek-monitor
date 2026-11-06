@@ -9,6 +9,10 @@ import {
   HOUSE,
   SHUTDOWNS_PAGE,
   SHOULD_CHECK_ADDRESS,
+  IS_CHANNEL_TRIGGER,
+  CHANNEL_TRIGGER_CHAT_ID,
+  CHANNEL_TRIGGER_MESSAGE_ID,
+  STANDALONE_MONITOR_CHAT_ID,
   RETRIES_MAX_COUNT,
   RETRIES_TIMEOUT,
   CANCEL_RECHECK_DELAY,
@@ -24,6 +28,7 @@ import {
   getCurrentTime,
   isEmergencyMessage,
   isEmergencyNotice,
+  isLocalEmergencyMessage,
   isStabilizationNotice,
   loadLastMessage,
   saveLastMessage,
@@ -32,7 +37,7 @@ import {
 let getInfoRetries = 0
 let sendNotificationRetries = 0
 
-async function getInfo() {
+async function getInfo({ skipAddressForStabilization = false } = {}) {
   console.log("🌀 Getting info...")
 
   const browser = await chromium.launch({ headless: true })
@@ -100,6 +105,10 @@ async function getInfo() {
       console.log("ℹ️ Regional stabilization notice detected.")
     }
 
+    if (skipAddressForStabilization && isStabilizationNotice(regionalNotice)) {
+      return { regionalNotice, skipReason: "stabilization" }
+    }
+
     // Without the token the page is not the real DTEK page (Cloudflare,
     // maintenance, half-rendered), so "no popup" must not be trusted.
     const csrfTokenTag = await browserPage.waitForSelector(
@@ -159,7 +168,7 @@ async function getInfo() {
     console.log("🌀 Try getting info again...")
     await new Promise((resolve) => setTimeout(resolve, RETRIES_TIMEOUT))
     getInfoRetries++
-    return await getInfo()
+    return await getInfo({ skipAddressForStabilization })
   }
 
   throw Error(`❌ Getting info failed after ${RETRIES_MAX_COUNT} retries.`)
@@ -197,7 +206,7 @@ function checkIsScheduled(info) {
   return isScheduled
 }
 
-function generateMessage(info) {
+async function generateMessage(info) {
   console.log("🌀 Generating message...")
 
   const { sub_type, start_date, end_date } = info?.data?.[HOUSE] || {}
@@ -205,24 +214,79 @@ function generateMessage(info) {
   const update = updateTimestamp?.split(" ").reverse().join(" ")
 
   const reason = capitalize(sub_type)
-  const begin = start_date.split(" ")[0]
-  const end = end_date.split(" ")[0]
+  const [beginTime, ...beginDateParts] = start_date.trim().split(/\s+/)
+  const [endTime, ...endDateParts] = end_date.trim().split(/\s+/)
+  const beginDate = beginDateParts.join(" ")
+  const endDate = endDateParts.join(" ")
+  const isEmergencyAddressOutage = /авар|екстр/iu.test(sub_type)
+  let outageText
 
-  const outageText = [
-    `🪫 <code>${begin} — ${end}</code>`,
-    "",
-    `⚠️ <i>${reason}.</i>`,
-  ].join("\n")
+  if (isEmergencyAddressOutage) {
+    const hasDisabledStabilization =
+      /без застосування графіку погодинних відключень/iu.test(sub_type)
+    outageText = [
+      "🚨 <b>Локальне аварійне відключення:</b>",
+      "",
+      `🔴 Час початку: ${[beginTime, beginDate].filter(Boolean).join(" ")}`,
+      `🕓 Орієнтовне відновлення: до ${[endTime, endDate]
+        .filter(Boolean)
+        .join(" ")}`,
+      hasDisabledStabilization
+        ? "⚠️ Графіки стабілізаційних відключень не діють."
+        : null,
+      hasDisabledStabilization
+        ? "ℹ️ Час відновлення може змінитися."
+        : null,
+    ]
+      .filter((line) => line !== null)
+      .join("\n")
+  } else {
+    const timeRange =
+      beginDate && beginDate === endDate
+        ? `${beginTime} — ${endTime} ${beginDate}`
+        : `${[beginTime, beginDate].filter(Boolean).join(" ")} — ${[
+            endTime,
+            endDate,
+          ]
+            .filter(Boolean)
+            .join(" ")}`
+    outageText = [
+      `🪫 <code>${timeRange}</code>`,
+      "",
+      `⚠️ <i>${reason}.</i>`,
+    ].join("\n")
+  }
 
-  const text = [
-    "⚡️ <b>Зафіксовано відключення:</b>",
+  const gridStatusLine = isEmergencyAddressOutage
+    ? await getGridStatusLine()
+    : null
+  if (gridStatusLine) outageText = `${outageText}\n\n${gridStatusLine}`
+
+  const text = isEmergencyAddressOutage
+    ? [outageText, "", `🤖 <i>${getCurrentTime()}</i>`].join("\n")
+    : [
+        "⚡️ <b>Зафіксовано відключення:</b>",
+        outageText,
+        "",
+        `📢 <i>${update}</i>`,
+        `🤖 <i>${getCurrentTime()}</i>`,
+      ].join("\n")
+
+  return {
+    text,
     outageText,
-    "",
-    `📢 <i>${update}</i>`,
-    `🤖 <i>${getCurrentTime()}</i>`,
-  ].join("\n")
+    messageType: isEmergencyAddressOutage ? "local-emergency" : "outage",
+  }
+}
 
-  return { text, outageText, messageType: "outage" }
+function generateLocalEmergencyCancellationMessage() {
+  const outageText = [
+    "✅ <b>Локальне аварійне відключення більше не відображається на сайті ДТЕК.</b>",
+    "Якщо світла досі немає, перевірте статус через 15 хвилин.",
+  ].join("\n")
+  const text = [outageText, "", `🤖 <i>${getCurrentTime()}</i>`].join("\n")
+
+  return { text, outageText, messageType: "local-emergency-canceled" }
 }
 
 async function getGridStatusLine() {
@@ -299,7 +363,10 @@ async function sendNotification({ text, outageText, messageType }) {
   console.log("🌀 Sending notification...")
 
   const lastMessage = loadLastMessage() || {}
-  const isThreadClosed = lastMessage.messageType === "emergency-canceled"
+  const isThreadClosed = [
+    "emergency-canceled",
+    "local-emergency-canceled",
+  ].includes(lastMessage.messageType)
   const isOutageChanged = lastMessage.outageText !== outageText
   const hasMessageId = Boolean(lastMessage.message_id)
   const hasOpenMessage = hasMessageId && !isThreadClosed
@@ -375,13 +442,110 @@ async function sendNotification({ text, outageText, messageType }) {
   )
 }
 
+async function sendChannelTriggerReply(chatId, messageId, text) {
+  if (!TELEGRAM_BOT_TOKEN) throw Error("❌ Missing telegram bot token.")
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+        disable_notification: checkIsNight(),
+        reply_parameters: {
+          message_id: messageId,
+          allow_sending_without_reply: true,
+        },
+      }),
+    }
+  )
+
+  const data = await response.json()
+  if (!data.ok) throw Error(data.description || "Telegram reply failed.")
+  console.log("🟢 Address-check result replied to the channel post.")
+}
+
+async function runChannelTrigger() {
+  const chatId = Number(CHANNEL_TRIGGER_CHAT_ID)
+  const targetChatIdText = STANDALONE_MONITOR_CHAT_ID?.trim()
+  const targetChatId = Number(targetChatIdText)
+  const messageId = Number(CHANNEL_TRIGGER_MESSAGE_ID)
+  if (
+    !targetChatIdText ||
+    !Number.isSafeInteger(chatId) ||
+    !Number.isSafeInteger(targetChatId)
+  ) {
+    throw Error(
+      "❌ Set the STANDALONE_MONITOR_CHAT_ID GitHub Actions secret or variable."
+    )
+  }
+  if (chatId !== targetChatId) {
+    console.log("🟡 Channel post is not for the configured standalone monitor.")
+    return
+  }
+  if (
+    !Number.isSafeInteger(messageId) ||
+    messageId <= 0
+  ) {
+    throw Error("❌ Invalid channel-trigger payload.")
+  }
+  if (!SHOULD_CHECK_ADDRESS) {
+    throw Error("❌ Address checking is disabled for the channel trigger.")
+  }
+
+  let text
+  try {
+    const result = await getInfo({ skipAddressForStabilization: true })
+    if (result.emergencyNotice) {
+      text =
+        "ℹ️ На сайті ДТЕК діють регіональні екстрені відключення.\nАдресну перевірку не запускаю."
+    } else if (result.skipReason === "stabilization") {
+      text =
+        "🗓 На сайті ДТЕК відображаються стабілізаційні відключення.\nАдресну перевірку не запускаю."
+    } else if (!result.info) {
+      throw Error("Address status was not returned by DTEK.")
+    } else if (!checkIsOutage(result.info)) {
+      text =
+        "ℹ️ ДТЕК зараз не відображає відключення за адресою.\nЯкщо світла немає, перевірте статус ще раз через 15 хвилин."
+    } else if (checkIsScheduled(result.info)) {
+      text =
+        "🗓 За адресою на сайті ДТЕК відображається планове відключення.\nЛокальну аварію не підтверджено."
+    } else {
+      text = (await generateMessage(result.info)).text
+    }
+  } catch (error) {
+    console.error(`❌ Channel address check failed: ${error.message}.`)
+    text =
+      "⚠️ Не вдалося перевірити статус ДТЕК зараз.\nСпробуйте повторити запит пізніше."
+  }
+
+  await sendChannelTriggerReply(chatId, messageId, text)
+}
+
 async function run() {
+  if (IS_CHANNEL_TRIGGER) {
+    await runChannelTrigger()
+    return
+  }
+
   let result = await getInfo()
 
-  if (!result.emergencyNotice && isEmergencyMessage(loadLastMessage())) {
+  const lastMessage = loadLastMessage()
+  const isConfirmingRegionalClearance =
+    !result.emergencyNotice && isEmergencyMessage(lastMessage)
+  const isConfirmingLocalClearance =
+    !result.emergencyNotice &&
+    isLocalEmergencyMessage(lastMessage) &&
+    result.info &&
+    !checkIsOutage(result.info)
+
+  if (isConfirmingRegionalClearance || isConfirmingLocalClearance) {
     // Re-check after a pause so a single glitchy page load can't cancel
     console.log(
-      `🟡 No emergency popup, re-checking in ${CANCEL_RECHECK_DELAY / 1000}s...`
+      `🟡 No active emergency detected, re-checking in ${CANCEL_RECHECK_DELAY / 1000}s...`
     )
     await new Promise((resolve) => setTimeout(resolve, CANCEL_RECHECK_DELAY))
     result = await getInfo()
@@ -397,8 +561,6 @@ async function run() {
     await sendNotification(message)
     return
   }
-
-  const lastMessage = loadLastMessage()
 
   if (isEmergencyMessage(lastMessage)) {
     const message = generateEmergencyCancellationMessage(
@@ -423,11 +585,16 @@ async function run() {
 
   const isOutage = checkIsOutage(info)
 
-  if (!isOutage) return
+  if (!isOutage) {
+    if (isLocalEmergencyMessage(lastMessage)) {
+      await sendNotification(generateLocalEmergencyCancellationMessage())
+    }
+    return
+  }
 
   const isScheduled = checkIsScheduled(info)
   if (isOutage && !isScheduled) {
-    const message = generateMessage(info)
+    const message = await generateMessage(info)
     await sendNotification(message)
   }
 }

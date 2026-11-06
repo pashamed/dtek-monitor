@@ -20,6 +20,7 @@ The standalone monitor checks the DTEK website for a configured address and send
 - 🔴 Regional grid status in emergency and clearance messages, using [ua-power-status](https://github.com/lasercat12/ua-power-status). Region mapping: `k` — Kyiv city, `kr` — Kyiv oblast, `dn` — Dnipropetrovsk oblast, `o` — Odesa oblast, `d` — Donetsk oblast. The status line is omitted if data is unavailable.
 - ♻️ Updates to the existing message when the outage time and cause are unchanged.
 - ↩️ A reply to the previous message when the outage time or cause changes.
+- 🧵 Replies to configured channel power-off posts with the standalone address check, without editing the source post.
 - 📊 Outage cause, start time, and estimated restoration time.
 - 🌙 Silent notifications at night (22:00–08:00).
 - 🔄 Browser checks executed through GitHub Actions.
@@ -134,12 +135,13 @@ npm run watch
 
 ## 🔍 How it works
 
-1. **Collection:** Playwright opens the DTEK website. Scheduled runs and `check-emergency` check the regional popup; manual workflow runs and `check-dtek` additionally request the configured address.
-2. **Assessment:** The script reads the outage cause, start time, and end time. It sends no address notification if there is no outage or the outage is scheduled.
+1. **Collection:** Playwright opens the DTEK website. The hourly scheduled backup checks the regional popup; manual runs and both `check-dtek` and `check-emergency` dispatches also request the configured address.
+2. **Assessment:** After confirming there is no regional emergency, the script reads the configured address. DTEK emergency/accident results use a local-emergency message; when DTEK reports no active outage, the bot confirms that result with a second address check before posting a clearance reply. Scheduled outages are not reported. The hourly backup remains popup-only.
 3. **Delivery:** An accidental or emergency outage produces a Telegram notification, sent silently at night (22:00–08:00).
 4. **Message updates:**
    - A regional emergency/accident notice is sent as **one message**. Changes to the notice or grid status **edit that message**; stabilization notices are not treated as new emergencies, unless the same notice also reports an accident (“через аварію”), which is then sent to the named districts.
    - Clearance is sent as a **reply** only after two checks of a genuine DTEK page in the same run, 30 seconds apart. It **closes the thread**; the next emergency starts a new message.
+   - A local address emergency is cleared only after DTEK returns no active outage on two address checks, 30 seconds apart; the bot replies that the local emergency is no longer listed and advises checking again in 15 minutes if power is still out.
    - After clearance, the grid-status line in the clearance message continues to be edited until a new emergency starts.
    - Address outages edit the current message while time and cause are unchanged; otherwise they reply to the previous message. The first message of a new day is separate.
 
@@ -389,6 +391,7 @@ subscriptions or Telegram messages are changed.
   "Feedback": { "RecipientChatId": 0 },
   "Ingest": { "Secret": "…" },
   "App": { "PublicUrl": "https://your-host.example" },
+  "StandaloneMonitor": { "ChatId": -1001234567890 },
   "GitHub": { "Repository": "owner/dtek-monitor", "DispatchToken": "…" }
 }
 ```
@@ -396,6 +399,20 @@ subscriptions or Telegram messages are changed.
 Use `AutoMigrate: true` only for initial setup and updates requiring database migrations. **The `ResetApplicationData` migration deletes all application data**: connected chats and administrators, addresses, schedules, Svitlobot keys, and check state. Tables and migration history remain. This is irreversible; back up the database before applying it. Hosting configuration secrets are outside the database and are not deleted. `App:PublicUrl` is the site's HTTPS URL, used for the “Редактор” menu button and the button under the greeting.
 
 Set `Feedback:RecipientChatId` to the positive numeric Telegram user ID that should receive Mini App feedback; `0` disables delivery until configured. The recipient must open the bot and send `/start` before feedback can be delivered. Feedback includes the submitted text and the app/UI versions, and is sent only after the user explicitly submits the form. Requests require valid Mini App authentication, are limited to three per user per minute, and accept at most 2,000 characters. The recipient ID is configuration only and is not stored in the database.
+
+The standalone trigger uses the repository Actions secret or variable
+`STANDALONE_MONITOR_CHAT_ID` (prefer a secret if the channel ID should not be
+exposed) and the phrase
+“Світло зникло”; no Mini App or database setup is needed for that channel.
+The existing webhook relays matching posts as `check-channel-outage`
+dispatches to `monitor.yml`. The workflow ignores posts whose chat ID does not
+match the configured secret/variable, then checks the configured address and
+replies in the source post's thread without editing it. It skips the lookup
+when DTEK reports a regional emergency or stabilization notice; scheduled
+address outages are not labeled local emergencies. The webhook must be online
+to receive and relay posts, but it does not perform the address assessment.
+Other channels with the shared trigger enabled keep the existing assessment
+flow.
 
 **District recognition in DTEK notices.** The shared bot interprets nonempty public popups **LLM first in the API**, for both direct collection and browser ingestion. Its forced `submit_popup_interpretation` function takes only machine-readable arguments: state kinds (`emergency`, `accident`, `stabilization`, `cancelled`), explicit scope, and district IDs from `dtek-settings.json`. It is an internal model tool, not a public HTTP/MCP endpoint. The standalone monitor is unchanged.
 

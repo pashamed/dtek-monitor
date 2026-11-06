@@ -15,12 +15,14 @@ public sealed class TestClock(DateTimeOffset start) : TimeProvider
 public sealed class FakeWorkflowTrigger : IWorkflowTrigger
 {
     public List<string> Events { get; } = [];
+    public List<object?> Payloads { get; } = [];
 
     public bool Result { get; set; } = true;
 
     public Task<bool> TriggerAsync(string eventType, CancellationToken ct, object? payload = null)
     {
         Events.Add(eventType);
+        Payloads.Add(payload);
         return Task.FromResult(Result);
     }
 }

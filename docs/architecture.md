@@ -17,7 +17,9 @@ There are **two execution modes** in this repository:
    the Mini App.
 2. **Standalone monitor (optional/legacy):** a Node.js script can post directly to
    one configured Telegram chat. It does not use the shared backend's subscription
-   database. Do not confuse its GitHub `artifacts` state with the backend database.
+   database. A matching post in its configured channel can be dispatched by the
+   backend webhook to the standalone workflow for an address check. Do not confuse
+   its GitHub `artifacts` state with the backend database.
 
 ```mermaid
 flowchart TB
@@ -95,6 +97,7 @@ flowchart TB
     COLLECT -->|"repository_dispatch: check-regions"| SHARED
     CHECK -->|"repository_dispatch: check-addresses"| SHARED
     MTIMER -->|"repository_dispatch: check-emergency"| MON
+    HOOK -->|"repository_dispatch: check-channel-outage"| MON
     DTEK --> COLLECT
     GRID --> COLLECT
     PLAN --> COLLECT
@@ -103,6 +106,7 @@ flowchart TB
     STATIC --> WEBVIEW
     WEBVIEW -->|"HTTPS + signed Telegram initData"| API
     BOTAPI -->|"updates: webhook"| HOOK
+    CHATS -->|"channel_post updates"| BOTAPI
     SEND -->|"HTTPS Bot API"| BOTAPI
     SYNC --> SVB
     MON -. "standalone mode: direct posts" .-> BOTAPI
@@ -119,7 +123,8 @@ the diagram groups the API boundary for readability.
 | Backend `TickLoop` | Collect DTEK popups, grid status and Yasno group status alongside cache-aware schedule reads; reconcile after collection; evaluate schedule messages and Svitlobot | Default 5 minutes, after an initial 30-second delay; configurable / disableable |
 | Baskerville schedule provider | Share one snapshot per source file across cycles, Mini App reads and backup schedule ticks; conditional GET when due; retain usable stale data on failure | 10-minute refresh window (`Dtek:Schedules:CacheMinutes`); intervening 5-minute cycles use cached data, including backoff after failed attempts |
 | Backend `MonitorWorkflowTimer` | Dispatch `check-emergency` to the standalone monitor workflow, because GitHub cron often skips runs | Every `Dtek:Timers:MonitorWorkflowIntervalMinutes` in `dtek-settings.json` (default 15, `0` = off); needs `GitHub:Repository` and `GitHub:DispatchToken` |
-| GitHub monitor workflow | Optional standalone monitor (`monitor.js`) | Backend dispatch every 15 minutes; hourly UTC cron backup at minute 7; manual, `check-dtek` (with address check) and `check-emergency` |
+| Backend webhook | Relay matching power-off posts to the standalone monitor workflow | `check-channel-outage` repository dispatch; target chat is filtered by the Actions secret/variable |
+| GitHub monitor workflow | Optional standalone monitor (`monitor.js`) | Backend dispatch every 15 minutes; matching channel-post trigger; hourly UTC cron backup at minute 7; manual, `check-dtek` and `check-emergency` |
 | GitHub shared-bot workflow | Browser observations, address directories and queued checks; asks the API to run a coordinated monitoring tick as backup | `check-regions` / `check-addresses` dispatch from the backend; hourly UTC cron backup at minute 37; manual |
 | GitHub schedule-refresh workflow | Ask backend to evaluate schedules and sync Svitlobot (backup for `TickLoop`) | UTC cron every 10 minutes, offset to minute 2 |
 | SQL Server | Shared product's durable state | EF Core; source state, subscriptions and delivery records survive restarts |
@@ -135,6 +140,20 @@ The personal monitor first dispatches after 60 seconds; failed dispatches retry
 on the next interval. Dispatch acceptance is not proof of a completed run.
 Deploy the backend and merge workflows to the default branch to activate them.
 Use one backend instance; the timers and coordination gates are not distributed.
+
+For standalone address checks triggered by a channel power-off post, the
+`BotUpdateHandler` relays the default `OutageTriggerMatcher` phrase
+“Світло зникло” when no enabled shared-channel trigger handles the post. Set
+the repository Actions secret or variable `STANDALONE_MONITOR_CHAT_ID`; the
+standalone workflow filters the relayed chat ID before checking DTEK or
+replying. No channel ID is committed in source, and no
+database row or Mini App setting is required. The workflow checks regional
+status before requesting address data and replies to the source post; it does
+not edit the source or write the `artifacts` branch for these one-off checks.
+Regional emergency and stabilization notices suppress the address lookup;
+scheduled address outages are reported as planned, not local emergencies. The
+backend is only the Telegram event relay for this path and must be available
+when the trigger post arrives.
 
 Shared-bot group collection and popup interpretation are API-owned services.
 Browser workers supply raw source observations; the independent standalone
