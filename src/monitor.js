@@ -192,6 +192,16 @@ function checkIsOutage(info) {
   if (!house) throw Error(`❌ House ${HOUSE} not found.`)
 
   const { sub_type, start_date, end_date, type } = house
+  console.log(
+    "ℹ️ DTEK address status:",
+    JSON.stringify({
+      sub_type,
+      start_date,
+      end_date,
+      type,
+      update: info.updateTimestamp,
+    })
+  )
   const isOutageDetected =
     sub_type !== "" || start_date !== "" || end_date !== "" || type !== ""
 
@@ -329,13 +339,17 @@ async function getGridStatusLine() {
   }
 }
 
-function generateEmergencyMessage(emergencyNotice, gridStatusLine) {
-  console.log("🌀 Generating emergency outage message...")
-
-  const escapedNotice = emergencyNotice
+function escapeTelegramHtml(text) {
+  return text
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
+}
+
+function generateEmergencyMessage(emergencyNotice, gridStatusLine) {
+  console.log("🌀 Generating emergency outage message...")
+
+  const escapedNotice = escapeTelegramHtml(emergencyNotice)
 
   const outageText = [
     `🚨 <b>Екстрені / аварійні відключення:</b>\n\n${escapedNotice}`,
@@ -539,7 +553,31 @@ async function runChannelTrigger() {
       skipAddressForStabilization: !SHOULD_EDIT_CHANNEL_TRIGGER,
       ignoreRegionalNotice: SHOULD_EDIT_CHANNEL_TRIGGER,
     })
-    if (result.emergencyNotice) {
+    if (SHOULD_EDIT_CHANNEL_TRIGGER) {
+      if (!result.info) {
+        throw Error("Address status was not returned by DTEK.")
+      }
+      if (checkIsOutage(result.info)) {
+        text = (await generateMessage(result.info)).text
+      } else if (result.regionalNotice) {
+        text = isEmergencyNotice(result.regionalNotice)
+          ? generateEmergencyMessage(
+              result.regionalNotice,
+              await getGridStatusLine()
+            ).text
+          : [
+              "ℹ️ <b>Повідомлення ДТЕК:</b>",
+              escapeTelegramHtml(result.regionalNotice),
+              "",
+              `🤖 <i>${getCurrentTime()}</i>`,
+            ].join("\n")
+      } else {
+        console.warn(
+          "⚠️ No address outage or regional popup returned; leaving the channel post unchanged."
+        )
+        return
+      }
+    } else if (result.emergencyNotice) {
       text =
         "ℹ️ На сайті ДТЕК діють регіональні екстрені відключення.\nАдресну перевірку не запускаю."
     } else if (result.skipReason === "stabilization") {
@@ -558,6 +596,7 @@ async function runChannelTrigger() {
     }
   } catch (error) {
     console.error(`❌ Channel address check failed: ${error.message}.`)
+    if (SHOULD_EDIT_CHANNEL_TRIGGER) throw error
     text =
       "⚠️ Не вдалося перевірити статус ДТЕК зараз.\nСпробуйте повторити запит пізніше."
   }

@@ -18,7 +18,12 @@ async function runMonitor(
   triggerChatId = "-1",
   targetChatId = "-1",
   triggerMessageId = "42",
-  editChannelTrigger = false
+  editChannelTrigger = false,
+  {
+    endDate = "23:34 06.11.2026",
+    houseFound = true,
+    telegramError = null,
+  } = {}
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "dtek-monitor-test-"))
   if (lastMessage) {
@@ -45,14 +50,14 @@ async function runMonitor(
             return {
               result: true,
               updateTimestamp: '06.11.2026 20:51',
-              data: {
+              data: ${houseFound} ? {
                 '10': {
                   sub_type: subType,
                   start_date: subType ? '19:34 06.11.2026' : '',
-                  end_date: subType ? '23:34 06.11.2026' : '',
+                  end_date: subType ? ${JSON.stringify(endDate)} : '',
                   type: subType ? '2' : ''
                 }
-              }
+              } : {}
             };
           }
         }),
@@ -85,7 +90,8 @@ async function runMonitor(
       console.log('REPLY_TO:' + (body.reply_parameters?.message_id ?? 'none'));
       return {
         json: async () => ({
-          ok: true,
+          ok: ${!telegramError},
+          description: ${JSON.stringify(telegramError)},
           result: { date: 1793991060, message_id: 1 }
         })
       };
@@ -212,7 +218,8 @@ test("edits a manually selected post and checks its address despite regional eme
     "-1",
     "-1",
     "416",
-    true
+    true,
+    { endDate: "03:20 07.11.2026" }
   )
 
   assert.match(stdout, /ADDRESS_LOOKUP/)
@@ -220,8 +227,72 @@ test("edits a manually selected post and checks its address despite regional eme
   assert.match(stdout, /EDIT_TO:416/)
   assert.match(stdout, /CHAT_TO:-1/)
   assert.match(stdout, /🚨 <b>Локальне аварійне відключення:<\/b>/)
+  assert.match(stdout, /Час початку: 19:34 06\.11\.2026/)
+  assert.match(stdout, /Орієнтовне відновлення: до 03:20 07\.11\.2026/)
   assert.doesNotMatch(stdout, /METHOD:sendMessage|REPLY:true/)
   assert.doesNotMatch(stdout, /регіональні екстрені відключення/)
+})
+
+test("manual edits use the emergency popup when the address has no listed outage", async () => {
+  const notice =
+    "За наказом НЕК Укренерго введені екстрені відключення електроенергії."
+  const { stdout } = await runMonitor(
+    "", notice, null, true, "-1", "-1", "416", true
+  )
+
+  assert.match(stdout, /EDIT_TO:416/)
+  assert.match(stdout, /🚨 <b>Екстрені \/ аварійні відключення:<\/b>/)
+  assert.match(stdout, new RegExp(notice))
+  assert.doesNotMatch(stdout, /ДТЕК зараз не відображає|METHOD:sendMessage/)
+})
+
+test("manual edits preserve a non-emergency popup and escape its HTML", async () => {
+  const { stdout } = await runMonitor(
+    "", "Діють стабілізаційні відключення. <ДТЕК> & клієнти",
+    null, true, "-1", "-1", "416", true
+  )
+
+  assert.match(stdout, /ADDRESS_LOOKUP/)
+  assert.match(stdout, /EDIT_TO:416/)
+  assert.match(stdout, /Діють стабілізаційні відключення\. &lt;ДТЕК&gt; &amp; клієнти/)
+  assert.doesNotMatch(stdout, /ДТЕК зараз не відображає|METHOD:sendMessage/)
+})
+
+test("manual checks leave the post unchanged when neither outage nor popup is available", async () => {
+  const { stdout, stderr } = await runMonitor(
+    "", null, null, true, "-1", "-1", "416", true
+  )
+
+  assert.match(stderr, /leaving the channel post unchanged/)
+  assert.doesNotMatch(stdout, /METHOD:|MESSAGE:/)
+})
+
+test("manual checks fail without editing when the configured house is missing", async () => {
+  await assert.rejects(
+    runMonitor("", null, null, true, "-1", "-1", "416", true, {
+      houseFound: false,
+    }),
+    (error) => {
+      assert.match(error.stderr, /House 10 not found/)
+      assert.doesNotMatch(error.stdout, /METHOD:|MESSAGE:/)
+      return true
+    }
+  )
+})
+
+test("failed manual Telegram edits never fall back to sending another message", async () => {
+  await assert.rejects(
+    runMonitor(
+      "Екстренні відключення", null, null, true, "-1", "-1", "416", true,
+      { telegramError: "Bad Request: message can't be edited" }
+    ),
+    (error) => {
+      assert.match(error.stderr, /message can't be edited/)
+      assert.match(error.stdout, /METHOD:editMessageText/)
+      assert.doesNotMatch(error.stdout, /METHOD:sendMessage/)
+      return true
+    }
+  )
 })
 
 test("does not query the address while a regional stabilization notice is active", async () => {
