@@ -154,8 +154,9 @@ Regional emergency and stabilization notices suppress the address lookup;
 scheduled address outages are reported as planned, not local emergencies. The
 backend is only the Telegram event relay for this path and must be available
 when the trigger post arrives. To manually check an existing post, dispatch
-`monitor.yml` with its optional `message_id` input; this uses the same
-configured chat and posts a thread reply without editing the original.
+`monitor.yml` with its optional `message_id` input; this checks the configured
+address without regional-popup suppression and edits the selected post. The bot
+needs permission to edit channel messages.
 
 Shared-bot group collection and popup interpretation are API-owned services.
 Browser workers supply raw source observations; the independent standalone

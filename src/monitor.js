@@ -10,6 +10,7 @@ import {
   SHUTDOWNS_PAGE,
   SHOULD_CHECK_ADDRESS,
   IS_CHANNEL_TRIGGER,
+  SHOULD_EDIT_CHANNEL_TRIGGER,
   CHANNEL_TRIGGER_CHAT_ID,
   CHANNEL_TRIGGER_MESSAGE_ID,
   STANDALONE_MONITOR_CHAT_ID,
@@ -37,7 +38,10 @@ import {
 let getInfoRetries = 0
 let sendNotificationRetries = 0
 
-async function getInfo({ skipAddressForStabilization = false } = {}) {
+async function getInfo({
+  skipAddressForStabilization = false,
+  ignoreRegionalNotice = false,
+} = {}) {
   console.log("🌀 Getting info...")
 
   const browser = await chromium.launch({ headless: true })
@@ -94,18 +98,25 @@ async function getInfo({ skipAddressForStabilization = false } = {}) {
       }
     }
 
-    const emergencyNotice = isEmergencyNotice(regionalNotice)
+    const emergencyNotice =
+      !ignoreRegionalNotice && isEmergencyNotice(regionalNotice)
       ? regionalNotice
       : null
 
     if (emergencyNotice) {
       console.log("🚨 Regional outage notice detected!")
       return { emergencyNotice, regionalNotice }
-    } else if (regionalNotice) {
+    } else if (regionalNotice && !ignoreRegionalNotice) {
       console.log("ℹ️ Regional stabilization notice detected.")
+    } else if (regionalNotice) {
+      console.log("ℹ️ Ignoring regional popup for the manual address check.")
     }
 
-    if (skipAddressForStabilization && isStabilizationNotice(regionalNotice)) {
+    if (
+      !ignoreRegionalNotice &&
+      skipAddressForStabilization &&
+      isStabilizationNotice(regionalNotice)
+    ) {
       return { regionalNotice, skipReason: "stabilization" }
     }
 
@@ -168,7 +179,7 @@ async function getInfo({ skipAddressForStabilization = false } = {}) {
     console.log("🌀 Try getting info again...")
     await new Promise((resolve) => setTimeout(resolve, RETRIES_TIMEOUT))
     getInfoRetries++
-    return await getInfo({ skipAddressForStabilization })
+    return await getInfo({ skipAddressForStabilization, ignoreRegionalNotice })
   }
 
   throw Error(`❌ Getting info failed after ${RETRIES_MAX_COUNT} retries.`)
@@ -468,6 +479,32 @@ async function sendChannelTriggerReply(chatId, messageId, text) {
   console.log("🟢 Address-check result replied to the channel post.")
 }
 
+async function editChannelTriggerMessage(chatId, messageId, text) {
+  if (!TELEGRAM_BOT_TOKEN) throw Error("❌ Missing telegram bot token.")
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: "HTML",
+      }),
+    }
+  )
+
+  const data = await response.json()
+  if (data.description?.includes("message is not modified")) {
+    console.log("🟡 Channel post already contains the current address status.")
+    return
+  }
+  if (!data.ok) throw Error(data.description || "Telegram message edit failed.")
+  console.log("🟢 Address-check result edited the channel post.")
+}
+
 async function runChannelTrigger() {
   const chatId = Number(CHANNEL_TRIGGER_CHAT_ID)
   const targetChatIdText = STANDALONE_MONITOR_CHAT_ID?.trim()
@@ -498,7 +535,10 @@ async function runChannelTrigger() {
 
   let text
   try {
-    const result = await getInfo({ skipAddressForStabilization: true })
+    const result = await getInfo({
+      skipAddressForStabilization: !SHOULD_EDIT_CHANNEL_TRIGGER,
+      ignoreRegionalNotice: SHOULD_EDIT_CHANNEL_TRIGGER,
+    })
     if (result.emergencyNotice) {
       text =
         "ℹ️ На сайті ДТЕК діють регіональні екстрені відключення.\nАдресну перевірку не запускаю."
@@ -522,7 +562,11 @@ async function runChannelTrigger() {
       "⚠️ Не вдалося перевірити статус ДТЕК зараз.\nСпробуйте повторити запит пізніше."
   }
 
-  await sendChannelTriggerReply(chatId, messageId, text)
+  if (SHOULD_EDIT_CHANNEL_TRIGGER) {
+    await editChannelTriggerMessage(chatId, messageId, text)
+  } else {
+    await sendChannelTriggerReply(chatId, messageId, text)
+  }
 }
 
 async function run() {

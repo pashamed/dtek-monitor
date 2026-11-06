@@ -12,6 +12,7 @@ export const {
   CHANNEL_TRIGGER,
   CHANNEL_TRIGGER_CHAT_ID,
   CHANNEL_TRIGGER_MESSAGE_ID,
+  CHANNEL_TRIGGER_EDIT,
   STANDALONE_MONITOR_CHAT_ID,
 } = process.env
 
@@ -32,6 +33,7 @@ export const SHUTDOWNS_PAGE =
 export const LAST_MESSAGE_FILE = path.resolve("artifacts", `last-message.json`)
 export const SHOULD_CHECK_ADDRESS = CHECK_ADDRESS !== "false"
 export const IS_CHANNEL_TRIGGER = CHANNEL_TRIGGER === "true"
+export const SHOULD_EDIT_CHANNEL_TRIGGER = CHANNEL_TRIGGER_EDIT === "true"
 
 // Pause before the second popup check that confirms a cancellation
 export const CANCEL_RECHECK_DELAY = 30 * 1000

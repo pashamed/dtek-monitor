@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       message_id:
-        description: "Optional Telegram post message ID to check and reply to"
+        description: "Optional Telegram post message ID to check and edit"
         required: false
         type: string
   repository_dispatch:
@@ -76,6 +76,7 @@ jobs:
           CHECK_ADDRESS: ${{ steps.check-type.outputs.address }}
           CHECK_GRID_STATUS: ${{ secrets.CHECK_GRID_STATUS }}
           CHANNEL_TRIGGER: ${{ github.event.action == 'check-channel-outage' || (github.event_name == 'workflow_dispatch' && inputs.message_id != '') }}
+          CHANNEL_TRIGGER_EDIT: ${{ github.event_name == 'workflow_dispatch' && inputs.message_id != '' }}
           CHANNEL_TRIGGER_CHAT_ID: ${{ (github.event.action == 'check-channel-outage' && github.event.client_payload.chat_id) || vars.STANDALONE_MONITOR_CHAT_ID || secrets.STANDALONE_MONITOR_CHAT_ID }}
           CHANNEL_TRIGGER_MESSAGE_ID: ${{ github.event.action == 'check-channel-outage' && github.event.client_payload.message_id || inputs.message_id }}
           STANDALONE_MONITOR_CHAT_ID: ${{ vars.STANDALONE_MONITOR_CHAT_ID || secrets.STANDALONE_MONITOR_CHAT_ID }}

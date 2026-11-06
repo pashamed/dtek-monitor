@@ -414,8 +414,10 @@ to receive and relay posts, but it does not perform the address assessment.
 Other channels with the shared trigger enabled keep the existing assessment
 flow. To check an existing post manually, open **Actions → Run power outages
 monitor → Run workflow**, enter its Telegram message ID in the optional
-`message_id` field, and start the workflow. The bot replies in that post's
-thread; it does not edit the existing post.
+`message_id` field, and start the workflow. The standalone monitor checks the
+configured address regardless of the regional popup and edits that post with
+the result; it does not send a separate reply. The bot must have permission to
+edit messages in the channel.
 
 **District recognition in DTEK notices.** The shared bot interprets nonempty public popups **LLM first in the API**, for both direct collection and browser ingestion. Its forced `submit_popup_interpretation` function takes only machine-readable arguments: state kinds (`emergency`, `accident`, `stabilization`, `cancelled`), explicit scope, and district IDs from `dtek-settings.json`. It is an internal model tool, not a public HTTP/MCP endpoint. The standalone monitor is unchanged.
 

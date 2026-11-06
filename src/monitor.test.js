@@ -17,7 +17,8 @@ async function runMonitor(
   channelTrigger = false,
   triggerChatId = "-1",
   targetChatId = "-1",
-  triggerMessageId = "42"
+  triggerMessageId = "42",
+  editChannelTrigger = false
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "dtek-monitor-test-"))
   if (lastMessage) {
@@ -76,8 +77,10 @@ async function runMonitor(
       if (!url.startsWith('https://api.telegram.org/'))
         throw new Error('Unexpected request: ' + url);
       const body = JSON.parse(options.body);
+      console.log('METHOD:' + url.split('/').pop());
       console.log('MESSAGE:' + body.text);
       console.log('CHAT_TO:' + body.chat_id);
+      console.log('EDIT_TO:' + (body.message_id ?? 'none'));
       console.log('REPLY:' + Boolean(body.reply_parameters));
       console.log('REPLY_TO:' + (body.reply_parameters?.message_id ?? 'none'));
       return {
@@ -109,6 +112,7 @@ async function runMonitor(
         CHANNEL_TRIGGER: String(channelTrigger),
         CHANNEL_TRIGGER_CHAT_ID: channelTrigger ? triggerChatId : "",
         CHANNEL_TRIGGER_MESSAGE_ID: channelTrigger ? triggerMessageId : "",
+        CHANNEL_TRIGGER_EDIT: String(editChannelTrigger),
         STANDALONE_MONITOR_CHAT_ID: channelTrigger ? targetChatId : "",
       },
       timeout: 10000,
@@ -176,7 +180,7 @@ test("does not repeat a local emergency clearance", async () => {
   assert.doesNotMatch(stdout, /MESSAGE:/)
 })
 
-test("replies to the triggering post with the configured local emergency status", async () => {
+test("replies to automatic channel triggers with the configured local emergency status", async () => {
   const { stdout } = await runMonitor(
     "Екстренні відключення (Аварійне без застосування графіку погодинних відключень)",
     null,
@@ -188,11 +192,36 @@ test("replies to the triggering post with the configured local emergency status"
   )
 
   assert.match(stdout, /ADDRESS_LOOKUP/)
+  assert.match(stdout, /METHOD:sendMessage/)
   assert.match(stdout, /REPLY:true/)
   assert.match(stdout, /REPLY_TO:416/)
+  assert.match(stdout, /EDIT_TO:none/)
   assert.match(stdout, /CHAT_TO:-1/)
   assert.match(stdout, /🚨 <b>Локальне аварійне відключення:<\/b>/)
   assert.doesNotMatch(stdout, /Зафіксовано відключення/)
+})
+
+test("edits a manually selected post and checks its address despite regional emergency notices", async () => {
+  const notice =
+    "За наказом НЕК Укренерго введені екстрені відключення електроенергії."
+  const { stdout } = await runMonitor(
+    "Екстренні відключення (Аварійне без застосування графіку погодинних відключень)",
+    notice,
+    null,
+    true,
+    "-1",
+    "-1",
+    "416",
+    true
+  )
+
+  assert.match(stdout, /ADDRESS_LOOKUP/)
+  assert.match(stdout, /METHOD:editMessageText/)
+  assert.match(stdout, /EDIT_TO:416/)
+  assert.match(stdout, /CHAT_TO:-1/)
+  assert.match(stdout, /🚨 <b>Локальне аварійне відключення:<\/b>/)
+  assert.doesNotMatch(stdout, /METHOD:sendMessage|REPLY:true/)
+  assert.doesNotMatch(stdout, /регіональні екстрені відключення/)
 })
 
 test("does not query the address while a regional stabilization notice is active", async () => {
