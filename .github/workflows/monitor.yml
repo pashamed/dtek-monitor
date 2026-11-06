@@ -6,11 +6,16 @@ on:
   schedule:
     - cron: "7 * * * *"
   workflow_dispatch:
+    inputs:
+      message_id:
+        description: "Optional Telegram post message ID to check and reply to"
+        required: false
+        type: string
   repository_dispatch:
     types: [check-dtek, check-emergency, check-channel-outage]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.client_payload.message_id || 'monitor' }}
+  group: ${{ github.workflow }}-${{ github.event.client_payload.message_id || inputs.message_id || 'monitor' }}
   cancel-in-progress: false
 
 permissions:
@@ -28,7 +33,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Checkout artifacts
-        if: github.event.action != 'check-channel-outage'
+        if: ${{ github.event.action != 'check-channel-outage' && !(github.event_name == 'workflow_dispatch' && inputs.message_id != '') }}
         run: |
           REMOTE_BRANCH=$(git ls-remote --heads origin artifacts)
 
@@ -70,14 +75,14 @@ jobs:
           HOUSE: ${{ secrets.HOUSE }}
           CHECK_ADDRESS: ${{ steps.check-type.outputs.address }}
           CHECK_GRID_STATUS: ${{ secrets.CHECK_GRID_STATUS }}
-          CHANNEL_TRIGGER: ${{ github.event.action == 'check-channel-outage' }}
-          CHANNEL_TRIGGER_CHAT_ID: ${{ github.event.client_payload.chat_id }}
-          CHANNEL_TRIGGER_MESSAGE_ID: ${{ github.event.client_payload.message_id }}
+          CHANNEL_TRIGGER: ${{ github.event.action == 'check-channel-outage' || (github.event_name == 'workflow_dispatch' && inputs.message_id != '') }}
+          CHANNEL_TRIGGER_CHAT_ID: ${{ (github.event.action == 'check-channel-outage' && github.event.client_payload.chat_id) || vars.STANDALONE_MONITOR_CHAT_ID || secrets.STANDALONE_MONITOR_CHAT_ID }}
+          CHANNEL_TRIGGER_MESSAGE_ID: ${{ github.event.action == 'check-channel-outage' && github.event.client_payload.message_id || inputs.message_id }}
           STANDALONE_MONITOR_CHAT_ID: ${{ vars.STANDALONE_MONITOR_CHAT_ID || secrets.STANDALONE_MONITOR_CHAT_ID }}
         run: node ./src/monitor.js
 
       - name: Commit updated artifacts
-        if: github.event.action != 'check-channel-outage'
+        if: ${{ github.event.action != 'check-channel-outage' && !(github.event_name == 'workflow_dispatch' && inputs.message_id != '') }}
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"

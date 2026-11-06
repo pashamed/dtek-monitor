@@ -16,7 +16,8 @@ async function runMonitor(
   lastMessage = null,
   channelTrigger = false,
   triggerChatId = "-1",
-  targetChatId = "-1"
+  targetChatId = "-1",
+  triggerMessageId = "42"
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "dtek-monitor-test-"))
   if (lastMessage) {
@@ -107,7 +108,7 @@ async function runMonitor(
         CHECK_GRID_STATUS: "false",
         CHANNEL_TRIGGER: String(channelTrigger),
         CHANNEL_TRIGGER_CHAT_ID: channelTrigger ? triggerChatId : "",
-        CHANNEL_TRIGGER_MESSAGE_ID: channelTrigger ? "42" : "",
+        CHANNEL_TRIGGER_MESSAGE_ID: channelTrigger ? triggerMessageId : "",
         STANDALONE_MONITOR_CHAT_ID: channelTrigger ? targetChatId : "",
       },
       timeout: 10000,
@@ -180,12 +181,15 @@ test("replies to the triggering post with the configured local emergency status"
     "Екстренні відключення (Аварійне без застосування графіку погодинних відключень)",
     null,
     null,
-    true
+    true,
+    "-1",
+    "-1",
+    "416"
   )
 
   assert.match(stdout, /ADDRESS_LOOKUP/)
   assert.match(stdout, /REPLY:true/)
-  assert.match(stdout, /REPLY_TO:42/)
+  assert.match(stdout, /REPLY_TO:416/)
   assert.match(stdout, /CHAT_TO:-1/)
   assert.match(stdout, /🚨 <b>Локальне аварійне відключення:<\/b>/)
   assert.doesNotMatch(stdout, /Зафіксовано відключення/)
