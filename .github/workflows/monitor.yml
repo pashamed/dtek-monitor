@@ -48,11 +48,11 @@ jobs:
           npm ci
           npx playwright install chromium
 
-      # Timed runs check only the regional popup; the address check runs on manual runs and check-dtek.
+      # The hourly backup checks only the regional popup; all dispatches also check the configured address.
       - name: Determine check type
         id: check-type
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.action }}" = "check-emergency" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "address=false" >> "$GITHUB_OUTPUT"
           else
             echo "address=true" >> "$GITHUB_OUTPUT"

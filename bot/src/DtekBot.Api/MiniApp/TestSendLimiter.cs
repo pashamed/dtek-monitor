@@ -3,15 +3,15 @@ using System.Collections.Concurrent;
 namespace DtekBot.Api.MiniApp;
 
 // Test posts go to a real channel, so a chat gets at most a few per minute.
-public static class TestSendLimiter
+public sealed class TestSendLimiter
 {
     private const int MaxPerWindow = 5;
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
-    private static readonly ConcurrentDictionary<long, Queue<DateTimeOffset>> Recent = new();
+    private readonly ConcurrentDictionary<long, Queue<DateTimeOffset>> _recent = new();
 
-    public static bool IsLimited(long chatId, DateTimeOffset now)
+    public bool IsLimited(long chatId, DateTimeOffset now)
     {
-        var queue = Recent.GetOrAdd(chatId, _ => new Queue<DateTimeOffset>());
+        var queue = _recent.GetOrAdd(chatId, _ => new Queue<DateTimeOffset>());
         lock (queue)
         {
             while (queue.Count > 0 && now - queue.Peek() > Window)

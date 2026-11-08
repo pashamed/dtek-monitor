@@ -156,7 +156,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
     }
 
     private const string StabilizationAt12 =
-        "🗓 За графіком (черга 45.1) зараз планове стабілізаційне відключення з 11:00.\n"
+        "🗓 За графіком (група 45.1) зараз планове стабілізаційне відключення з 11:00.\n"
         + "Світло очікується о 14:00.\n"
         + "Перевірку за адресою на сайті ДТЕК не запускаю.\n"
         + "\n"
@@ -245,7 +245,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
         var text = await AssessAsync(channel);
 
         Assert.Equal(
-            "🚨 Для вашої черги 45.1 зараз діють екстрені відключення (за даними Yasno).\n\n"
+            "⚠️ Для вашої групи 45.1 зараз діють екстрені відключення (за даними Yasno).\n\n"
             + StabilizationAt12
             + "\n\n"
             + RegionWideWarning,
@@ -326,7 +326,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
 
         var parts = text.Split("\n\n");
         Assert.Equal(2, parts.Length);
-        Assert.Equal("🚨 Для вашої черги 45.1 зараз діють екстрені відключення (за даними Yasno).", parts[0]);
+        Assert.Equal("⚠️ Для вашої групи 45.1 зараз діють екстрені відключення (за даними Yasno).", parts[0]);
         Assert.StartsWith("⏳", parts[1]);
         Assert.Equal(1, CheckRows());
         Assert.Single(_trigger.Events);
@@ -341,7 +341,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
         var text = await AssessAsync(channel);
 
         Assert.Equal(
-            "🚨 Для вашої черги 45.1 зараз діють екстрені відключення (за даними Yasno).\n\n" + StabilizationAt12,
+            "⚠️ Для вашої групи 45.1 зараз діють екстрені відключення (за даними Yasno).\n\n" + StabilizationAt12,
             text);
         Assert.Equal(0, CheckRows());
         Assert.Empty(_trigger.Events);
@@ -386,7 +386,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
         var text = await AssessAsync(channel);
 
         Assert.Equal(
-            "🗓 За графіком (черга 45.1) зараз планове стабілізаційне відключення з 20:30.\n"
+            "🗓 За графіком (група 45.1) зараз планове стабілізаційне відключення з 20:30.\n"
             + "Світло очікується о 00:00 (16.10).\n"
             + "Перевірку за адресою на сайті ДТЕК не запускаю.\n"
             + "\n"
@@ -433,7 +433,7 @@ public sealed class OutageAssessmentServiceTests : IDisposable
         onGroup.GroupId = "2.1";
         var offGroup = await AssessAsync(onGroup);
 
-        Assert.Contains("(черга 2.1)", offGroup);
+        Assert.Contains("(група 2.1)", offGroup);
         Assert.Contains("з 11:00.", offGroup);
     }
 

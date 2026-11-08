@@ -13,7 +13,8 @@ public static class AlertSourceText
 {
     public static string Tag(string message, AlertSource source)
     {
-        if (source is AlertSource.None or AlertSource.Dtek)
+        // Yasno attribution goes on its own line at the end of the post (EnsureAttribution), after the address.
+        if (source is AlertSource.None or AlertSource.Dtek or AlertSource.Yasno)
         {
             return message;
         }

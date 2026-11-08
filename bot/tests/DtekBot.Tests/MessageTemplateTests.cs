@@ -15,7 +15,7 @@ public class MessageTemplateTests
     [InlineData("schedule-heading", "{шапка}\n📅 {дата}")]
     [InlineData("schedule-heading", "{шапка}\n📅 {дата}{#адреса}\n📍 {адреса}{/адреса}")]
     [InlineData("schedule-line", "{початок}–{кінець}")]
-    [InlineData("before-off", "⏳ Планове відключення о {час}\n{регіон} · черга {черга}")]
+    [InlineData("before-off", "⏳ Планове відключення о {час}\n{регіон} · група {група}")]
     [InlineData("emergency", "{текст} <b><i><a href=\"https://example.test/?a=1&amp;b=2\">Оновлення</a></i></b>")]
     [InlineData("emergency", "<strong>{emoji}</strong> {текст}{#address}\n<b>{address}</b>{/address}\n{{буквально}} &amp; &lt;текст&gt;\n<a href=\"{site}\">ДТЕК</a>!")]
     public void Validate_VisualEditorStylesAndMarkup_UseExistingContract(string slot, string template)
@@ -28,9 +28,9 @@ public class MessageTemplateTests
     [Fact]
     public void Render_ReplacesPlaceholders()
     {
-        var result = MessageTemplate.Render("{emoji} {region}!", Values(("emoji", "🚨"), ("region", "Київ")));
+        var result = MessageTemplate.Render("{emoji} {region}!", Values(("emoji", "⚠️"), ("region", "Київ")));
 
-        Assert.Equal("🚨 Київ!", result);
+        Assert.Equal("⚠️ Київ!", result);
     }
 
     [Fact]
@@ -87,11 +87,11 @@ public class MessageTemplateTests
     [InlineData("   \n ")]
     public void Render_NullOrBlankTemplate_RendersDefault(string? template)
     {
-        var values = Values(("emoji", "🚨"), ("message", "Повідомлення"), ("site", "https://x.y"));
+        var values = Values(("emoji", "⚠️"), ("message", "Повідомлення"), ("site", "https://x.y"));
 
         var result = MessageTemplate.Render(template, values);
 
-        Assert.Equal("🚨 Повідомлення", result);
+        Assert.Equal("⚠️ Повідомлення", result);
         Assert.Equal(MessageTemplate.Render(MessageTemplate.Default, values), result);
     }
 
@@ -274,7 +274,7 @@ public class MessageTemplateTests
     // ---- RenderPreviewHtml ----
 
     [Theory]
-    [InlineData(AlertKind.Emergency, "\U0001F6A8")]
+    [InlineData(AlertKind.Emergency, "\u26A0")]
     [InlineData(AlertKind.Accident, "\u26A0")]
     [InlineData(AlertKind.Unknown, "\u2139")]
     [InlineData(AlertKind.Ended, "\u2139\uFE0F")]

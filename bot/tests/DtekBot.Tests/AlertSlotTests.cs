@@ -65,7 +65,7 @@ public sealed class AlertSlotTests : IDisposable
             DispatcherFixture.EmergencyText,
             c => c.TemplateMap = Map(("emergency", "EMG {emoji} {message}"), ("regional", "REG {message}"), ("local", "LOC {message}")));
 
-        Assert.StartsWith("EMG 🚨 ", text);
+        Assert.StartsWith("EMG ⚠️ ", text);
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public sealed class AlertSlotTests : IDisposable
             DispatcherFixture.EmergencyText,
             c => c.TemplateMap = Map(("schedule", "{outages}"), ("off", "OFF"), ("on", "ON")));
 
-        Assert.StartsWith("🚨 ", text);
+        Assert.StartsWith("⚠️ ", text);
         Assert.DoesNotContain("Деталі:", text);
     }
 
@@ -274,8 +274,10 @@ public sealed class AlertSlotTests : IDisposable
         await GroupAsync(emergency: true);
 
         var text = Assert.Single(_f.Bot.Sent).Text;
-        Assert.StartsWith("🚨 Локальне відключення, черга 45.1\n", text);
-        Assert.EndsWith("\n📍 вул. Хрещатик, 1", text);
+        Assert.Equal(
+            "⚠️ м. Київ (загально по групі 45.1): введені екстрені відключення. Графіки не діють; повідомимо про зміни."
+                + "\n📍 вул. Хрещатик, 1\n\n(за даними Yasno)",
+            text);
         Assert.DoesNotContain("Деталі:", text);
     }
 

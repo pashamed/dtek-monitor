@@ -58,7 +58,7 @@ public sealed class ChatStatusService(
             ? "ℹ️ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено."
             : classified?.Kind switch
         {
-            PopupKind.Emergency => "🚨 На сайті ДТЕК діють екстрені відключення.",
+            PopupKind.Emergency => "⚠️ На сайті ДТЕК діють екстрені відключення.",
             PopupKind.Accident => "⚠️ На сайті ДТЕК повідомлено про аварію в енергосистемі.",
             PopupKind.Unknown => "ℹ️ На сайті ДТЕК є невизначене повідомлення.",
             PopupKind.Stabilization => "🗓 Діють стабілізаційні відключення (за графіками).",
@@ -75,7 +75,7 @@ public sealed class ChatStatusService(
             var group = await db.GroupStates.FirstOrDefaultAsync(g => g.RegionId == region.Id && g.GroupId == groupId, ct);
             if (group?.IsEmergency == true)
             {
-                lines.Add($"🚨 Для черги {groupId} діють екстрені відключення (за даними Yasno).");
+                lines.Add($"⚠️ Для групи {groupId} діють екстрені відключення (за даними Yasno).");
             }
 
             if (region.HasSchedules)
@@ -87,14 +87,14 @@ public sealed class ChatStatusService(
                 {
                     var since = status.Since is { } s ? $" з {ScheduleText.Clock(s)}" : "";
                     var until = status.Until is { } u ? $" Планове завершення о {ScheduleText.ClockWithDay(u, now)}." : "";
-                    lines.Add($"🗓 За графіком (черга {groupId}) заплановано відключення{since}.{until}");
+                    lines.Add($"🗓 За графіком (група {groupId}) заплановано відключення{since}.{until}");
                 }
                 else if (status is not null)
                 {
                     var next = status.NextStart is { } n
                         ? $" Наступне відключення о {ScheduleText.ClockWithDay(n, now)}."
                         : " Наступних відключень за графіком поки немає.";
-                    lines.Add($"🗓 За графіком (черга {groupId}) зараз відключення не заплановано.{next}");
+                    lines.Add($"🗓 За графіком (група {groupId}) зараз відключення не заплановано.{next}");
                 }
             }
         }
@@ -133,7 +133,7 @@ public sealed class ChatStatusService(
         var districts = region.DisplayNames(channel.PartIdList);
         lines.Add("Збережені райони: " + (districts.Count > 0 ? string.Join(", ", districts) : "увесь регіон") + ".");
         var groupIds = channel.GroupIds();
-        lines.Add("Збережені черги: " + (groupIds.Count > 0 ? string.Join(", ", groupIds) : "не обрано") + ".");
+        lines.Add("Збережені групи: " + (groupIds.Count > 0 ? string.Join(", ", groupIds) : "не обрано") + ".");
         foreach (var address in channel.Addresses)
             lines.Add($"Адреса «{address.Name}»: {address.Label ?? string.Join(", ", new[] { address.City, address.Street, address.House }.Where(v => !string.IsNullOrWhiteSpace(v)))}.");
         if (channel.Addresses.Count == 0 && !string.IsNullOrWhiteSpace(channel.AddressLabel))
@@ -174,7 +174,7 @@ public sealed class ChatStatusService(
         if (!region.HasSchedules)
             lines.Add("Джерело графіків для цього регіону не налаштовано.");
         else if (groupIds.Count == 0)
-            lines.Add("Для автопублікації оберіть чергу або адресу з чергою.");
+            lines.Add("Для автопублікації оберіть групу або адресу з групою.");
         else
         {
             var snapshot = await schedules.GetAsync(region.Id, ct);
@@ -194,8 +194,8 @@ public sealed class ChatStatusService(
                     var available = snapshot.CoverageStart <= start && snapshot.CoverageEnd >= end;
                     lines.Add($"Графік на {(offset == 0 ? "сьогодні" : "завтра")}: "
                         + (!available ? "ще не оприлюднено або дані вже не охоплюють цю дату."
-                            : missing.Length > 0 ? "немає даних для черг " + string.Join(", ", missing) + "."
-                            : "доступний для збережених черг."));
+                            : missing.Length > 0 ? "немає даних для груп " + string.Join(", ", missing) + "."
+                            : "доступний для збережених груп."));
                 }
             }
         }
@@ -213,6 +213,15 @@ public sealed class ChatStatusService(
         lines.Add(last == default ? "Збережених записів доставки ще немає."
             : $"Останнє оновлення збереженого запису доставки: {KyivTime.Format(last)}.");
         lines.Add("Це історія стану доставки, не перевірка наявності повідомлення в Telegram. Журнал помилок доставки тут поки недоступний.");
+        lines.Add(channel.DeletePreviousAlert
+            ? "Видалення попередніх аварійних сповіщень увімкнено: потрібне право «Видаляти повідомлення», Telegram дозволяє це протягом 48 годин."
+            : "Попередні аварійні сповіщення не видаляються.");
+        lines.Add(channel.AlertSource switch
+        {
+            AlertSourceMode.Dtek => "Джерело сповіщень: лише ДТЕК і Укренерго; екстрені Yasno для групи не надсилаються.",
+            AlertSourceMode.Yasno => "Джерело сповіщень: лише Yasno для групи; без групи діють повідомлення ДТЕК.",
+            _ => "Джерело сповіщень: авто (ДТЕК для району, Yasno для групи, одне повідомлення).",
+        });
         if (!channel.IsActive || channel.IsPaused)
             lines.Add("Автосповіщення зупинено налаштуваннями підписки.");
         return new(lines);

@@ -126,6 +126,87 @@ public sealed class ScheduleNotifierTests : IDisposable
 
     // ================= event messages: eligibility =================
 
+    [Fact]
+    public async Task TimelineMode_DeliversBothDaysAndDeduplicates_AndModeChangeUpdatesPost()
+    {
+        AddPostChannel(configure: c =>
+        {
+            c.ScheduleShowLightPeriods = true;
+            c.SchedulePostImage = ScheduleImage.None;
+            c.SchedulePostMode = PostMode.Edit;
+        });
+        await TickAsync(Kyiv(15, 12));
+        var sent = Assert.Single(_f.Bot.Requests.OfType<SendMessageRequest>());
+        Assert.Contains("🟢 00:00–11:00 (11 год)", sent.Text);
+        Assert.Contains("🟢 20:30–24:00 (3 год 30 хв)", sent.Text);
+        Assert.Contains("Загалом без світла за графіком: 6 год 30 хв", sent.Text);
+        await TickAsync();
+        Assert.Single(_f.Bot.Requests.OfType<SendMessageRequest>());
+        Assert.Empty(_f.Bot.Requests.OfType<EditMessageTextRequest>());
+        var channel = await _f.Db.Channels.FindAsync(ChatA);
+        channel!.ScheduleShowLightPeriods = false;
+        await _f.Db.SaveChangesAsync();
+        await TickAsync();
+        var edit = Assert.Single(_f.Bot.Requests.OfType<EditMessageTextRequest>());
+        Assert.DoesNotContain("Загалом", edit.Text);
+        Assert.Contains("🔴 11:00 - 14:00 (~3 год)", edit.Text);
+    }
+
+    [Fact]
+    public async Task TimelineMode_LongRowsReplacePhotoWithSplitText_ThenDeduplicateAndEdit()
+    {
+        var channel = AddPostChannel(configure: c => c.SchedulePostMode = PostMode.Edit);
+        await TickAsync(Kyiv(15, 12));
+        Assert.Single(_f.Bot.Photos);
+        var photoId = PostOf(ChatA)!.MessageId;
+        channel.ScheduleShowLightPeriods = true;
+        var marker = new string('x', 900);
+        channel.TemplateMap = new Dictionary<string, string>
+        {
+            [MessageSlots.ScheduleLightLine] = marker + " {start}–{end}",
+        };
+        await _f.Db.SaveChangesAsync();
+        await TickAsync();
+        Assert.Empty(_f.Bot.CaptionEdits);
+        Assert.Equal(2, _f.Bot.Sent.Count());
+        Assert.All(_f.Bot.Sent, message => Assert.True(message.Text.Length <= 4096));
+        Assert.Contains("Загалом без світла за графіком: 7 год", string.Join("\n", _f.Bot.Sent.Select(m => m.Text)));
+        Assert.Equal(photoId, Assert.Single(_f.Bot.Deletes).MessageId);
+        var firstPost = PostOf(ChatA)!;
+        Assert.False(firstPost.IsPhoto);
+        Assert.Equal("45.1", firstPost.GroupId);
+        Assert.NotNull(firstPost.MessageIds);
+        await TickAsync();
+        Assert.Equal(2, _f.Bot.Sent.Count());
+        Assert.Empty(_f.Bot.Requests.OfType<EditMessageTextRequest>());
+        channel.TemplateMap = new Dictionary<string, string>
+        {
+            [MessageSlots.ScheduleLightLine] = marker + " {start} → {end}",
+        };
+        await _f.Db.SaveChangesAsync();
+        await TickAsync();
+        Assert.Equal(2, _f.Bot.Requests.OfType<EditMessageTextRequest>().Count());
+        Assert.Equal(2, _f.Bot.Sent.Count());
+        Assert.Equal(firstPost.MessageIds, PostOf(ChatA)!.MessageIds);
+    }
+
+    [Fact]
+    public async Task TimelineMode_PublishesKnownAllLightDays()
+    {
+        AddPostChannel(configure: c =>
+        {
+            c.ScheduleShowLightPeriods = true;
+            c.SchedulePostImage = ScheduleImage.None;
+        });
+        _schedules.Snapshots["kyiv"] = WithOutages(RealSnapshot(), "45.1");
+        await TickAsync(Kyiv(15, 12));
+        var sent = Assert.Single(_f.Bot.Requests.OfType<SendMessageRequest>());
+        Assert.Equal(2, sent.Text.Split("🟢 00:00–24:00 (24 год)").Length - 1);
+        Assert.Equal(2, sent.Text.Split("Загалом без світла за графіком: 0 хв").Length - 1);
+        await TickAsync();
+        Assert.Single(_f.Bot.Requests.OfType<SendMessageRequest>());
+    }
+
     [Theory]
     [InlineData("off")]
     [InlineData("paused")]
@@ -869,7 +950,7 @@ public sealed class ScheduleNotifierTests : IDisposable
             c.QuietHoursEnabled = true;
             c.QuietHoursStartMinute = 10 * 60;
             c.QuietHoursEndMinute = 11 * 60;
-            c.Templates = TemplatesJson((MessageSlots.BeforeOff, "Черга {group}: {time} за {minutes} хв"));
+            c.Templates = TemplatesJson((MessageSlots.BeforeOff, "Група {group}: {time} за {minutes} хв"));
         });
 
         var first = await TickAsync(Kyiv(15, 10, 50));
@@ -877,7 +958,7 @@ public sealed class ScheduleNotifierTests : IDisposable
 
         Assert.Equal(1, first.Sent);
         Assert.Equal(1, duplicate.Skipped);
-        Assert.Equal("Черга 45.1: 11:00 за 15 хв", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal("Група 45.1: 11:00 за 15 хв", Assert.Single(_f.Bot.Sent).Text);
         Assert.True(Assert.Single(_f.Bot.Sent).DisableNotification);
         Assert.Single(_f.Db.ScheduleReminderDeliveries);
     }

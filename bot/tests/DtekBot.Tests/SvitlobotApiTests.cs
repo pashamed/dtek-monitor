@@ -800,7 +800,7 @@ public sealed class SvitlobotApiTests : IClassFixture<ApiFactory>
         var response = await client.PostAsync($"/api/chats/{chatId}/svitlobot/push", null);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("чергу", await ErrorAsync(response));
+        Assert.Contains("групу", await ErrorAsync(response));
         Assert.Empty(_factory.Svitlobot.Requests);
     }
 

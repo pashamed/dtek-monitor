@@ -90,6 +90,50 @@ public sealed class PrivateNotificationMirrorTests
     }
 
     [Fact]
+    public async Task BotAdminLink_DoesNotCopyToItself_AndHumanAdminStillGetsTheCopy()
+    {
+        using var f = new DispatcherFixture();
+        Link(f, First);
+        f.Db.ChannelAdmins.Add(new() { ChatId = First, UserId = f.Bot.BotId });
+        await f.Db.SaveChangesAsync();
+        var mirror = f.CreateMirror();
+
+        await mirror.SyncAsync(Text(First, 10, "Alert"), default);
+        await f.Db.SaveChangesAsync();
+
+        Assert.Equal(User, Assert.Single(f.Bot.Requests.OfType<CopyMessageRequest>()).ChatId.Identifier);
+        Assert.DoesNotContain(f.Bot.Sent, m => m.ChatId.Identifier == f.Bot.BotId);
+        Assert.DoesNotContain(f.Db.PrivateNotificationCopies, c => c.UserId == f.Bot.BotId);
+        Assert.All(f.Db.PrivateNotificationCopies, c => Assert.Equal(User, c.UserId));
+    }
+
+    [Theory]
+    [InlineData(10, 0)]
+    [InlineData(10, -42)]
+    [InlineData(10, 42)]
+    [InlineData(-10, 42)]
+    public async Task BotOwnCopies_AreDiscardedWithoutRetryingOrDeletingTelegramMessages(int sourceId, int messageId)
+    {
+        using var f = new DispatcherFixture();
+        f.AddChannel(First);
+        f.Db.ChannelAdmins.Add(new() { ChatId = First, UserId = f.Bot.BotId });
+        f.Db.PrivateNotificationCopies.Add(new()
+        {
+            SourceChatId = First, SourceMessageId = sourceId, UserId = f.Bot.BotId, MessageId = messageId,
+        });
+        await f.Db.SaveChangesAsync();
+        var mirror = f.CreateMirror();
+
+        await mirror.RetryPendingAsync(default);
+        await f.Db.SaveChangesAsync();
+        await mirror.DeleteAsync(First, Math.Abs(sourceId), default);
+        await f.Db.SaveChangesAsync();
+
+        Assert.Empty(f.Bot.Requests);
+        Assert.Empty(f.Db.PrivateNotificationCopies);
+    }
+
+    [Fact]
     public async Task TextEditsRepliesAndDeletes_UseDurableSourceScopedIds()
     {
         using var f = new DispatcherFixture();
@@ -369,6 +413,7 @@ public sealed class PrivateNotificationMirrorTests
             c.SourceChatId == First && c.SourceMessageId == sourceId && c.UserId == User);
 
         channel.DeletePreviousAlert = true;
+        channel.EditInPlace = false;
         await f.Db.SaveChangesAsync();
         var changedText = DispatcherFixture.EmergencyText + " Повторне повідомлення.";
         var changedAlert = f.Classifier.Classify("kyiv", changedText);

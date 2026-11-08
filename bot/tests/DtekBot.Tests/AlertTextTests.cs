@@ -119,17 +119,22 @@ public class AlertTextTests
         Assert.Contains("Деталі: https://x.y", rendered);
     }
 
-    [Theory]
-    [InlineData(AlertSource.Ukrenergo, "(за даними Укренерго)")]
-    [InlineData(AlertSource.Yasno, "(за даними Yasno)")]
-    public void OtherSources_StillHaveDistinctAttribution(AlertSource source, string label)
+    [Fact]
+    public void Ukrenergo_IsTaggedInline_AndOnItsOwnLineForCustomText()
     {
-        Assert.Contains(label, AlertSourceText.Tag("Статус.", source));
-        Assert.Contains(label, AlertSourceText.EnsureAttribution("Власний текст", source));
+        Assert.Contains("(за даними Укренерго)", AlertSourceText.Tag("Статус.", AlertSource.Ukrenergo));
+        Assert.Contains("(за даними Укренерго)", AlertSourceText.EnsureAttribution("Власний текст", AlertSource.Ukrenergo));
+    }
+
+    [Fact]
+    public void Yasno_AttributionIsAppendedOnItsOwnLine_NotInsideTheMessage()
+    {
+        Assert.Equal("Статус.", AlertSourceText.Tag("Статус.", AlertSource.Yasno));
+        Assert.Equal("Текст\n📍 адреса\n\n(за даними Yasno)", AlertSourceText.EnsureAttribution("Текст\n📍 адреса", AlertSource.Yasno));
     }
 
     [Theory]
-    [InlineData(AlertKind.Emergency, "\U0001F6A8")]
+    [InlineData(AlertKind.Emergency, "\u26A0")]
     [InlineData(AlertKind.Accident, "\u26A0")]
     [InlineData(AlertKind.Unknown, "\u2139")]
     [InlineData(AlertKind.Ended, "\u2139")]

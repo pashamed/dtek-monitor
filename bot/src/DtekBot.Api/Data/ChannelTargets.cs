@@ -84,6 +84,15 @@ public static class ChannelTargets
 
     public static bool IsCombined(this Channel channel) => channel.Addresses.Count > 1 || channel.GroupIds().Count > 1;
 
+    // DTEK/Ukrenergo regional alerts are dropped only for a Yasno-only chat that has a group to follow.
+    public static bool TakesRegionalAlerts(this Channel channel) =>
+        channel.AlertSource != AlertSourceMode.Yasno || channel.GroupIds().Count == 0;
+
+    public static bool TakesGroupAlerts(this Channel channel) => channel.AlertSource != AlertSourceMode.Dtek;
+
+    // The default flow: DTEK and Yasno alerts share one message per chat.
+    public static bool CombinesAlertSources(this Channel channel) => channel.AlertSource == AlertSourceMode.Auto;
+
     public static IReadOnlyList<string> DistrictIds(this Channel channel) =>
         channel.PartIdList.Concat(channel.Addresses.SelectMany(a =>
             a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? []))
@@ -132,7 +141,7 @@ public static class ChannelTargets
         }).Distinct());
 
     public static string Heading(this Channel channel, string groupId) =>
-        $"<b>Черга {WebUtility.HtmlEncode(groupId)}</b>" +
+        $"<b>Група {WebUtility.HtmlEncode(groupId)}</b>" +
         (string.IsNullOrEmpty(channel.GroupNames(groupId)) ? "" : $" · {WebUtility.HtmlEncode(channel.GroupNames(groupId))}");
 
     // Scalar columns remain a readable projection for older clients and existing integrations.

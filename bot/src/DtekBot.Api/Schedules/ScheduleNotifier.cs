@@ -244,7 +244,7 @@ public sealed partial class ScheduleNotifier(
             .Where(c => c.GroupIds().Count > 0 && settings.Regions.Any(r => r.Id == c.RegionId && r.HasSchedules)).ToArray();
         if (targets.Length == 0)
         {
-            return new(false, false, "Спершу оберіть регіон із графіками та чергу.");
+            return new(false, false, "Спершу оберіть регіон із графіками та групу.");
         }
 
         var posts = await db.SchedulePostThreads.Where(t => t.ChatId == channel.ChatId)
@@ -265,7 +265,7 @@ public sealed partial class ScheduleNotifier(
         await db.SaveChangesAsync(ct);
         if (outcomes.Count == 0)
         {
-            return new(false, false, available ? "Для обраної черги графік недоступний."
+            return new(false, false, available ? "Для обраної групи графік недоступний."
                 : "Графіки тимчасово недоступні. Спробуйте пізніше.");
         }
         var outcome = outcomes.Contains(Outcome.Failed) ? Outcome.Failed
@@ -557,7 +557,8 @@ public sealed partial class ScheduleNotifier(
         bool force = false,
         bool disableNotification = false)
     {
-        if (channel.IsCombined() && channel.SchedulePostImage == ScheduleImage.None)
+        if (channel.IsCombined() && channel.SchedulePostImage == ScheduleImage.None
+            || channel.ScheduleShowLightPeriods && post?.MessageIds is not null)
             return await ApplyCombinedPostAsync(channel, region, snapshot, post, posts, now, ct, force, disableNotification);
         if (post?.MessageIds is not null)
         {
@@ -580,7 +581,7 @@ public sealed partial class ScheduleNotifier(
         var (previousPlan, planRows) = await ReadPlanAsync(channel, ct);
         var currentPlan = ScheduleText.PlannedDays(channel, snapshot, now);
 
-        var noUpcomingOutages = values["outages"] == ScheduleText.NoOutages
+        var noUpcomingOutages = !channel.ScheduleShowLightPeriods && values["outages"] == ScheduleText.NoOutages
             && (values["tomorrow"] is "" or ScheduleText.NoOutages);
         if (!force && (sameDay ? post!.ContentHash == fingerprint : noUpcomingOutages))
         {
@@ -591,6 +592,8 @@ public sealed partial class ScheduleNotifier(
 
         var changes = ScheduleText.PlannedChanges(channel, previousPlan, currentPlan, now);
         var text = PostText(channel, region, snapshot, now, sameDay, changes);
+        if (channel.ScheduleShowLightPeriods && text.Length > MaxCaptionLength)
+            return await ApplyCombinedPostAsync(channel, region, snapshot, post, posts, now, ct, force, disableNotification);
         var imageUrl = ScheduleText.ImageUrl(settings.Schedules, snapshot.DataFile, groupId, snapshot.Version, channel.SchedulePostImage);
         var mode = channel.SchedulePostMode;
 
@@ -708,7 +711,7 @@ public sealed partial class ScheduleNotifier(
         if (now < snapshot.CoverageStart || now >= snapshot.CoverageEnd) return Outcome.Skipped;
         var date = ScheduleText.DateKey(now);
         var sameDay = post?.DateKey == date;
-        var stable = ScheduleText.RenderPost(channel, snapshot, region.Name, now, false, region.DisplayNames(channel.DistrictIds()));
+        var stable = PostText(channel, region, snapshot, now, false);
         var fingerprint = Hash(stable);
         var (previousPlan, planRows) = await ReadPlanAsync(channel, ct);
         var currentPlan = ScheduleText.PlannedDays(channel, snapshot, now);
@@ -717,7 +720,7 @@ public sealed partial class ScheduleNotifier(
             SavePlan(channel, previousPlan, currentPlan, planRows, now);
             return Outcome.Skipped;
         }
-        var text = ScheduleText.RenderPost(channel, snapshot, region.Name, now, sameDay, region.DisplayNames(channel.DistrictIds()),
+        var text = PostText(channel, region, snapshot, now, sameDay,
             ScheduleText.PlannedChanges(channel, previousPlan, currentPlan, now));
         var parts = CombinedSchedule.Parts(text);
         var oldIds = post is null ? [] : post.MessageIds is null ? new List<int> { post.MessageId }
@@ -739,10 +742,10 @@ public sealed partial class ScheduleNotifier(
             if (post is null)
             {
                 post = new SchedulePostThread { ChatId = channel.ChatId, RegionId = region.Id };
-                db.SchedulePostThreads.Add(post); posts[(channel.ChatId, region.Id, "")] = post;
+                db.SchedulePostThreads.Add(post); posts[(channel.ChatId, region.Id, PostGroup(channel))] = post;
             }
             post.MessageId = ids[0]; post.MessageIds = System.Text.Json.JsonSerializer.Serialize(ids);
-            post.IsPhoto = false; post.RegionId = region.Id; post.GroupId = "";
+            post.IsPhoto = false; post.RegionId = region.Id; post.GroupId = PostGroup(channel);
             post.DateKey = date; post.ContentHash = fingerprint; post.ImageKind = ScheduleImage.None;
             post.ImageVersion = ""; post.UpdatedAt = now;
             SavePlan(channel, previousPlan, currentPlan, planRows, now);

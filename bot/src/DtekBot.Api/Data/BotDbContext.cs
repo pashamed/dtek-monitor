@@ -38,6 +38,7 @@ public sealed class Channel
     public bool NotifyOnEnd { get; set; } = true;
     public bool EditInPlace { get; set; } = true;
     public bool DeletePreviousAlert { get; set; }
+    public AlertSourceMode AlertSource { get; set; } = AlertSourceMode.Auto;
     public string? Template { get; set; }
 
     // Check the saved address when this chat gets a «Світло зникло» post (from a power-monitor app).
@@ -68,6 +69,7 @@ public sealed class Channel
     public bool SchedulePost { get; set; }
     public PostMode SchedulePostMode { get; set; } = PostMode.New;
     public ScheduleImage SchedulePostImage { get; set; } = ScheduleImage.Grid;
+    public bool ScheduleShowLightPeriods { get; set; }
 
     // Customised message templates by slot, as JSON. A slot that is not there uses the default text;
     // for the alert slots the older single Template is the fallback.
@@ -279,6 +281,8 @@ public sealed class AddressResult
     public string EndDate { get; set; } = "";
     public string Type { get; set; } = "";
     public DateTimeOffset CheckedAt { get; set; }
+    // DTEK's own "updateTimestamp" for the street answer (for example "20:48 08.11.2026"); empty when not reported.
+    public string SourceUpdated { get; set; } = "";
 
     public bool HasOutage => Found && (SubType != "" || StartDate != "" || EndDate != "" || Type != "");
 
@@ -360,6 +364,8 @@ public sealed class RegionState
     public string Hash { get; set; } = "";
     public DateTimeOffset ObservedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+    // First popup-less observation while an alert is stored; the alert clears only when a later one confirms it.
+    public DateTimeOffset? ClearPendingSince { get; set; }
 }
 
 public sealed class Delivery
@@ -373,6 +379,10 @@ public sealed class Delivery
     // Null means no emergency coverage; [] covers the region, otherwise these are delivered district IDs.
     public string? EmergencyPartsJson { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+    // When TelegramMessageId was posted; null on rows written before it was stored (UpdatedAt is used then).
+    public DateTimeOffset? SentAt { get; set; }
+    // The separate "ended" notice of a closed thread, posted at UpdatedAt; null when the alert itself was edited.
+    public int? EndMessageId { get; set; }
 }
 
 public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbContext(options)
@@ -474,6 +484,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.StartDate).HasMaxLength(64);
             e.Property(x => x.EndDate).HasMaxLength(64);
             e.Property(x => x.Type).HasMaxLength(256);
+            e.Property(x => x.SourceUpdated).HasMaxLength(64);
             e.Ignore(x => x.HasOutage);
             e.Ignore(x => x.IsEmergency);
         });
@@ -510,6 +521,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             e.Property(x => x.PartIds).HasMaxLength(512);
             e.Property(x => x.Title).HasMaxLength(256);
             e.Property(x => x.Filter).HasConversion<string>().HasMaxLength(32);
+            e.Property(x => x.AlertSource).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.Template).HasMaxLength(MessageTemplate.MaxLength);
             e.Property(x => x.GroupId).HasMaxLength(16);
             e.Property(x => x.OutageTriggerPattern).HasMaxLength(OutageTriggerMatcher.MaxLength);

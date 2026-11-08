@@ -51,7 +51,7 @@ public sealed class ScheduleChangeTests : IDisposable
         var channel = new Channel { GroupId = "45.1" };
         var changes = Changes(channel, Plan(("45.1", [Out(15, 11, 14)])), Plan(("45.1", [Out(15, 12, 15)])));
 
-        Assert.Equal("🔄 Зміни планового графіка:\nЧерга 45.1: додано планове відключення 14:00–15:00; скасовано планове відключення 11:00–12:00",
+        Assert.Equal("🔄 Зміни планового графіка:\nГрупа 45.1: додано планове відключення 14:00–15:00; скасовано планове відключення 11:00–12:00",
             changes["2026-10-15"]);
         Assert.Equal("", changes["2026-10-16"]);
     }
@@ -112,9 +112,9 @@ public sealed class ScheduleChangeTests : IDisposable
         var after = Plan(("45.1", []), ("2.1", [Out(15, 15, 16)]));
         var changes = Changes(channel, before, after);
 
-        Assert.Contains("Черга 2.1 · Дім <1> · Гараж: додано", changes["2026-10-15"]);
-        Assert.Contains("Черга 45.1 · Дім <1>, Офіс: скасовано", changes["2026-10-15"]);
-        Assert.Equal(1, changes["2026-10-15"].Split("Черга 45.1").Length - 1);
+        Assert.Contains("Група 2.1 · Дім <1> · Гараж: додано", changes["2026-10-15"]);
+        Assert.Contains("Група 45.1 · Дім <1>, Офіс: скасовано", changes["2026-10-15"]);
+        Assert.Equal(1, changes["2026-10-15"].Split("Група 45.1").Length - 1);
         var text = ScheduleText.RenderPost(channel, after, "Київ", Kyiv(15, 12), true, [], changes);
         Assert.Contains("Дім &lt;1&gt;", text);
         Assert.DoesNotContain("Дім <1>", text);

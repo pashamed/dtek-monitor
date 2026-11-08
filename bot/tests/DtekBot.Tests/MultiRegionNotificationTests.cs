@@ -45,7 +45,7 @@ public sealed class MultiRegionNotificationTests : IDisposable
     {
         AddChannel(c =>
         {
-            c.TemplateMap = new Dictionary<string, string> { [MessageSlots.Emergency] = "🚨 {message}" };
+            c.TemplateMap = new Dictionary<string, string> { [MessageSlots.Emergency] = "⚠️ {message}" };
             c.NotifyOnEnd = true;
         });
         await f.DispatchAsync(DispatcherFixture.EmergencyText);
@@ -226,7 +226,7 @@ public sealed class MultiRegionNotificationTests : IDisposable
         var threads = f.Db.ScheduleThreads.AsNoTracking().ToArray();
         Assert.Equal(2, threads.Length);
         Assert.Equal(2, threads.Select(t => t.MessageId).Distinct().Count());
-        Assert.All(f.Bot.Sent, sent => Assert.Contains("<b>Черга ", sent.Text));
+        Assert.All(f.Bot.Sent, sent => Assert.Contains("<b>Група ", sent.Text));
         Assert.Equal(0, (await notifier.TickAsync(CancellationToken.None)).Sent);
         channel.Addresses[0].Groups.RemoveAll(g => g.GroupId == "2.1");
         channel.MirrorPrimary();

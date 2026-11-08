@@ -308,7 +308,7 @@ public static class SvitlobotApi
             var group = target?.GroupId;
             if (string.IsNullOrEmpty(group))
             {
-                return Json(new ApiError("Спершу оберіть чергу для цього чату."), 400);
+                return Json(new ApiError("Спершу оберіть групу для цього чату."), 400);
             }
 
             var region = settings.CurrentValue.Regions.FirstOrDefault(r => r.HasSchedules && r.Id == target!.RegionId);
@@ -345,18 +345,18 @@ public static class SvitlobotApi
             var timetable = await SvitlobotWeek.BuildAsync(db, snapshot, region.Id, group, includeMaybe, time.GetUtcNow(), ct);
             if (timetable is null)
             {
-                return Json(new ApiError($"У джерелі даних немає тижневого графіка для черги {group}."), 400);
+                return Json(new ApiError($"У джерелі даних немає тижневого графіка для групи {group}."), 400);
             }
 
             if (!WeeklyPreset.HasOutages(timetable))
             {
                 var hint = includeMaybe ? "" : " Можна ввімкнути «можливі» відключення.";
-                return Json(new ApiError($"У тижневому графіку черги {group} немає запланованих відключень, надсилати нічого.{hint}"), 400);
+                return Json(new ApiError($"У тижневому графіку групи {group} немає запланованих відключень, надсилати нічого.{hint}"), 400);
             }
 
             if (!WeeklyPreset.IsStorable(timetable))
             {
-                return Json(new ApiError($"Світлобот приймає графік лише з повною годиною відключення, а в черзі {group} є тільки півгодинні."), 400);
+                return Json(new ApiError($"Світлобот приймає графік лише з повною годиною відключення, а в групі {group} є тільки півгодинні."), 400);
             }
 
             if (SvitlobotRequestLimiter.IsLimited(chatId, time.GetUtcNow()))
@@ -374,7 +374,7 @@ public static class SvitlobotApi
             await scheduleSync.MarkSyncedAsync(chatId, region.Id, group, timetable, ct);
             await db.SaveChangesAsync(ct);
             return Json(new SvitlobotResultDto(
-                $"Тижневі планові відключення черги {group} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
+                $"Тижневі планові відключення групи {group} збережено у Світлоботі. Це не надсилає негайний допис у Telegram.",
                 true), 200);
         });
 
@@ -405,7 +405,7 @@ public static class SvitlobotApi
             var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
             if (channel is null || channel.GroupIds().Count == 0)
             {
-                return Json(new ApiError("Спершу оберіть чергу для цього чату."), 400);
+                return Json(new ApiError("Спершу оберіть групу для цього чату."), 400);
             }
 
             var groupId = string.IsNullOrWhiteSpace(request?.GroupId) ? null : request.GroupId.Trim();
@@ -428,7 +428,7 @@ public static class SvitlobotApi
                         : regionId is null ? matches.FirstOrDefault(t => t.RegionId == channel.RegionId) : null;
                 }
                 if (selected is null)
-                    return Json(new ApiError($"Оберіть регіон та адресу з чергою {groupId} цього чату."), 400);
+                    return Json(new ApiError($"Оберіть регіон та адресу з групою {groupId} цього чату."), 400);
             }
 
             channel.SvitlobotGroupId = groupId;
@@ -437,7 +437,7 @@ public static class SvitlobotApi
             await db.SaveChangesAsync(ct);
             var effective = channel.SvitlobotTarget();
             return Json(new SvitlobotGroupDto(effective?.GroupId,
-                $"Світлобот тепер отримує графік черги {effective?.GroupId}. Оновимо його під час наступної перевірки.",
+                $"Світлобот тепер отримує графік групи {effective?.GroupId}. Оновимо його під час наступної перевірки.",
                 effective?.RegionId, effective?.AddressId), 200);
         });
 

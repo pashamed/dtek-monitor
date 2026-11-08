@@ -47,7 +47,7 @@ public sealed class StructuredTemplateTests
     [InlineData("before-off")]
     public void StructuredFields_ValidateWithoutPopupOrPreparedMessage(string slot)
     {
-        var localized = "{код_регіону}|{регіон}|{місто}|{черга}|{статус}|{код_статусу}";
+        var localized = "{код_регіону}|{регіон}|{місто}|{група}|{статус}|{код_статусу}";
         Assert.Equal(Fields, PlaceholderNames.ToCanonical(localized));
         Assert.Empty(MessageTemplate.Validate(Fields, slot));
         Assert.Empty(MessageTemplate.Validate(PlaceholderNames.ToCanonical(localized), slot));
@@ -106,7 +106,7 @@ public sealed class StructuredTemplateTests
         }));
         var chats = await client.GetFromJsonAsync<List<ChatSummaryDto>>("/api/chats", ApiJson.Options);
         var saved = Assert.Single(chats!).Settings;
-        var template = "{регіон} · {місто} · {черга}\n{статус} ({код_статусу})";
+        var template = "{регіон} · {місто} · {група}\n{статус} ({код_статусу})";
         var put = await client.PutAsJsonAsync("/api/chats/93003", saved with
         {
             Templates = new Dictionary<string, string> { [MessageSlots.Emergency] = template },

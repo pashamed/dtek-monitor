@@ -69,9 +69,9 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         await GroupAsync(emergency: true);
 
         var request = Assert.Single(_f.Bot.Sent);
-        Assert.Contains("черга 45.1", request.Text);
+        Assert.Contains("загально по групі 45.1", request.Text);
         Assert.Contains("м. Київ", request.Text);
-        Assert.Contains("🚨", request.Text);
+        Assert.Contains("⚠️", request.Text);
         Assert.Equal(ParseMode.Html, request.ParseMode);
         Assert.Null(request.ReplyParameters);
     }
@@ -132,7 +132,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         Assert.Equal(2, _f.Bot.Sent.Count());
         Assert.Equal(original.TelegramMessageId, reply.ReplyParameters?.MessageId);
         Assert.Contains("ℹ️", reply.Text);
-        Assert.Contains("черга 45.1", reply.Text);
+        Assert.Contains("загально по групі 45.1", reply.Text);
         Assert.Equal(ParseMode.Html, reply.ParseMode);
         Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);
     }
@@ -148,7 +148,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         Assert.Equal(new(0, 0, 1, 0), summary);
         var notice = _f.Bot.Sent.Last();
         Assert.Null(notice.ReplyParameters);
-        Assert.Contains("черга 45.1", notice.Text);
+        Assert.Contains("загально по групі 45.1", notice.Text);
         Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);
     }
 
@@ -165,7 +165,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         Assert.Single(_f.Bot.Sent);
         var edit = Assert.Single(_f.Bot.Edits);
         Assert.Equal(original.TelegramMessageId, edit.MessageId);
-        Assert.Contains("черга 45.1", edit.Text);
+        Assert.Contains("загально по групі 45.1", edit.Text);
         Assert.True(Assert.Single(AllDeliveries(ChatA)).IsClosed);
     }
 
@@ -271,7 +271,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
         await GroupAsync(emergency: true);
 
         var request = Assert.Single(_f.Bot.Sent);
-        Assert.Equal("<b>м. Київ (черга 45.1)</b>\n\n(за даними Yasno)", request.Text);
+        Assert.Equal("<b>м. Київ (загально по групі 45.1)</b>\n\n(за даними Yasno)", request.Text);
         Assert.Equal(ParseMode.Html, request.ParseMode);
     }
 
@@ -282,7 +282,7 @@ public sealed class GroupAlertDispatcherTests : IDisposable
 
         await GroupAsync(emergency: true);
 
-        Assert.StartsWith("черга 45.1|м. Київ|", Assert.Single(_f.Bot.Sent).Text);
+        Assert.StartsWith("загально по групі 45.1|м. Київ|", Assert.Single(_f.Bot.Sent).Text);
     }
 
     [Fact]

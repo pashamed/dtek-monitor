@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using DtekBot.Api.Bot;
 using DtekBot.Api.Data;
 using DtekBot.Shared;
@@ -27,14 +27,14 @@ public class MessageSlotsTests
     [Fact]
     public void All_HasTheSlots_InOrder()
     {
-        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "schedule-heading", "schedule-line", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
+        Assert.Equal(["emergency", "ended", "regional", "local", "schedule", "schedule-heading", "schedule-line", "schedule-light-line", "before-off", "off", "on"], MessageSlots.All.Select(s => s.Id));
     }
 
     [Fact]
     public void All_GroupsTheSlots()
     {
         Assert.Equal(
-            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization"],
+            ["emergency", "emergency", "regional", "local", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization", "stabilization"],
             MessageSlots.All.Select(s => s.Group));
     }
 
@@ -90,6 +90,7 @@ public class MessageSlotsTests
     [InlineData("local", "")]
     [InlineData("schedule", "outages,morning,afternoon,evening,night")]
     [InlineData("schedule-line", "start,end")]
+    [InlineData("schedule-light-line", "start,end")]
     [InlineData("ended", "")]
     [InlineData("off", "")]
     [InlineData("on", "")]
@@ -283,9 +284,9 @@ public class MessageSlotsTests
     [Fact]
     public void Render_UsesTheFallback_ForABlankTemplate_ThenDefault()
     {
-        var values = Values(("emoji", "🚨"), ("message", "m"), ("site", "s"));
+        var values = Values(("emoji", "⚠️"), ("message", "m"), ("site", "s"));
 
-        Assert.Equal("🚨 m", MessageTemplate.Render("  ", values));
+        Assert.Equal("⚠️ m", MessageTemplate.Render("  ", values));
         Assert.Equal("fb m", MessageTemplate.Render(null, values, "fb {message}"));
         Assert.Equal("tpl", MessageTemplate.Render("tpl", values, "fb {message}"));
     }
@@ -433,7 +434,7 @@ public class MessageSlotsTests
             Assert.NotEmpty(MessageTemplate.Validate("<script>" + body, slot.Id));
             Assert.NotEmpty(MessageTemplate.Validate("<b>" + body, slot.Id));
             Assert.NotEmpty(MessageTemplate.Validate(body + " a & b", slot.Id));
-            if (slot.Id == MessageSlots.ScheduleLine)
+            if (MessageSlots.IsScheduleLine(slot.Id))
                 Assert.NotEmpty(MessageTemplate.Validate("<b>" + body + "</b>", slot.Id));
             else
                 Assert.Empty(MessageTemplate.Validate("<b>" + body + "</b>", slot.Id));

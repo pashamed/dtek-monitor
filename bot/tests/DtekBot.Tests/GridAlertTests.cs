@@ -97,6 +97,15 @@ public sealed class GridAlertTests : IDisposable
 
     private List<SendMessageRequest> Sent(long chat) => _f.Bot.SentTo(chat).ToList();
 
+    // A popup-less page ends an alert only when a second check at least ClearConfirmMinutes later agrees.
+    private async Task ClearDtekAsync()
+    {
+        await IngestAsync(null);
+        Assert.Contains(Deliveries(All), d => !d.IsClosed);
+        _f.Clock.Now = _f.Clock.Now.AddMinutes(10);
+        await IngestAsync(null);
+    }
+
     private List<EditMessageTextRequest> Edits(long chat) => _f.Bot.Edits.Where(e => e.ChatId.Identifier == chat).ToList();
 
     private List<Delivery> Deliveries(long chat) =>
@@ -365,8 +374,8 @@ public sealed class GridAlertTests : IDisposable
         Assert.Single(Sent(All));
         Assert.False(Assert.Single(Deliveries(All)).IsClosed);
 
-        // DTEK clears too: now it ends, as a reply to the alert.
-        await IngestAsync(null);
+        // DTEK clears too (confirmed by a second check): now it ends, as a reply to the alert.
+        await ClearDtekAsync();
 
         var sent = Sent(All);
         Assert.Equal(2, sent.Count);
@@ -385,7 +394,7 @@ public sealed class GridAlertTests : IDisposable
         await TickAsync();
         Assert.Empty(Edits(All));
 
-        await IngestAsync(null);
+        await ClearDtekAsync();
 
         Assert.Single(Sent(All));
         var edit = Assert.Single(Edits(All));

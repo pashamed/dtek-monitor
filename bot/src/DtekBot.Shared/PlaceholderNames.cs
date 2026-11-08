@@ -23,7 +23,7 @@ public static class PlaceholderNames
         ["time"] = "час",
         ["minutes"] = "хвилин",
         ["site"] = "сайт",
-        ["group"] = "черга",
+        ["group"] = "група",
         ["address"] = "адреса",
         ["header"] = "шапка",
         ["weekday"] = "день_тижня",
@@ -49,8 +49,15 @@ public static class PlaceholderNames
         ["changes"] = "зміни",
     };
 
+    // Earlier Ukrainian names that templates typed by users may still contain.
+    private static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal)
+    {
+        ["черга"] = "group",
+    };
+
     private static readonly Dictionary<string, string> ToKey =
-        Table.ToDictionary(p => p.Value, p => p.Key, StringComparer.Ordinal);
+        Table.Select(p => KeyValuePair.Create(p.Value, p.Key)).Concat(Aliases)
+            .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
 
     public static string Display(string key) => Table.TryGetValue(key, out var name) ? name : key;
 

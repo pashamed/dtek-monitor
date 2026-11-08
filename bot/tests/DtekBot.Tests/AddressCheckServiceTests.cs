@@ -389,7 +389,7 @@ public sealed class AddressCheckServiceTests : IDisposable
         var result = await _service.RequestAsync(AddChannel(ChatA), CancellationToken.None);
 
         Assert.Equal(RequestOutcome.Cached, result.Outcome);
-        Assert.Contains("🚨", result.Message);
+        Assert.Contains("⚠️", result.Message);
         Assert.Contains("вул. Драгоманова, 12", result.Message);
         Assert.Contains("Перевірено:", result.Message);
         Assert.Empty(Checks());
@@ -620,13 +620,26 @@ public sealed class AddressCheckServiceTests : IDisposable
         Assert.Equal(1, answered);
         var message = Assert.Single(_f.Bot.Sent);
         Assert.Equal(ChatA, message.ChatId.Identifier);
-        Assert.Contains("🚨", message.Text);
+        Assert.Contains("⚠️", message.Text);
         Assert.Contains($"{Street}, {House}", message.Text);
         Assert.Equal(default, message.ParseMode);
 
         var check = Assert.Single(Checks());
         Assert.Equal(AddressCheckStatus.Done, check.Status);
         Assert.Equal(Start, check.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Process_ReplyShowsWhenDtekUpdatedTheData()
+    {
+        AddCheck(ChatA, AddressCheckStatus.Pending, TimeSpan.FromMinutes(2));
+
+        await _service.ProcessResultsAsync(new AddressResultsRequest([
+            new StreetResult("kyiv", "", Street, new() { [House] = Entry(subType: "Аварійне відключення") }, "20:48 08.11.2026"),
+        ]), CancellationToken.None);
+
+        Assert.Contains("Дані ДТЕК оновлено: 20:48 08.11.2026", Assert.Single(_f.Bot.Sent).Text);
+        Assert.Equal("20:48 08.11.2026", Assert.Single(_f.Db.AddressResults.AsNoTracking()).SourceUpdated);
     }
 
     [Fact]
@@ -796,7 +809,7 @@ public sealed class AddressCheckServiceTests : IDisposable
         var result = await _service.RequestAsync(AddChannel(ChatA), CancellationToken.None);
 
         Assert.Equal(RequestOutcome.Cached, result.Outcome);
-        Assert.Contains("🚨", result.Message);
+        Assert.Contains("⚠️", result.Message);
     }
 
     // ---- BuildReplyAsync ----
@@ -830,7 +843,7 @@ public sealed class AddressCheckServiceTests : IDisposable
         Assert.StartsWith("❓", text);
         Assert.Contains("не знайдено", text);
         Assert.Contains("«Мій дім»", text);
-        Assert.DoesNotContain("🚨", text);
+        Assert.DoesNotContain("⚠️", text);
     }
 
     [Theory]
@@ -842,7 +855,7 @@ public sealed class AddressCheckServiceTests : IDisposable
     {
         var text = await Reply(Result(subType: subType, start: "15.07 11:00", end: "15.07 15:00"));
 
-        Assert.StartsWith("🚨", text);
+        Assert.StartsWith("⚠️", text);
         Assert.Contains("позапланове", text);
         Assert.Contains($"Причина: {subType}", text);
         Assert.Contains("15.07 11:00 — 15.07 15:00", text);
@@ -857,7 +870,7 @@ public sealed class AddressCheckServiceTests : IDisposable
         Assert.StartsWith("⏰", text);
         Assert.Contains("планове", text);
         Assert.Contains("15.07 14:00 — 15.07 18:00", text);
-        Assert.DoesNotContain("🚨", text);
+        Assert.DoesNotContain("⚠️", text);
         Assert.DoesNotContain("Причина", text);
     }
 

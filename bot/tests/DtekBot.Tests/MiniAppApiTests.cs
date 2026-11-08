@@ -310,7 +310,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         Assert.Equal(userId, bootstrap.UserId);
         Assert.Equal(MessageTemplate.MaxLength, bootstrap.MaxTemplateLength);
         Assert.Equal(
-            ["emergency", "ended", "regional", "local", "schedule", "schedule-heading", "schedule-line", "before-off", "off", "on"],
+            ["emergency", "ended", "regional", "local", "schedule", "schedule-heading", "schedule-line", "schedule-light-line", "before-off", "off", "on"],
             bootstrap.TemplateSlots!.Select(s => s.Id));
         Assert.Equal(MessageSlots.All.Count, bootstrap.TemplateSlots!.Count);
         foreach (var (expected, actual) in MessageSlots.All.Zip(bootstrap.TemplateSlots!))
@@ -1111,6 +1111,23 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Put_AlertSource_PersistsAndAnOmittedValueKeepsTheSavedChoice()
+    {
+        var (userId, client) = NewUser();
+
+        var response = await client.PutJsonAsync(
+            $"/api/chats/{userId}",
+            Settings() with { AlertSource = AlertSourceMode.Yasno });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(AlertSourceMode.Yasno, LoadChannel(userId)!.AlertSource);
+        Assert.Equal(AlertSourceMode.Yasno, (await response.ReadAsync<ChatSummaryDto>())!.Settings.AlertSource);
+
+        var legacy = await client.PutJsonAsync($"/api/chats/{userId}", Settings());
+        Assert.Equal(HttpStatusCode.OK, legacy.StatusCode);
+        Assert.Equal(AlertSourceMode.Yasno, LoadChannel(userId)!.AlertSource);
+    }
+
+    [Fact]
     public async Task Put_QuietHours_RejectsEqualOrOutOfRangeTimesWhenEnabled()
     {
         var (userId, client) = NewUser();
@@ -1840,10 +1857,10 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     }
 
     [Theory]
-    [InlineData("emergency", "🚨")]
+    [InlineData("emergency", "⚠️")]
     [InlineData("regional", "⚠")]
     [InlineData("ended", "ℹ️")]
-    [InlineData("local", "🚨 Локальне відключення")]
+    [InlineData("local", "⚠️ м. Київ (загально по групі")]
     public async Task Preview_AlertSlots_UseTheirOwnSampleKind(string slot, string expected)
     {
         var result = await PreviewAsync(Preview(slot, groupId: "45.1"));
@@ -1856,9 +1873,19 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
     {
         var result = await PreviewAsync(Preview("local", groupId: "45.1"));
 
-        Assert.Contains("черга 45.1", result.Html);
+        Assert.Contains("загально по групі 45.1", result.Html);
         Assert.DoesNotContain("📍", result.Html);
         Assert.DoesNotContain("Деталі:", result.Html);
+    }
+
+    [Fact]
+    public async Task Preview_LocalSlot_UsesTheChatsOwnGroup_AndAttributesYasnoOnItsOwnLine()
+    {
+        var result = await PreviewAsync(Preview("local", groupId: "29.1"));
+
+        Assert.StartsWith("⚠️ м. Київ (загально по групі 29.1): введені екстрені відключення.", result.Html);
+        Assert.EndsWith("\n\n(за даними Yasno)", result.Html);
+        Assert.DoesNotContain("45.1", result.Html);
     }
 
     [Fact]
@@ -1918,7 +1945,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.True(body.RootElement.GetProperty("ok").GetBoolean());
         var message = Assert.Single(_factory.Bot.SentTo(chatId));
-        Assert.StartsWith("🧪 <b>Тест</b>\n\n🚨 ", message.Text);
+        Assert.StartsWith("🧪 <b>Тест</b>\n\n⚠️ ", message.Text);
         Assert.DoesNotContain("Деталі:", message.Text);
         Assert.Equal(ParseMode.Html, message.ParseMode);
     }
@@ -2079,6 +2106,30 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
         _factory.Clock.Advance(TimeSpan.FromSeconds(61));
         var again = await client.PostJsonAsync($"/api/chats/{chatId}/templates/emergency/send", Test());
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task Send_Limit_IsIsolatedBetweenApplicationHosts()
+    {
+        const long chatId = 99001;
+        using var first = new ApiFactory();
+        using var second = new ApiFactory();
+        first.Clock.Advance(TimeSpan.FromMinutes(1));
+        first.WithDb(db => db.Channels.Add(new Channel { ChatId = chatId, RegionId = "kyiv" }));
+        second.WithDb(db => db.Channels.Add(new Channel { ChatId = chatId, RegionId = "kyiv" }));
+        using var firstClient = first.ClientFor(chatId);
+        using var secondClient = second.ClientFor(chatId);
+
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(HttpStatusCode.OK, (await firstClient.PostJsonAsync(
+                $"/api/chats/{chatId}/templates/emergency/send", Test())).StatusCode);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await firstClient.PostJsonAsync(
+            $"/api/chats/{chatId}/templates/emergency/send", Test())).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await secondClient.PostJsonAsync(
+            $"/api/chats/{chatId}/templates/emergency/send", Test())).StatusCode);
+        Assert.Equal(5, first.Bot.SentTo(chatId).Count());
+        Assert.Single(second.Bot.SentTo(chatId));
     }
 
     [Fact]

@@ -93,7 +93,7 @@ public sealed class ChatStatusServiceTests : IDisposable
     // ---- popup state ----
 
     [Theory]
-    [InlineData(PopupKind.Emergency, "🚨 На сайті ДТЕК діють екстрені відключення.")]
+    [InlineData(PopupKind.Emergency, "⚠️ На сайті ДТЕК діють екстрені відключення.")]
     [InlineData(PopupKind.Accident, "⚠️ На сайті ДТЕК повідомлено про аварію в енергосистемі.")]
     [InlineData(PopupKind.Unknown, "ℹ️ На сайті ДТЕК є невизначене повідомлення.")]
     [InlineData(PopupKind.Stabilization, "🗓 Діють стабілізаційні відключення (за графіками).")]
@@ -117,7 +117,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal(["🚨 На сайті ДТЕК діють екстрені відключення.", "Перевірено: 15.07 15:00 (час Києва · Одеська область)"], lines);
+        Assert.Equal(["⚠️ На сайті ДТЕК діють екстрені відключення.", "Перевірено: 15.07 15:00 (час Києва · Одеська область)"], lines);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel, "odesa");
 
-        Assert.Equal("🚨 На сайті ДТЕК діють екстрені відключення.", lines[0]);
+        Assert.Equal("⚠️ На сайті ДТЕК діють екстрені відключення.", lines[0]);
         Assert.DoesNotContain(lines, line => line.Contains("45.1"));
         Assert.Empty(_schedules.Calls);
     }
@@ -175,7 +175,7 @@ public sealed class ChatStatusServiceTests : IDisposable
         var lines = await BuildAsync(channel);
 
         Assert.Equal("ℹ️ Для обраних районів екстрених відключень на сайті ДТЕК не зазначено.", lines[0]);
-        Assert.DoesNotContain(lines, line => line.Contains("🚨"));
+        Assert.DoesNotContain(lines, line => line.Contains("⚠️"));
     }
 
     // ---- Yasno group emergency ----
@@ -194,8 +194,8 @@ public sealed class ChatStatusServiceTests : IDisposable
             [
                 "ℹ️ Екстрених відключень на сайті ДТЕК не зазначено.",
                 "Перевірено: 15.07 15:00 (час Києва · м. Київ)",
-                "🚨 Для черги 45.1 діють екстрені відключення (за даними Yasno).",
-                "🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступне відключення о 20:30.",
+                "⚠️ Для групи 45.1 діють екстрені відключення (за даними Yasno).",
+                "🗓 За графіком (група 45.1) зараз відключення не заплановано. Наступне відключення о 20:30.",
             ],
             lines);
     }
@@ -241,7 +241,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення з 11:00. Планове завершення о 14:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) заплановано відключення з 11:00. Планове завершення о 14:00.", lines.Last());
         Assert.Equal(["kyiv"], _schedules.Calls);
     }
 
@@ -253,7 +253,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступне відключення о 20:30.", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) зараз відключення не заплановано. Наступне відключення о 20:30.", lines.Last());
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення з 20:30. Планове завершення о 00:00 (16.10).", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) заплановано відключення з 20:30. Планове завершення о 00:00 (16.10).", lines.Last());
     }
 
     [Fact]
@@ -275,7 +275,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступне відключення о 06:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) зараз відключення не заплановано. Наступне відключення о 06:00.", lines.Last());
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) зараз відключення не заплановано. Наступних відключень за графіком поки немає.", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) зараз відключення не заплановано. Наступних відключень за графіком поки немає.", lines.Last());
     }
 
     [Fact]
@@ -299,7 +299,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення. Планове завершення о 03:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) заплановано відключення. Планове завершення о 03:00.", lines.Last());
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public sealed class ChatStatusServiceTests : IDisposable
 
         var lines = await BuildAsync(channel);
 
-        Assert.Equal("🗓 За графіком (черга 45.1) заплановано відключення з 22:00.", lines.Last());
+        Assert.Equal("🗓 За графіком (група 45.1) заплановано відключення з 22:00.", lines.Last());
     }
 
     [Fact]

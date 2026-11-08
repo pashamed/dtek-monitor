@@ -9,6 +9,7 @@ public static class MessageSlots
     public const string Ended = "ended";
     public const string Schedule = "schedule";
     public const string ScheduleLine = "schedule-line";
+    public const string ScheduleLightLine = "schedule-light-line";
     public const string ScheduleHeading = "schedule-heading";
     public const string BeforeOff = "before-off";
     public const string Off = "off";
@@ -37,7 +38,7 @@ public static class MessageSlots
         new("tomorrow", "Відключення на завтра (порожнє, поки графіка на завтра немає)", "🔴 02:00 - 06:00 (~4 год)"),
         new("updated", "Коли джерело оновило графік", "15.10.2026 01:02"),
         new("region", "Назва регіону", "м. Київ"),
-        new("group", "Номер черги", "45.1"),
+        new("group", "Номер групи", "45.1"),
     ];
 
     private static readonly IReadOnlyList<PlaceholderDto> OffPlaceholders =
@@ -47,7 +48,7 @@ public static class MessageSlots
         new("until", "Коли світло має повернутися за графіком (порожнє, якщо невідомо)", "18:00"),
         new("planned", "Скільки триватиме відключення за графіком", "~4 год"),
         new("region", "Назва регіону", "м. Київ"),
-        new("group", "Номер черги", "45.1"),
+        new("group", "Номер групи", "45.1"),
     ];
 
     private static readonly IReadOnlyList<PlaceholderDto> BeforeOffPlaceholders =
@@ -56,7 +57,7 @@ public static class MessageSlots
         new("minutes", "За скільки хвилин почнеться відключення", "15"),
         new("date", "Дата початку відключення", "15.10.2026"),
         new("region", "Назва регіону", "м. Київ"),
-        new("group", "Номер черги", "45.1"),
+        new("group", "Номер групи", "45.1"),
         .. ContextExtra,
     ];
 
@@ -66,7 +67,7 @@ public static class MessageSlots
         new("offDuration", "Скільки світла не було (порожнє, якщо невідомо)", "3год 42хв"),
         new("next", "Коли наступне відключення за графіком (порожнє, якщо немає)", "22:00"),
         new("region", "Назва регіону", "м. Київ"),
-        new("group", "Номер черги", "45.1"),
+        new("group", "Номер групи", "45.1"),
     ];
 
     public static IReadOnlyList<TemplateSlotDto> All { get; } =
@@ -96,8 +97,8 @@ public static class MessageSlots
             Local,
             "local",
             "Локальне відключення",
-            "Сповіщення про аварійне чи екстрене відключення саме вашої черги (за даними Yasno).",
-            "{emoji} Локальне відключення, черга {group}\n{message}{#address}\n📍 {address}{/address}",
+            "Сповіщення про аварійне чи екстрене відключення саме вашої групи (за даними Yasno).",
+            "{emoji} {message}{#address}\n📍 {address}{/address}",
             MessageTemplate.Placeholders),
         new(
             Schedule,
@@ -110,7 +111,7 @@ public static class MessageSlots
             ScheduleHeading,
             "stabilization",
             "Заголовок графіка",
-            "Один заголовок на день. Черги та інтервали бот додає нижче автоматично. Щоб показувати підсумок змін плану, додайте {changes} у власний шаблон.",
+            "Один заголовок на день. Групи та інтервали бот додає нижче автоматично. Щоб показувати підсумок змін плану, додайте {changes} у власний шаблон.",
             "❗️ {header}\n📅 {weekday} {date}",
             [
                 new("header", "Графік відключень на сьогодні / завтра", "Графік відключень на сьогодні"),
@@ -121,7 +122,7 @@ public static class MessageSlots
                 new("address", "Збережені адреси (якщо є)", "м. Ірпінь, вул. Західна, 14"),
                 new("regionId", "Налаштований ідентифікатор регіону", "kyiv-oblast"),
                 new("city", "Населені пункти збережених адрес; порожньо, якщо невідомі", "Ірпінь"),
-                new("group", "Черги цього регіону", "45.1"),
+                new("group", "Групи цього регіону", "45.1"),
                 .. TemplateStatus.Placeholders,
                 new("changes", "Планові інтервали, додані або прибрані відносно попереднього графіка (порожньо, якщо змін немає)", "Зміни: додано 14:00–16:00; прибрано 18:00–20:00"),
             ]),
@@ -140,11 +141,25 @@ public static class MessageSlots
                 new("daypart", "Частина доби за початком інтервалу", "День"),
             ]),
         new(
+            ScheduleLightLine,
+            "stabilization",
+            "Інтервал зі світлом за графіком",
+            "Період без планового відключення. Це не підтвердження фактичної наявності світла.",
+            "🟢 {start}–{end} ({duration})",
+            [
+                new("start", "Початок інтервалу", "03:00"),
+                new("end", "Кінець інтервалу (24:00 опівночі)", "09:30"),
+                new("duration", "Тривалість інтервалу", "6 год 30 хв"),
+                new("date", "Дата інтервалу", "03.11.2026"),
+                new("weekday", "День тижня", "Вівторок"),
+                new("daypart", "Частина доби за початком інтервалу", "Ніч"),
+            ]),
+        new(
             BeforeOff,
             "stabilization",
             "Попередження про відключення",
             "Одноразове повідомлення за вибрану кількість хвилин до початку планового відключення.",
-            "⏳ За графіком черги {group} відключення почнеться о {time}{#date} ({date}){/date} — через {minutes} хв.",
+            "⏳ За графіком групи {group} відключення почнеться о {time}{#date} ({date}){/date} — через {minutes} хв.",
             BeforeOffPlaceholders),
         new(
             Off,
@@ -172,11 +187,13 @@ public static class MessageSlots
     public static IReadOnlyList<string> RequiredAny(string slot) => slot switch
     {
         Schedule => ["outages", "morning", "afternoon", "evening", "night"],
-        ScheduleLine => ["start", "end"],
+        ScheduleLine or ScheduleLightLine => ["start", "end"],
         _ => [],
     };
 
     // Sample values straight from the placeholder examples, for previews without real data.
     public static IReadOnlyDictionary<string, string> Samples(string slot) =>
         (Find(slot)?.Placeholders ?? []).ToDictionary(p => p.Name, p => p.Example);
+
+    public static bool IsScheduleLine(string slot) => slot is ScheduleLine or ScheduleLightLine;
 }

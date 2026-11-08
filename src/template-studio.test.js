@@ -9,7 +9,7 @@ const common = [
   placeholder('emoji', 'значок', '🚨'), placeholder('message', 'текст', 'м. Київ: діють екстрені відключення.'),
   placeholder('region', 'регіон', 'м. Київ'), placeholder('address', 'адреса', 'вул. Тестова, 1'),
   placeholder('site', 'сайт', 'https://example.test'),
-  placeholder('city', 'місто', 'Київ'), placeholder('group', 'черга', '45.1'),
+  placeholder('city', 'місто', 'Київ'), placeholder('group', 'група', '45.1'),
   placeholder('status', 'статус', 'Екстрені відключення'), placeholder('statusCode', 'код_статусу', 'Emergency'),
   placeholder('regionId', 'код_регіону', 'kyiv'),
 ];
@@ -27,9 +27,13 @@ const slots = [
   { id: 'schedule-line', group: 'stabilization', title: 'Інтервал', description: '', defaultTemplate: '{початок}–{кінець} ({тривалість_інтервалу})',
     placeholders: [placeholder('start', 'початок', '14:00'), placeholder('end', 'кінець', '16:00'),
       placeholder('duration', 'тривалість_інтервалу', '2 год')] },
+  { id: 'schedule-light-line', group: 'stabilization', title: 'Інтервал зі світлом за графіком', description: '',
+    defaultTemplate: '🟢 {початок}–{кінець} ({тривалість_інтервалу})',
+    placeholders: [placeholder('start', 'початок', '03:00'), placeholder('end', 'кінець', '09:30'),
+      placeholder('duration', 'тривалість_інтервалу', '6 год 30 хв')] },
   { id: 'before-off', group: 'stabilization', title: 'Попередження', description: '',
-    defaultTemplate: '⏳ За графіком черги {черга} відключення почнеться о {час} — через {хвилин} хв.',
-    placeholders: [placeholder('group', 'черга', '45.1'), placeholder('time', 'час', '14:00'),
+    defaultTemplate: '⏳ За графіком групи {група} відключення почнеться о {час} — через {хвилин} хв.',
+    placeholders: [placeholder('group', 'група', '45.1'), placeholder('time', 'час', '14:00'),
       placeholder('minutes', 'хвилин', '15'), placeholder('region', 'регіон', 'м. Київ')] },
 ];
 const names = slots.flatMap(s => s.placeholders);
@@ -85,11 +89,11 @@ async function openStudio(t, templates = {}) {
       const body = request.postDataJSON();
       previews.push(body);
       if (failPreview) return route.fulfill({ status: 503, json: { error: 'Сервіс недоступний' } });
-      data = { html: 'м. Київ · Черга 45.1<br>Приклад сповіщення', errors: body.template?.includes('{невідомо}') ? ['Невідомий параметр {невідомо}.'] : [] };
+      data = { html: 'м. Київ · Група 45.1<br>Приклад сповіщення', errors: body.template?.includes('{невідомо}') ? ['Невідомий параметр {невідомо}.'] : [] };
       if (body.slot === 'schedule') {
         const messages = body.imageKind === 'None'
           ? [{ html: 'Спільний графік', imageUrl: null }]
-          : [1, 2].map(id => ({ html: `Черга ${id}`, imageUrl: `https://lite.test/preview-image-${body.imageKind}-${id}.png` }));
+          : [1, 2].map(id => ({ html: `Група ${id}`, imageUrl: `https://lite.test/preview-image-${body.imageKind}-${id}.png` }));
         data = { ...data, ...messages[0], messages };
       }
     } else if (request.method() !== 'GET') {
@@ -305,6 +309,42 @@ test('schedule parts keep their contract; visual length limit, newlines and prev
   assert.deepEqual(f.errors, []);
 });
 
+test('light periods are an opt-in draft; separate light rows preview and persist without sending', async t => {
+  const f = await openStudio(t), { page } = f;
+  await page.locator('#tab-sched').click();
+  await mode(page, 'Редагувати шаблон');
+  const toggle = () => page.getByRole('switch', { name: 'Показувати періоди зі світлом', exact: true });
+  assert.equal(await toggle().isChecked(), false);
+  const preview = page.waitForRequest(r => r.url().endsWith('/api/preview') && r.postDataJSON().scheduleShowLightPeriods === true);
+  await toggle().check();
+  assert.equal((await preview).postDataJSON().slot, 'schedule');
+  assert.deepEqual(f.writes, []);
+  await page.getByRole('button', { name: 'Інтервал зі світлом', exact: true }).click();
+  await mode(page, 'Налаштувати');
+  assert.equal(await page.getByRole('button', { name: 'Жирний текст', exact: true }).count(), 0);
+  await mode(page, 'Розширений');
+  const text = '🟢 {початок} → {кінець} · {тривалість_інтервалу}';
+  const rowPreview = page.waitForRequest(r => r.url().endsWith('/api/preview')
+    && r.postDataJSON().scheduleLightLineTemplate === canonical(text));
+  await raw(page).fill(text);
+  assert.equal((await rowPreview).postDataJSON().scheduleShowLightPeriods, true);
+  assert.deepEqual(f.writes, []);
+  await save(page).click();
+  await page.getByText('Збережено ✓', { exact: true }).waitFor();
+  assert.equal(f.chat().settings.scheduleShowLightPeriods, true);
+  assert.equal(f.chat().settings.templates['schedule-light-line'], canonical(text));
+  assert.deepEqual(f.writes.map(w => w.path), ['/api/chats/-77001']);
+  await page.reload();
+  await page.locator('#tab-msg').click();
+  await page.locator('#slot-schedule').click();
+  assert.equal(await toggle().isChecked(), true);
+  await toggle().uncheck();
+  await page.getByRole('button', { name: 'Скасувати', exact: true }).click();
+  await page.locator('#slot-schedule').click();
+  assert.equal(await toggle().isChecked(), true);
+  assert.deepEqual(f.errors, []);
+});
+
 test('Send test names its destination and confirms saving drafts; all other editor actions stay preview-only', async t => {
   const f = await openStudio(t), { page } = f;
   await page.getByRole('button', { name: 'Стиль: Короткий' }).click();
@@ -339,7 +379,7 @@ test('formatting buttons can remove formatting from only the selected text', asy
 test('structured-only style and backend data chips save without popup or prepared text', async t => {
   const f = await openStudio(t), { page } = f;
   await page.getByRole('button', { name: 'Стиль: Лише дані' }).click();
-  assert.equal(await raw(page).inputValue(), '{регіон} · {місто}\nЧерга: {черга}\n{статус}');
+  assert.equal(await raw(page).inputValue(), '{регіон} · {місто}\nГрупа: {група}\n{статус}');
   await mode(page, 'Налаштувати');
   await page.getByText('+ Додати дані', { exact: true }).click();
   await mode(page, 'Додати: Код статусу');

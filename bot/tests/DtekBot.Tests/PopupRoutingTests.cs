@@ -117,7 +117,37 @@ public sealed class PopupRoutingTests
         Assert.Equal("no_information", result.GetProperty("interpretation").GetProperty("status").GetString());
         Assert.Equal(11, factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed)));
         await Ingest(client, factory, "kyiv", "");
+        Assert.Equal(11, factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed)));
+        factory.Clock.Now = factory.Clock.Now.AddMinutes(10);
+        await Ingest(client, factory, "kyiv", "");
         Assert.Equal(0, factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed)));
+    }
+
+    [Fact]
+    public async Task MissingPopup_EndsTheAlertOnlyAfterAConfirmedClear_AndAReturningPopupResetsTheWait()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateClient();
+        AddDistrictChats(factory, "kyiv");
+        int Open() => factory.WithDb(db => db.Deliveries.Count(d => !d.IsClosed));
+        await Ingest(client, factory, "kyiv", DispatcherFixture.EmergencyText);
+        var open = Open();
+        Assert.True(open > 0);
+        var sent = factory.Bot.Sent.Count();
+
+        await Ingest(client, factory, "kyiv", "");
+        factory.Clock.Now = factory.Clock.Now.AddMinutes(10);
+        await Ingest(client, factory, "kyiv", DispatcherFixture.EmergencyText);
+        factory.Clock.Now = factory.Clock.Now.AddMinutes(5);
+        await Ingest(client, factory, "kyiv", "");
+        factory.Clock.Now = factory.Clock.Now.AddMinutes(5);
+        await Ingest(client, factory, "kyiv", "");
+        Assert.Equal(open, Open());
+        Assert.Equal(sent, factory.Bot.Sent.Count());
+
+        factory.Clock.Now = factory.Clock.Now.AddMinutes(5);
+        await Ingest(client, factory, "kyiv", "");
+        Assert.Equal(0, Open());
     }
 
     [Fact]

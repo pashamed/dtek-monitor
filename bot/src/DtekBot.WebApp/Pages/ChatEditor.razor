@@ -47,6 +47,11 @@
         <Segmented TValue="AlertFilter" Options="FilterOptions" @bind-Value="_filter" />
     </div>
 
+    <div class="field">
+        <label>Джерело сповіщень</label>
+        <Segmented TValue="AlertSourceMode" Options="SourceOptions" @bind-Value="_alertSource" />
+    </div>
+
     <label class="switch-row">
         <span>Видаляти попереднє аварійне сповіщення після надсилання нового</span>
         <input type="checkbox" class="switch" @bind="_deletePreviousAlert" />
@@ -64,6 +69,11 @@
 </section>
 
 <section class="card">
+    <label class="switch-row">
+        <span>Показувати періоди зі світлом у графіку</span>
+        <input type="checkbox" class="switch" @bind="_scheduleShowLightPeriods" />
+    </label>
+    <p class="hint">Періоди без планових відключень і підсумок за день. Фактична наявність світла не підтверджена.</p>
     <TemplateEditor Value="@_template"
                     ValueChanged="OnTemplateChanged"
                     Errors="_errors"
@@ -103,6 +113,9 @@
     private static readonly IReadOnlyList<(AlertFilter, string)> FilterOptions =
         [(AlertFilter.All, "Усі"), (AlertFilter.EmergencyOnly, "Лише екстрені та аварії")];
 
+    private static readonly IReadOnlyList<(AlertSourceMode, string)> SourceOptions =
+        [(AlertSourceMode.Auto, "Авто"), (AlertSourceMode.Dtek, "Лише ДТЕК"), (AlertSourceMode.Yasno, "Лише Yasno")];
+
     private static readonly IReadOnlyList<(bool, string)> UpdateOptions =
         [(true, "Редагувати те саме повідомлення"), (false, "Щоразу нове повідомлення")];
 
@@ -112,8 +125,10 @@
     private bool _isPaused;
     private AlertFilter _filter;
     private bool _deletePreviousAlert;
+    private AlertSourceMode _alertSource;
     private bool _notifyOnEnd;
     private bool _editInPlace;
+    private bool _scheduleShowLightPeriods;
     private string _template = "";
     private IReadOnlyList<string> _errors = [];
     private bool _saving;
@@ -167,8 +182,10 @@
         _isPaused = s.IsPaused;
         _filter = s.Filter;
         _deletePreviousAlert = s.DeletePreviousAlert ?? false;
+        _alertSource = s.AlertSource ?? AlertSourceMode.Auto;
         _notifyOnEnd = s.NotifyOnEnd;
         _editInPlace = s.EditInPlace;
+        _scheduleShowLightPeriods = s.ScheduleShowLightPeriods ?? false;
         _template = PlaceholderNames.ToDisplay(s.Templates?.GetValueOrDefault("emergency")
             ?? (string.IsNullOrWhiteSpace(s.Template) ? Bootstrap.DefaultTemplate : s.Template));
         _errors = ValidateTemplate(_template);
@@ -226,6 +243,8 @@
             Templates = templates, SlotSettings = slotSettings,
             Addresses = null,
             DeletePreviousAlert = _deletePreviousAlert,
+            AlertSource = _alertSource,
+            ScheduleShowLightPeriods = _scheduleShowLightPeriods,
         };
         var result = await Api.SaveChatAsync(Chat.ChatId, settings);
 

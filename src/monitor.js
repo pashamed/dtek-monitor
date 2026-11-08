@@ -118,15 +118,14 @@ async function getInfo() {
         const formData = new URLSearchParams()
         formData.append("method", "getHomeNum")
 
-        if (REGION !== "k") {
-          formData.append("data[0][name]", "city")
-          formData.append("data[0][value]", CITY)
-        }
-
-        formData.append("data[1][name]", "street")
-        formData.append("data[1][value]", STREET)
-        formData.append("data[2][name]", "updateFact")
-        formData.append("data[2][value]", new Date().toLocaleString("uk-UA"))
+        // Match the site's own request: sequential field indexes and the page's updateFact value.
+        const fields = REGION !== "k" ? [["city", CITY], ["street", STREET]] : [["street", STREET]]
+        const updateFact = document.querySelector('input[name="updateFact"]')?.value ?? ""
+        if (updateFact) fields.push(["updateFact", updateFact])
+        fields.forEach(([name, value], index) => {
+          formData.append(`data[${index}][name]`, name)
+          formData.append(`data[${index}][value]`, value)
+        })
 
         const response = await fetch("/ua/ajax", {
           method: "POST",
@@ -197,7 +196,7 @@ function checkIsScheduled(info) {
   return isScheduled
 }
 
-function generateMessage(info) {
+async function generateMessage(info) {
   console.log("🌀 Generating message...")
 
   const { sub_type, start_date, end_date } = info?.data?.[HOUSE] || {}
@@ -205,22 +204,63 @@ function generateMessage(info) {
   const update = updateTimestamp?.split(" ").reverse().join(" ")
 
   const reason = capitalize(sub_type)
-  const begin = start_date.split(" ")[0]
-  const end = end_date.split(" ")[0]
+  const [beginTime, ...beginDateParts] = start_date.trim().split(/\s+/)
+  const [endTime, ...endDateParts] = end_date.trim().split(/\s+/)
+  const beginDate = beginDateParts.join(" ")
+  const endDate = endDateParts.join(" ")
+  const isEmergencyAddressOutage = /авар|екстр/iu.test(sub_type)
+  let outageText
 
-  const outageText = [
-    `🪫 <code>${begin} — ${end}</code>`,
-    "",
-    `⚠️ <i>${reason}.</i>`,
-  ].join("\n")
+  if (isEmergencyAddressOutage) {
+    const hasDisabledStabilization =
+      /без застосування графіку погодинних відключень/iu.test(sub_type)
+    outageText = [
+      "🚨 <b>Локальне аварійне відключення:</b>",
+      "",
+      `🪫 <code>Час початку: ${[beginTime, beginDate].filter(Boolean).join(" ")}</code>`,
+      `🕓 <code>Орієнтовне відновлення: до ${[endTime, endDate]
+        .filter(Boolean)
+        .join(" ")}</code>`,
+      hasDisabledStabilization
+        ? "⚠️ Графіки стабілізаційних відключень не діють."
+        : null,
+      hasDisabledStabilization
+        ? "ℹ️ Час відновлення може змінитися."
+        : null,
+    ]
+      .filter((line) => line !== null)
+      .join("\n")
+  } else {
+    const timeRange =
+      beginDate && beginDate === endDate
+        ? `${beginTime} — ${endTime} ${beginDate}`
+        : `${[beginTime, beginDate].filter(Boolean).join(" ")} — ${[
+            endTime,
+            endDate,
+          ]
+            .filter(Boolean)
+            .join(" ")}`
+    outageText = [
+      `🪫 <code>${timeRange}</code>`,
+      "",
+      `⚠️ <i>${reason}.</i>`,
+    ].join("\n")
+  }
+
+  const gridStatusLine = isEmergencyAddressOutage
+    ? await getGridStatusLine()
+    : null
+  if (gridStatusLine) outageText = `${outageText}\n\n${gridStatusLine}`
 
   const text = [
-    "⚡️ <b>Зафіксовано відключення:</b>",
-    outageText,
+    isEmergencyAddressOutage
+      ? outageText
+      : ["⚡️ <b>Зафіксовано відключення:</b>", outageText].join("\n"),
     "",
     `📢 <i>${update}</i>`,
     `🤖 <i>${getCurrentTime()}</i>`,
-  ].join("\n")
+  ]
+    .join("\n")
 
   return { text, outageText, messageType: "outage" }
 }
@@ -427,7 +467,7 @@ async function run() {
 
   const isScheduled = checkIsScheduled(info)
   if (isOutage && !isScheduled) {
-    const message = generateMessage(info)
+    const message = await generateMessage(info)
     await sendNotification(message)
   }
 }

@@ -431,6 +431,7 @@ public static class MiniAppApi
                 channel.IsPaused = dto.IsPaused;
                 channel.Filter = dto.Filter;
                 channel.DeletePreviousAlert = dto.DeletePreviousAlert ?? channel.DeletePreviousAlert;
+                if (dto.AlertSource is { } alertSource && Enum.IsDefined(alertSource)) channel.AlertSource = alertSource;
                 if (slotSettings is not null)
                 {
                     // Mirrored into the older columns so clients that do not know the per-slot map still read sensible values.
@@ -477,6 +478,7 @@ public static class MiniAppApi
                 channel.SchedulePost = canSchedule && dto.SchedulePost;
                 channel.SchedulePostMode = dto.SchedulePostMode;
                 channel.SchedulePostImage = dto.SchedulePostImage;
+                channel.ScheduleShowLightPeriods = dto.ScheduleShowLightPeriods ?? channel.ScheduleShowLightPeriods;
                 if (dto.Addresses is not null || before.RegionId != channel.RegionId || (before.WasActive && !channel.IsActive))
                     await ReconcileAddressStateAsync(db, channel, time.GetUtcNow(), ct);
                 await db.SaveChangesAsync(ct);
@@ -528,6 +530,12 @@ public static class MiniAppApi
             var previewTemplate = PlaceholderNames.ToCanonical(request.Template);
             var lineTemplate = PlaceholderNames.ToCanonical(request.ScheduleLineTemplate);
             var headingTemplate = PlaceholderNames.ToCanonical(request.ScheduleHeadingTemplate);
+            var lightLineTemplate = PlaceholderNames.ToCanonical(request.ScheduleLightLineTemplate);
+            if (!string.IsNullOrWhiteSpace(lightLineTemplate))
+            {
+                var lightErrors = MessageTemplate.Validate(lightLineTemplate, MessageSlots.ScheduleLightLine);
+                if (lightErrors.Count > 0) return Json(new PreviewResponse("", lightErrors));
+            }
             if (!string.IsNullOrWhiteSpace(headingTemplate))
             {
                 var headingErrors = MessageTemplate.Validate(headingTemplate, MessageSlots.ScheduleHeading);
@@ -546,7 +554,11 @@ public static class MiniAppApi
                 return Json(new PreviewResponse("", errors));
             }
 
-            var previewChannel = new Channel { RegionId = region.Id, GroupId = request.GroupId, PartIdList = wantedParts.ToList() };
+            var previewChannel = new Channel
+            {
+                RegionId = region.Id, GroupId = request.GroupId, PartIdList = wantedParts.ToList(),
+                ScheduleShowLightPeriods = request.ScheduleShowLightPeriods,
+            };
             if (request.Addresses is { Count: > 0 })
             {
                 if (request.Addresses.Count > 3 || request.Addresses.Any(a => a is null
@@ -572,6 +584,9 @@ public static class MiniAppApi
                     if (!string.IsNullOrWhiteSpace(headingTemplate))
                         channel.TemplateMap = channel.TemplateMap.Append(new KeyValuePair<string, string>(MessageSlots.ScheduleHeading, headingTemplate))
                             .ToDictionary(p => p.Key, p => p.Value);
+                    if (!string.IsNullOrWhiteSpace(lightLineTemplate))
+                        channel.TemplateMap = channel.TemplateMap.Append(new KeyValuePair<string, string>(MessageSlots.ScheduleLightLine, lightLineTemplate))
+                            .ToDictionary(p => p.Key, p => p.Value);
                     channel.SchedulePostImage = request.ImageKind ?? ScheduleImage.Grid;
                     var messages = await notifier.PreviewPostsAsync(channel, ct);
                     if (messages.Count == 0) return Error("Графіки тимчасово недоступні.");
@@ -593,7 +608,8 @@ public static class MiniAppApi
                 ct,
                 lineTemplate,
                 headingTemplate,
-                previewChannel);
+                previewChannel,
+                lightLineTemplate);
             return Json(new PreviewResponse(rendered.Html, errors, rendered.ImageUrl));
         });
 
@@ -613,7 +629,7 @@ public static class MiniAppApi
             var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == chatId, ct);
             if (channel is null || channel.GroupTargets().Count == 0)
             {
-                return Error("Спершу оберіть регіон і чергу.");
+                return Error("Спершу оберіть регіон і групу.");
             }
 
             await DtekBot.Api.Bot.TickGate.Schedules.WaitAsync(ct);
@@ -641,6 +657,7 @@ public static class MiniAppApi
             IOptionsMonitor<DtekSettings> settings,
             TemplatePreviewService previews,
             ScheduleNotifier notifier,
+            TestSendLimiter limiter,
             TimeProvider time,
             CancellationToken ct) =>
         {
@@ -672,7 +689,7 @@ public static class MiniAppApi
             }
 
             var now = time.GetUtcNow();
-            if (TestSendLimiter.IsLimited(chatId, now))
+            if (limiter.IsLimited(chatId, now))
             {
                 return Results.Json(new ApiError("Забагато тестових повідомлень. Спробуйте за кілька секунд."), ApiJson.Options, statusCode: 429);
             }
@@ -703,12 +720,19 @@ public static class MiniAppApi
                 ct,
                 channel.TemplateFor(MessageSlots.ScheduleLine),
                 channel.TemplateFor(MessageSlots.ScheduleHeading),
-                channel);
+                channel,
+                channel.TemplateFor(MessageSlots.ScheduleLightLine));
 
             try
             {
                 foreach (var message in scheduleMessages ?? [new PreviewMessageDto(rendered.Html, rendered.ImageUrl)])
-                    await notifier.SendNewAsync(chatId, "🧪 <b>Тест</b>\n\n" + message.Html, message.ImageUrl, ct);
+                {
+                    var text = "🧪 <b>Тест</b>\n\n" + message.Html;
+                    var parts = slot == MessageSlots.Schedule && channel.ScheduleShowLightPeriods
+                        ? CombinedSchedule.Parts(text) : [text];
+                    foreach (var part in parts)
+                        await notifier.SendNewAsync(chatId, part, parts.Count == 1 ? message.ImageUrl : null, ct);
+                }
             }
             catch (Telegram.Bot.Exceptions.ApiRequestException ex) when (ex.ErrorCode == 403)
             {
@@ -1031,7 +1055,7 @@ public static class MiniAppApi
                     {
                         if (manuallySelectedGroup)
                         {
-                            return Error("У вибраній черзі немає даних графіка. Оберіть її вручну.");
+                            return Error("У вибраній групі немає даних графіка. Оберіть її вручну.");
                         }
 
                         groupId = null;
@@ -1045,7 +1069,7 @@ public static class MiniAppApi
             {
                 var snapshot = region.HasSchedules ? await schedules.GetAsync(region.Id, ct) : null;
                 if (selected.Length > 12 || snapshot is null || selected.Any(id => string.IsNullOrWhiteSpace(id) || snapshot.Find(id) is null))
-                    return Error("Перевірте черги обраного регіону.");
+                    return Error("Перевірте групи обраного регіону.");
                 groupId = selected.Order(StringComparer.Ordinal).First();
             }
             channel.GroupId = groupId;
@@ -1122,7 +1146,7 @@ public static class MiniAppApi
             var group = await yasno.GetGroupAsync(region.YasnoRegionId, region.YasnoDsoId, request.StreetId, request.HouseId, ct);
             if (group is null)
             {
-                return Error("Не вдалося визначити чергу для цієї адреси. Спробуйте пізніше.");
+                return Error("Не вдалося визначити групу для цієї адреси. Спробуйте пізніше.");
             }
 
             var label = request.Label?.Trim() ?? "";
@@ -1296,7 +1320,7 @@ public static class MiniAppApi
             var snapshot = await schedules.GetAsync(region.Id, ct);
             return snapshot is null
                 ? Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503)
-                : Json(snapshot.GroupIds.Select(id => new GroupItemDto(id, $"Черга {id}")).ToList());
+                : Json(snapshot.GroupIds.Select(id => new GroupItemDto(id, $"Група {id}")).ToList());
         });
 
         // Manual group choice, for regions without the address picker.
@@ -1343,11 +1367,11 @@ public static class MiniAppApi
 
             if (snapshot.Find(request.GroupId ?? "") is null)
             {
-                return Error("Невідома черга.");
+                return Error("Невідома група.");
             }
 
             // A hand-picked group only replaces the detected one: the saved address stays for the DTEK check.
-            if (channel.IsCombined()) return Error("Змініть черги у списку адрес.");
+            if (channel.IsCombined()) return Error("Змініть групи у списку адрес.");
             channel.GroupId = request.GroupId;
             channel.UpdateLegacyPrimary();
             await db.SaveChangesAsync(ct);
@@ -1367,7 +1391,7 @@ public static class MiniAppApi
             if (snapshot is null)
                 return Results.Json(new ApiError("Графіки тимчасово недоступні. Спробуйте пізніше."), ApiJson.Options, statusCode: 503);
             var group = snapshot.Find(groupId);
-            if (group is null) return Error("Для цієї черги немає даних графіка.");
+            if (group is null) return Error("Для цієї групи немає даних графіка.");
             var now = time.GetUtcNow();
             var today = KyivTime.FromUtc(now).Date;
             var days = Enumerable.Range(0, 2).Select(offset =>
@@ -1395,7 +1419,7 @@ public static class MiniAppApi
                 warnings.Add("Укренерго повідомляє про екстрені обмеження або пошкодження мережі. План може не діяти.");
             var groupState = await db.GroupStates.AsNoTracking().FirstOrDefaultAsync(s => s.RegionId == region.Id && s.GroupId == groupId, ct);
             if (groupState?.IsEmergency == true)
-                warnings.Add($"Останній запис Yasno для черги {groupId} повідомляє про екстрені відключення (оновлено {KyivTime.Format(groupState.UpdatedAt)}). План може не діяти.");
+                warnings.Add($"Останній запис Yasno для групи {groupId} повідомляє про екстрені відключення (оновлено {KyivTime.Format(groupState.UpdatedAt)}). План може не діяти.");
             return Json(new ScheduleViewDto(region.Id, region.Name, groupId, now, snapshot.FetchedAt,
                 now - snapshot.FetchedAt > TimeSpan.FromMinutes(settings.CurrentValue.Schedules.CacheMinutes),
                 days, next, next is null ? null : !status!.IsOff, warnings));
@@ -1428,7 +1452,7 @@ public static class MiniAppApi
             var status = snapshot.StatusAt(groupId, now);
             if (status is null)
             {
-                return Error("Для цієї черги немає даних графіка.");
+                return Error("Для цієї групи немає даних графіка.");
             }
 
             var imageKind = Enum.TryParse<ScheduleImage>(kind, ignoreCase: true, out var parsed) ? parsed : ScheduleImage.Grid;
@@ -1507,7 +1531,7 @@ public static class MiniAppApi
                 || item.City?.Length > 128 || item.Street?.Length > 256 || item.House?.Length > 64 || item.Label?.Length > 256
                 || new[] { item.City, item.Street, item.House, item.Label }.Any(t => t?.Any(char.IsControl) == true)
                 || item.Groups is null || item.Groups.Count > 12)
-                return "Перевірте назву, адресу та черги.";
+                return "Перевірте назву, адресу та групи.";
             if (item.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Any(id => !region.Parts.Any(p => p.Id == id)) == true)
                 return "Невідомий район.";
@@ -1521,7 +1545,7 @@ public static class MiniAppApi
                 if (group is null || !System.Text.RegularExpressions.Regex.IsMatch(group.GroupId ?? "", @"^\d{1,2}\.\d{1,2}$")
                     || group.Label?.Length > 64 || group.Label?.Any(char.IsControl) == true
                     || !region.HasSchedules || (snapshot is not null && snapshot.Find(group.GroupId!) is null))
-                    return "Перевірте черги обраного регіону.";
+                    return "Перевірте групи обраного регіону.";
             }
         }
         return null;
@@ -1625,7 +1649,9 @@ public static class MiniAppApi
                         c.GroupId is null ? [] : [new ChatAddressGroupDto(c.GroupId)], c.PartIds, c.AddressLabel)] : [],
             c.SvitlobotGroup(),
             c.SvitlobotTarget()?.RegionId,
-            c.SvitlobotAddressId);
+            c.SvitlobotAddressId,
+            c.ScheduleShowLightPeriods,
+            c.AlertSource);
         return new ChatSummaryDto(c.ChatId, title, isPrivate, settings);
     }
 
