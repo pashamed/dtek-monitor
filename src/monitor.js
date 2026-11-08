@@ -26,12 +26,15 @@ import {
   capitalize,
   checkIsNight,
   deleteLastMessage,
+  deleteAddressMessage,
   getCurrentTime,
   isEmergencyMessage,
   isEmergencyNotice,
   isLocalEmergencyMessage,
   isStabilizationNotice,
+  loadAddressMessage,
   loadLastMessage,
+  saveAddressMessage,
   saveLastMessage,
 } from "./helpers.js"
 
@@ -225,6 +228,11 @@ function checkIsScheduled(info) {
     : console.log("⚠️ Power outage not scheduled!")
 
   return isScheduled
+}
+
+function checkIsStabilization(info) {
+  const { sub_type = "" } = info?.data?.[HOUSE] || {}
+  return /графік/iu.test(sub_type) && !/авар|екст/iu.test(sub_type)
 }
 
 async function generateMessage(info) {
@@ -467,6 +475,60 @@ async function sendNotification({ text, outageText, messageType }) {
   )
 }
 
+async function telegramCall(method, payload) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  )
+  return await response.json()
+}
+
+// Posts the address outage once, then edits that message while its text changes
+async function sendAddressNotification({ text, outageText }) {
+  if (!TELEGRAM_BOT_TOKEN) throw Error("❌ Missing telegram bot token.")
+  if (!TELEGRAM_CHAT_ID) throw Error("❌ Missing telegram chat id.")
+
+  const previous = loadAddressMessage()
+  if (previous?.message_id && previous.outageText === outageText) {
+    console.log("🟡 Address notification not changed.")
+    return
+  }
+
+  const base = {
+    chat_id: TELEGRAM_CHAT_ID,
+    text,
+    parse_mode: "HTML",
+  }
+
+  if (previous?.message_id) {
+    const edited = await telegramCall("editMessageText", {
+      ...base,
+      message_id: previous.message_id,
+    })
+    if (edited.ok || edited.description?.includes("not modified")) {
+      saveAddressMessage({ message_id: previous.message_id, outageText })
+      console.log("🟢 Address notification edited.")
+      return
+    }
+    if (!edited.description?.includes("message to edit not found")) {
+      throw Error(edited.description || "Telegram message edit failed.")
+    }
+    deleteAddressMessage()
+  }
+
+  const sent = await telegramCall("sendMessage", {
+    ...base,
+    disable_notification: checkIsNight(),
+  })
+  if (!sent.ok) throw Error(sent.description || "Telegram send failed.")
+  saveAddressMessage({ message_id: sent.result.message_id, outageText })
+  console.log("🟢 Address notification sent.")
+}
+
 async function sendChannelTriggerReply(chatId, messageId, text) {
   if (!TELEGRAM_BOT_TOKEN) throw Error("❌ Missing telegram bot token.")
 
@@ -586,13 +648,18 @@ async function runChannelTrigger() {
     } else if (!result.info) {
       throw Error("Address status was not returned by DTEK.")
     } else if (!checkIsOutage(result.info)) {
+      // Address is normal again: close the address thread and reply to the post
+      deleteAddressMessage()
       text =
         "ℹ️ ДТЕК зараз не відображає відключення за адресою.\nЯкщо світла немає, перевірте статус ще раз через 15 хвилин."
-    } else if (checkIsScheduled(result.info)) {
+    } else if (checkIsStabilization(result.info)) {
+      deleteAddressMessage()
       text =
         "🗓 За адресою на сайті ДТЕК відображається планове відключення.\nЛокальну аварію не підтверджено."
     } else {
-      text = (await generateMessage(result.info)).text
+      // Any non-stabilization outage goes to its own channel thread
+      await sendAddressNotification(await generateMessage(result.info))
+      return
     }
   } catch (error) {
     console.error(`❌ Channel address check failed: ${error.message}.`)

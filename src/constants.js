@@ -31,6 +31,10 @@ export const SHUTDOWNS_PAGE =
   shutdownsPages[String(REGION).toLocaleLowerCase()] ?? shutdownsPages["kr"]
 
 export const LAST_MESSAGE_FILE = path.resolve("artifacts", `last-message.json`)
+export const ADDRESS_MESSAGE_FILE = path.resolve(
+  "artifacts",
+  `last-address-message.json`
+)
 export const SHOULD_CHECK_ADDRESS = CHECK_ADDRESS !== "false"
 export const IS_CHANNEL_TRIGGER = CHANNEL_TRIGGER === "true"
 export const SHOULD_EDIT_CHANNEL_TRIGGER = CHANNEL_TRIGGER_EDIT === "true"

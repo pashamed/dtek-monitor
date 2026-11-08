@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
@@ -23,6 +23,7 @@ async function runMonitor(
     endDate = "23:34 06.11.2026",
     houseFound = true,
     telegramError = null,
+    addressMessage = null,
   } = {}
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "dtek-monitor-test-"))
@@ -32,6 +33,13 @@ async function runMonitor(
     writeFileSync(
       path.join(artifacts, "last-message.json"),
       JSON.stringify(lastMessage)
+    )
+  }
+  if (addressMessage) {
+    mkdirSync(path.join(directory, "artifacts"), { recursive: true })
+    writeFileSync(
+      path.join(directory, "artifacts", "last-address-message.json"),
+      JSON.stringify(addressMessage)
     )
   }
   const browser = `
@@ -99,7 +107,7 @@ async function runMonitor(
   `
 
   try {
-    return await execFileAsync(process.execPath, [
+    const result = await execFileAsync(process.execPath, [
       "--import",
       `data:text/javascript,${encodeURIComponent(preload)}`,
       monitorPath,
@@ -123,6 +131,10 @@ async function runMonitor(
       },
       timeout: 10000,
     })
+    result.addressFileExists = existsSync(
+      path.join(directory, "artifacts", "last-address-message.json")
+    )
+    return result
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -186,7 +198,7 @@ test("does not repeat a local emergency clearance", async () => {
   assert.doesNotMatch(stdout, /MESSAGE:/)
 })
 
-test("replies to automatic channel triggers with the configured local emergency status", async () => {
+test("announces a local emergency from an automatic channel trigger as a channel message", async () => {
   const { stdout } = await runMonitor(
     "Екстренні відключення (Аварійне без застосування графіку погодинних відключень)",
     null,
@@ -199,12 +211,56 @@ test("replies to automatic channel triggers with the configured local emergency 
 
   assert.match(stdout, /ADDRESS_LOOKUP/)
   assert.match(stdout, /METHOD:sendMessage/)
-  assert.match(stdout, /REPLY:true/)
-  assert.match(stdout, /REPLY_TO:416/)
+  assert.match(stdout, /REPLY:false/)
   assert.match(stdout, /EDIT_TO:none/)
   assert.match(stdout, /CHAT_TO:-1/)
   assert.match(stdout, /🚨 <b>Локальне аварійне відключення:<\/b>/)
   assert.doesNotMatch(stdout, /Зафіксовано відключення/)
+})
+
+test("announces a non-emergency, non-stabilization address outage from a channel trigger", async () => {
+  const { stdout } = await runMonitor("Незаплановане відключення", null, null, true)
+
+  assert.match(stdout, /METHOD:sendMessage/)
+  assert.match(stdout, /REPLY:false/)
+  assert.match(stdout, /Зафіксовано відключення/)
+})
+
+test("edits its own address message when the outage text changes", async () => {
+  const { stdout, addressFileExists } = await runMonitor(
+    "Незаплановане відключення",
+    null,
+    null,
+    true,
+    "-1",
+    "-1",
+    "42",
+    false,
+    { addressMessage: { message_id: 77, outageText: "old" } }
+  )
+
+  assert.match(stdout, /METHOD:editMessageText/)
+  assert.match(stdout, /EDIT_TO:77/)
+  assert.match(stdout, /REPLY:false/)
+  assert.equal(addressFileExists, true)
+})
+
+test("replies to the original post and closes the address thread when the address is normal", async () => {
+  const { stdout, addressFileExists } = await runMonitor(
+    "",
+    null,
+    null,
+    true,
+    "-1",
+    "-1",
+    "42",
+    false,
+    { addressMessage: { message_id: 77, outageText: "old" } }
+  )
+
+  assert.match(stdout, /METHOD:sendMessage/)
+  assert.match(stdout, /REPLY_TO:42/)
+  assert.equal(addressFileExists, false)
 })
 
 test("edits a manually selected post and checks its address despite regional emergency notices", async () => {
