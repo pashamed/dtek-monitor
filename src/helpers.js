@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
-import { LAST_MESSAGE_FILE } from "./constants.js"
+import { ADDRESS_MESSAGE_FILE, LAST_MESSAGE_FILE } from "./constants.js"
 import { normalize } from "./popup-keywords.js"
 
 export function capitalize(str) {
@@ -104,6 +104,24 @@ export function saveLastMessage({
 
 export function deleteLastMessage() {
   fs.rmSync(LAST_MESSAGE_FILE, { force: true })
+}
+
+// The address-check thread is stored separately from the emergency thread
+export function loadAddressMessage() {
+  if (!fs.existsSync(ADDRESS_MESSAGE_FILE)) return null
+  return JSON.parse(fs.readFileSync(ADDRESS_MESSAGE_FILE, "utf8").trim())
+}
+
+export function saveAddressMessage({ message_id, outageText } = {}) {
+  fs.mkdirSync(path.dirname(ADDRESS_MESSAGE_FILE), { recursive: true })
+  fs.writeFileSync(
+    ADDRESS_MESSAGE_FILE,
+    JSON.stringify({ message_id, outageText })
+  )
+}
+
+export function deleteAddressMessage() {
+  fs.rmSync(ADDRESS_MESSAGE_FILE, { force: true })
 }
 
 export function getCurrentTime() {
