@@ -12,13 +12,13 @@ public static partial class MessageTemplate
 
     public static readonly IReadOnlyList<PlaceholderDto> Placeholders =
     [
-        new("emoji", "Значок типу події", "🚨"),
+        new("emoji", "Значок типу події", "⚠️"),
         new("title", "Короткий заголовок", "Екстрені відключення"),
         new("message", "Готовий текст сповіщення", "м. Київ (Правий берег): введені екстрені відключення…"),
         new("region", "Назва регіону", "м. Київ"),
         new("regionId", "Налаштований ідентифікатор регіону", "kyiv"),
         new("city", "Населені пункти відповідних збережених адрес; порожньо, якщо невідомі", "Київ"),
-        new("group", "Черги відповідних адрес; для локального сповіщення лише аварійна черга", "45.1"),
+        new("group", "Групи відповідних адрес; для локального сповіщення лише аварійна група", "45.1"),
         .. TemplateStatus.Placeholders,
         new("part", "Частина регіону (якщо визначена)", "Правий берег"),
         new("address", "Збережені адреси, яких стосується сповіщення (якщо є)", "вул. Крушельницької, 13"),
@@ -128,7 +128,7 @@ public static partial class MessageTemplate
         {
             errors.Add($"Шаблон задовгий: максимум {MaxLength} символів.");
         }
-        if (slot == MessageSlots.ScheduleLine && (template.Contains('<') || template.Contains('>')))
+        if (MessageSlots.IsScheduleLine(slot) && (template.Contains('<') || template.Contains('>')))
         {
             errors.Add("Рядок графіка підтримує текст, значки й параметри, без HTML-тегів.");
         }

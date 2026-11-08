@@ -1,9 +1,12 @@
 using DtekBot.Api.Data;
+using DtekBot.Api.Settings;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace DtekBot.Api.Parsing;
 
-public sealed class RegionObservationStore(BotDbContext db, PopupClassifier classifier, TimeProvider time, PopupInterpreter interpreter)
+public sealed class RegionObservationStore(BotDbContext db, PopupClassifier classifier, TimeProvider time, PopupInterpreter interpreter,
+    IOptionsMonitor<DtekSettings> options)
 {
     public async Task<PopupClassification> PrepareAsync(DtekPopupObservation observation, CancellationToken ct)
     {
@@ -37,6 +40,21 @@ public sealed class RegionObservationStore(BotDbContext db, PopupClassifier clas
             db.RegionStates.Add(state);
         }
         state.ObservedAt = observation.ObservedAt;
+
+        // A popup can be missing from one page load while the outage goes on; an alert ends only when
+        // a second popup-less observation, taken at least ClearConfirm later, agrees.
+        var confirm = options.CurrentValue.Timers.ClearConfirm;
+        if (changed && result.Kind == PopupKind.None && state.Kind is PopupKind.Emergency or PopupKind.Accident or PopupKind.Unknown
+            && confirm > TimeSpan.Zero)
+        {
+            state.ClearPendingSince ??= observation.ObservedAt;
+            if (observation.ObservedAt - state.ClearPendingSince < confirm)
+            {
+                await db.SaveChangesAsync(ct);
+                return (false, state.Classification());
+            }
+        }
+        state.ClearPendingSince = null;
         if (changed)
         {
             state.Kind = result.Kind;

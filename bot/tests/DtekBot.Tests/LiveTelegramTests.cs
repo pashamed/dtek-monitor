@@ -171,7 +171,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                     Groups = [new() { GroupId = "45.1" }],
                 }],
                 TemplateMap = MessageSlots.All.ToDictionary(s => s.Id, s =>
-                    s.Id == MessageSlots.ScheduleLine ? s.DefaultTemplate : "🧪 ТЕСТ UI\n" + s.DefaultTemplate),
+                    MessageSlots.IsScheduleLine(s.Id) ? s.DefaultTemplate : "🧪 ТЕСТ UI\n" + s.DefaultTemplate),
             });
             db.ChannelAdmins.Add(new ChannelAdmin { ChatId = chatId, UserId = me.Id });
         });
@@ -268,7 +268,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
         {
             ChatId = chatId, RegionId = "kyiv", GroupId = "45.1", PartIdList = ["darnytskyi"],
             TemplateMap = MessageSlots.All.ToDictionary(s => s.Id,
-                s => s.Id == MessageSlots.ScheduleLine ? s.DefaultTemplate
+                s => MessageSlots.IsScheduleLine(s.Id) ? s.DefaultTemplate
                     : "🧪 ТЕСТ — не реальна подія\n" + s.DefaultTemplate
                         + (s.Id == MessageSlots.ScheduleHeading ? "\n{changes}" : "")),
         }));
@@ -276,6 +276,9 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
         {
             await Ingest(DispatcherFixture.EmergencyText);
             Assert.Contains("екстрені", transport.LastText, StringComparison.OrdinalIgnoreCase);
+            await Ingest("");
+            // A missing popup ends the alert only when a later observation confirms it.
+            api.Clock.Now = api.Clock.Now.AddMinutes(10);
             await Ingest("");
             Assert.Contains("запис про екстрені відключення більше не відображається", transport.LastText);
             Assert.Contains("Скасування не підтверджене", transport.LastText);
@@ -378,13 +381,14 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                     var channel = db.Channels.SingleOrDefault(c => c.ChatId == chatId);
                     if (channel is null) { channel = new Channel { ChatId = chatId }; db.Channels.Add(channel); }
                     channel.RegionId = regionId;
+                    channel.Addresses.Clear();
                     channel.PartIdList = [part];
                     channel.GroupId = "45.1";
                     channel.QuietHoursEnabled = true;
                     channel.QuietHoursStartMinute = 0;
                     channel.QuietHoursEndMinute = 1439;
                     channel.TemplateMap = MessageSlots.All.ToDictionary(s => s.Id,
-                        s => s.Id is MessageSlots.ScheduleLine ? s.DefaultTemplate
+                        s => MessageSlots.IsScheduleLine(s.Id) ? s.DefaultTemplate
                             : "🧪 ТЕСТ — не реальна подія\n" + s.DefaultTemplate);
                 });
                 var chats = await settingsClient.GetFromJsonAsync<List<ChatSummaryDto>>("/api/chats", ApiJson.Options);
@@ -434,6 +438,10 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                     Assert.Equal(before, transport.Writes);
                     output.WriteLine($"UNAVAILABLE: {regionId} has no configured local group-status source; ingest is explicitly rejected.");
                 }
+                // Grid fallback needs unresolved DTEK data, not an explicit stabilization notice.
+                await Ingest(regionId, "");
+                api.Clock.Now = api.Clock.Now.AddMinutes(10);
+                await Ingest(regionId, "");
                 before = transport.Writes;
                 await Grid(otherRegion, GridStatuses.EmergencyOutages);
                 Assert.Equal(before, transport.Writes);
@@ -443,10 +451,13 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                 originalId = transport.LastMessageId;
                 before = transport.Writes;
                 await Grid(regionId, GridStatuses.EmergencyOutages);
-                await Ingest(regionId, DispatcherFixture.StabilizationText);
                 Assert.Equal(before, transport.Writes);
-                await Grid(regionId, GridStatuses.Normal);
+                await Ingest(regionId, DispatcherFixture.StabilizationText);
                 AssertClosure(style, originalId);
+                before = transport.Writes;
+                await Grid(regionId, GridStatuses.EmergencyOutages);
+                await Grid(regionId, GridStatuses.Normal);
+                Assert.Equal(before, transport.Writes);
                 output.WriteLine($"PASS geographic isolation, emergency/stabilization and grid HTTP ingest, saved clearance mode; {regionId}, ended={style}; local source available={regionId == "kyiv"}.");
                 await Cleanup();
             }
@@ -458,6 +469,8 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                     db.SchedulePostThreads.RemoveRange(db.SchedulePostThreads);
                     var channel = db.Channels.Single(c => c.ChatId == chatId);
                     channel.RegionId = "kyiv";
+                    channel.Addresses.Clear();
+                    channel.PartIdList = [];
                     channel.GroupId = "45.1";
                     channel.SchedulePost = true;
                     channel.SchedulePostMode = mode;
@@ -499,7 +512,11 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                 await Cleanup();
             }
         }
-        finally { await Cleanup(); }
+        finally
+        {
+            await Cleanup();
+            api.WithDb(db => Assert.Empty(db.PrivateNotificationCopies));
+        }
 
         async Task Ingest(string regionId, string text)
         {
@@ -565,7 +582,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
             c.QuietHoursStartMinute = 0;
             c.QuietHoursEndMinute = 1439;
             c.TemplateMap = MessageSlots.All.ToDictionary(s => s.Id,
-                s => s.Id == MessageSlots.ScheduleLine ? s.DefaultTemplate
+                s => MessageSlots.IsScheduleLine(s.Id) ? s.DefaultTemplate
                     : "🧪 <b>ТЕСТ — не реальна подія</b>\n" + s.DefaultTemplate);
         });
         var dispatcher = new AlertDispatcher(bot, fixture.Db, fixture.Clock, NullLogger<AlertDispatcher>.Instance, fixture.CreateMirror(bot));
@@ -663,8 +680,8 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
             Assert.True((await notifier.SendScheduleNowAsync(channel, default)).Sent);
             Assert.Equal(1, transport.LastText.Split("Графік відключень на сьогодні").Length - 1);
             Assert.Equal(1, transport.LastText.Split("Графік відключень на завтра").Length - 1);
-            Assert.Contains("Черга 2.1", transport.LastText);
-            Assert.Contains("Черга 45.1", transport.LastText);
+            Assert.Contains("Група 2.1", transport.LastText);
+            Assert.Contains("Група 45.1", transport.LastText);
             output.WriteLine("PASS: multi-group Today/Tomorrow post accepted by Telegram.");
             channel.TemplateMap = channel.TemplateMap.ToDictionary(p => p.Key, p =>
                 p.Key == MessageSlots.ScheduleLine ? "⚡ {start}  →  {end}" : p.Value);
@@ -718,6 +735,92 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
     }
 
     [LiveTelegramFact]
+    public async Task AlertSourceModes_KeepOneEmergencyThreadOrFilterSourceInTestChannel()
+    {
+        const long chatId = -1004471996729;
+        var token = Environment.GetEnvironmentVariable("Bot__Token");
+        Assert.False(string.IsNullOrWhiteSpace(token), "Missing test bot token.");
+        Assert.Equal(chatId.ToString(), Environment.GetEnvironmentVariable("TELEGRAM_TEST_CHAT_ID"));
+        using var transport = new TestChannelTransport(chatId);
+        using var http = new HttpClient(transport);
+        var bot = new TelegramBotClient(token!, http);
+        using var fixture = new DispatcherFixture();
+        var channel = fixture.AddChannel(chatId, c =>
+        {
+            c.GroupId = "45.1";
+            c.NotifyOnEnd = true;
+            c.EditInPlace = true;
+            c.TemplateMap = MessageSlots.All.ToDictionary(s => s.Id,
+                s => MessageSlots.IsScheduleLine(s.Id) ? s.DefaultTemplate
+                    : "🧪 <b>ТЕСТ — не реальна подія</b>\n" + s.DefaultTemplate);
+        });
+        var dispatcher = new AlertDispatcher(bot, fixture.Db, fixture.Clock, NullLogger<AlertDispatcher>.Instance, fixture.CreateMirror(bot));
+        Task<DispatchSummary> Regional(string text) =>
+            dispatcher.DispatchAsync(fixture.Kyiv, fixture.Classifier.Classify("kyiv", text), text, default);
+        Task<DispatchSummary> Group(bool active) => dispatcher.DispatchGroupAsync(fixture.Kyiv, "45.1", active, default);
+        var groupState = new GroupState { RegionId = "kyiv", GroupId = "45.1", Today = GroupStatuses.Emergency, UpdatedAt = fixture.Clock.Now };
+        fixture.Db.GroupStates.Add(groupState);
+        await fixture.Db.SaveChangesAsync();
+        try
+        {
+            // Auto: Yasno starts, DTEK takes over, DTEK clears while Yasno continues, Yasno clears.
+            Assert.Equal(1, (await Group(true)).Sent);
+            var thread = transport.LastMessageId;
+            await Regional(DispatcherFixture.EmergencyText);
+            Assert.Equal(("editMessageText", thread), (transport.LastWriteMethod, transport.LastMessageId));
+            var writes = transport.Writes;
+            await Regional(DispatcherFixture.StabilizationText);
+            Assert.Equal(writes, transport.Writes);
+            Assert.Equal(1, (await Group(true)).Edited);
+            Assert.Equal(("editMessageText", thread), (transport.LastWriteMethod, transport.LastMessageId));
+            Assert.Contains("загально по групі 45.1", transport.LastText);
+            groupState.Today = "ScheduleApplies";
+            await fixture.Db.SaveChangesAsync();
+            Assert.Equal(1, (await Group(false)).Closed);
+            Assert.Equal(thread, transport.LastReplyId);
+            output.WriteLine("PASS: Auto keeps one emergency message across DTEK and Yasno, then closes it with one reply.");
+
+            fixture.Clock.Now = fixture.Clock.Now.AddMinutes(30);
+            channel.AlertSource = AlertSourceMode.Dtek;
+            groupState.Today = GroupStatuses.Emergency;
+            await fixture.Db.SaveChangesAsync();
+            writes = transport.Writes;
+            Assert.Equal(new(0, 0, 0, 0), await Group(true));
+            Assert.Equal(writes, transport.Writes);
+            Assert.Equal(1, (await Regional(DispatcherFixture.EmergencyText)).Sent);
+            thread = transport.LastMessageId;
+            Assert.Equal(1, (await Regional(DispatcherFixture.StabilizationText)).Closed);
+            Assert.Equal(thread, transport.LastReplyId);
+            output.WriteLine("PASS: DTEK-only skips Yasno and announces the DTEK end even while the group is in emergency.");
+
+            await Group(false);
+            fixture.Clock.Now = fixture.Clock.Now.AddMinutes(30);
+            channel.AlertSource = AlertSourceMode.Yasno;
+            await fixture.Db.SaveChangesAsync();
+            writes = transport.Writes;
+            Assert.Equal(0, (await Regional(DispatcherFixture.EmergencyText)).Sent);
+            Assert.Equal(0, (await Regional(DispatcherFixture.AccidentRightBankText)).Sent);
+            Assert.Equal(writes, transport.Writes);
+            Assert.Equal(1, (await Group(true)).Sent);
+            thread = transport.LastMessageId;
+            output.WriteLine("DEBUG: " + transport.LastText);
+            Assert.Contains("загально по групі 45.1", transport.LastText);
+            groupState.Today = "ScheduleApplies";
+            await fixture.Db.SaveChangesAsync();
+            Assert.Equal(1, (await Group(false)).Closed);
+            Assert.Equal(thread, transport.LastReplyId);
+            output.WriteLine("PASS: Yasno-only skips DTEK notices and delivers the group alert and its end.");
+        }
+        finally
+        {
+            foreach (var id in transport.LiveIds.ToArray())
+                await bot.DeleteMessage(chatId, id);
+            Assert.Empty(transport.LiveIds);
+            output.WriteLine("PASS: all test messages cleaned up.");
+        }
+    }
+
+    [LiveTelegramFact]
     public async Task MiniAppApi_ReadSavePreviewSendAndUnlinkInTestChannel()
     {
         const long chatId = -1004471996729;
@@ -753,7 +856,7 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                 RegionId = "kyiv",
                 GroupId = "45.1",
                 TemplateMap = MessageSlots.All.ToDictionary(s => s.Id, s =>
-                    s.Id == MessageSlots.ScheduleLine ? s.DefaultTemplate : "🧪 <b>Тест API</b>\n" + s.DefaultTemplate),
+                    MessageSlots.IsScheduleLine(s.Id) ? s.DefaultTemplate : "🧪 <b>Тест API</b>\n" + s.DefaultTemplate),
             });
             db.ChannelAdmins.Add(new ChannelAdmin { ChatId = chatId, UserId = me.Id });
         });
@@ -781,12 +884,27 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
         previewResponse.EnsureSuccessStatusCode();
         var preview = await previewResponse.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options);
         Assert.Empty(preview!.Errors);
-        Assert.Contains("Тест дім", preview.Html);
-        Assert.Contains("Тест офіс", preview.Html);
+        Assert.NotNull(preview.Messages);
+        Assert.Equal(2, preview.Messages.Count);
+        Assert.Equal(preview.Messages[0].Html, preview.Html);
+        Assert.Equal(preview.Messages[0].ImageUrl, preview.ImageUrl);
+        var home = Assert.Single(preview.Messages, m => m.Html.Contains("<b>Група 2.1</b>"));
+        Assert.Contains("Тест дім", home.Html);
+        Assert.DoesNotContain("Тест офіс", home.Html);
+        var shared = Assert.Single(preview.Messages, m => m.Html.Contains("<b>Група 45.1</b>"));
+        Assert.Contains("Тест дім", shared.Html);
+        Assert.Contains("Тест офіс", shared.Html);
         foreach (var slot in new[] { MessageSlots.Emergency, MessageSlots.Regional, MessageSlots.Local, MessageSlots.Ended, MessageSlots.Schedule })
         {
+            var writes = transport.Writes;
             (await client.PostAsJsonAsync($"/api/chats/{chatId}/templates/{slot}/send",
                 new SendTestRequest(null), ApiJson.Options)).EnsureSuccessStatusCode();
+            Assert.Equal(slot == MessageSlots.Schedule ? preview.Messages.Count : 1, transport.Writes - writes);
+            if (slot == MessageSlots.Schedule)
+            {
+                Assert.Contains("Тест дім", transport.LastText);
+                Assert.Contains("Тест офіс", transport.LastText);
+            }
             api.Clock.Now = api.Clock.Now.AddSeconds(11);
         }
         output.WriteLine("PASS: multi-address save/preview and all emergency/local/schedule template test-send API routes.");
@@ -1031,7 +1149,8 @@ public sealed class LiveTelegramTests(ITestOutputHelper output)
                     LastMessageId = value.GetProperty("message_id").GetInt32();
                     LastReplyId = data.RootElement.TryGetProperty("reply_parameters", out var reply)
                         ? reply.GetProperty("message_id").GetInt32() : null;
-                    LastText = value.TryGetProperty("text", out var text) ? text.GetString()! : "";
+                    LastText = value.TryGetProperty("text", out var text) ? text.GetString()!
+                        : value.TryGetProperty("caption", out var caption) ? caption.GetString()! : "";
                     if (method == "sendMessage")
                         LastSendSilent = data.RootElement.TryGetProperty("disable_notification", out var silent) && silent.GetBoolean();
                 }

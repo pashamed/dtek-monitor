@@ -95,7 +95,7 @@ try {
   await viewer.getByRole('combobox', { name: 'Регіон для перегляду', exact: true }).selectOption('kyiv-oblast');
   await viewer.getByRole('alert').filter({ hasText: /Графіки тимчасово недоступні/ }).waitFor();
   await viewer.getByRole('combobox', { name: 'Регіон для перегляду', exact: true }).selectOption('kyiv');
-  await viewer.getByRole('heading', { name: /м. Київ · черга/ }).waitFor();
+  await viewer.getByRole('heading', { name: /м. Київ · група/ }).waitFor();
   await page.keyboard.press('Escape');
   await viewer.waitFor({ state: 'detached' });
   await openViewer();
@@ -152,9 +152,10 @@ try {
   await page.getByRole('switch', { name: 'Пауза', exact: true }).uncheck({ force: true });
   await save();
   console.log('PASS pause save/reload/resume through browser');
-  await page.getByRole('button', { name: 'Дарницький район', exact: true }).click();
+  const subscriptionDistricts = page.getByRole('group', { name: 'Райони', exact: true });
+  await subscriptionDistricts.getByRole('button', { name: 'Дарницький район', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Зберегти', exact: true }).isDisabled(), true);
-  await page.getByRole('button', { name: 'Дарницький район', exact: true }).click();
+  await subscriptionDistricts.getByRole('button', { name: 'Дарницький район', exact: true }).click();
   await page.getByRole('switch', { name: 'Реагувати на «Світло зникло»', exact: true }).check({ force: true });
   await page.getByRole('textbox', { name: 'Текст повідомлення «світла немає»', exact: true }).fill('ТЕСТ світло зникло');
   await save();
@@ -177,13 +178,13 @@ try {
   await save();
   console.log('PASS empty district selection blocked; trigger saved; injected failed save shown and retry persisted');
   await page.getByRole('textbox', { name: 'Назва', exact: true }).fill('Тест будинок UI');
-  await page.getByRole('combobox', { name: 'Район адреси', exact: true }).selectOption('darnytskyi');
-  const addresses = page.waitForResponse(r => r.url().endsWith('/addresses') && r.request().method() === 'PUT');
-  await page.getByRole('button', { name: 'Зберегти адреси', exact: true }).click();
-  assert.equal((await addresses).status(), 200);
+  await page.getByRole('group', { name: 'Райони адреси', exact: true })
+    .getByRole('button', { name: 'Дарницький район', exact: true }).click();
+  await save();
   await page.reload();
   assert.equal(await page.getByRole('textbox', { name: 'Назва', exact: true }).inputValue(), 'Тест будинок UI');
-  assert.equal(await page.getByRole('combobox', { name: 'Район адреси', exact: true }).inputValue(), 'darnytskyi');
+  assert.equal(await page.getByRole('group', { name: 'Райони адреси', exact: true })
+    .getByRole('button', { name: 'Дарницький район', exact: true }).getAttribute('aria-pressed'), 'true');
   await page.getByRole('button', { name: '+ Додати адресу', exact: true }).click();
   await page.getByRole('button', { name: '+ Додати адресу', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '+ Додати адресу', exact: true }).isDisabled(), true);
@@ -216,12 +217,16 @@ try {
   console.log('PASS quiet-hours/cleanup/clearance mode saved through real API');
 
   await page.locator('#slot-emergency').click();
+  await page.getByRole('button', { name: 'Розширений', exact: true }).click();
   const template = page.getByRole('textbox', { name: 'Шаблон: Екстрені відключення', exact: true });
   await template.fill('🧪 ТЕСТ UI {невідома_змінна}');
   await page.getByRole('button', { name: 'Зберегти', exact: true }).waitFor();
   await page.waitForFunction(() => document.querySelector('.savebar button.primary')?.disabled === true);
+  const previewResponse = page.waitForResponse(r => r.url().endsWith('/api/preview')
+    && r.request().method() === 'POST'
+    && r.request().postDataJSON().template === '🧪 ТЕСТ UI\n{region}\n{part}\n{message}');
   await template.fill('🧪 ТЕСТ UI\n{регіон}\n{район}\n{текст}');
-  const preview = await page.waitForResponse(r => r.url().endsWith('/api/preview') && r.request().method() === 'POST');
+  const preview = await previewResponse;
   assert.equal(preview.status(), 200);
   await save();
   const sent = page.waitForResponse(r => r.url().endsWith('/templates/emergency/send'));

@@ -19,7 +19,7 @@ public static class AlertText
         var (emoji, title, sentence) = kind switch
         {
             AlertKind.Emergency => (
-                "🚨",
+                "⚠️",
                 "Екстрені відключення",
                 "введені екстрені відключення. Графіки не діють; повідомимо про зміни."),
             AlertKind.Accident => (

@@ -40,7 +40,8 @@ public sealed record StreetResult(
     [property: JsonPropertyName("regionId")] string RegionId,
     [property: JsonPropertyName("city")] string? City,
     [property: JsonPropertyName("street")] string Street,
-    [property: JsonPropertyName("houses")] Dictionary<string, HouseResultEntry>? Houses);
+    [property: JsonPropertyName("houses")] Dictionary<string, HouseResultEntry>? Houses,
+    [property: JsonPropertyName("updateTimestamp")] string? UpdateTimestamp = null);
 
 public sealed record AddressResultsRequest(
     [property: JsonPropertyName("results")] List<StreetResult>? Results);
@@ -270,6 +271,7 @@ public sealed class AddressCheckService(
                 result.EndDate = Clip(entry.EndDate, 64);
                 result.Type = Clip(entry.Type, 256);
                 result.CheckedAt = now;
+                result.SourceUpdated = Clip(street.UpdateTimestamp, 64);
                 if (entry.GroupIds is { Count: > 0 } && options.CurrentValue.Regions.Any(r => r.Id == street.RegionId && r.HasSchedules))
                 {
                     var groups = entry.GroupIds.Where(id => System.Text.RegularExpressions.Regex.IsMatch(id ?? "", @"^\d{1,2}\.\d{1,2}$"))
@@ -377,7 +379,7 @@ public sealed class AddressCheckService(
         }
         else if (result.IsEmergency)
         {
-            lines.Add($"🚨 За адресою {where} зафіксовано позапланове відключення.");
+            lines.Add($"⚠️ За адресою {where} зафіксовано позапланове відключення.");
             lines.Add($"Причина: {result.SubType}");
             lines.Add(Period(result));
         }
@@ -409,6 +411,7 @@ public sealed class AddressCheckService(
 
         lines.Add("");
         lines.Add($"Перевірено: {KyivTime.Format(result.CheckedAt)} (Київ)");
+        if (result.SourceUpdated != "") lines.Add($"Дані ДТЕК оновлено: {result.SourceUpdated}");
         return string.Join("\n", lines.Where(l => l is not null));
     }
 

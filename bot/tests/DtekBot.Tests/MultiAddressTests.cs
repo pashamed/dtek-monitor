@@ -80,7 +80,7 @@ public sealed class MultiAddressTests : IDisposable
         Assert.Equal(1, text.Split("Пʼятниця · 16.10.2026").Length - 1);
         Assert.Contains("🕒 11:00  →  14:00", text);
         Assert.Contains("🕒 06:00  →  09:30", text);
-        Assert.Contains("<b>Черга 45.1</b> · Дім &lt;1&gt;", text);
+        Assert.Contains("<b>Група 45.1</b> · Дім &lt;1&gt;", text);
         Assert.DoesNotContain(" ? ", text);
         Assert.DoesNotContain("~6,5 год", text);
         Assert.DoesNotContain("20:24", text);
@@ -92,7 +92,7 @@ public sealed class MultiAddressTests : IDisposable
         var channel = new Channel { RegionId = "kyiv", Addresses = [Address("Дім", "45.1", "missing")] };
         var snapshot = RealSnapshot() with { CoverageEnd = Kyiv(16, 0) };
         var text = CombinedSchedule.Render(channel, snapshot, "м. Київ", Kyiv(15, 12), false);
-        Assert.Contains("<b>Черга missing</b> · Дім\nГрафік тимчасово недоступний.", text);
+        Assert.Contains("<b>Група missing</b> · Дім\nГрафік тимчасово недоступний.", text);
         Assert.EndsWith("Пʼятниця 16.10.2026\n\nГрафік ще не оприлюднено.", text);
         Assert.DoesNotContain("06:00", text);
     }
@@ -120,9 +120,9 @@ public sealed class MultiAddressTests : IDisposable
         channel.Addresses[0].Groups[0].Label = "Під'їзд 1";
         Assert.Equal(new[] { "2.1", "45.1" }, channel.GroupIds());
         var text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false);
-        Assert.Equal(2, text.Split("<b>Черга 45.1</b>").Length - 1);
+        Assert.Equal(2, text.Split("<b>Група 45.1</b>").Length - 1);
         Assert.Contains("Дім &lt;1&gt;", text); Assert.Contains("Офіс", text); Assert.Contains("Під&#39;їзд 1", text);
-        Assert.Contains("<b>Черга 2.1</b>", text); Assert.Contains("Графік відключень на завтра", text);
+        Assert.Contains("<b>Група 2.1</b>", text); Assert.Contains("Графік відключень на завтра", text);
     }
 
     [Fact]
@@ -246,7 +246,7 @@ public sealed class MultiAddressTests : IDisposable
     [Fact]
     public void LongDigestSplittingPreservesTextAndNeverBreaksSurrogatePairs()
     {
-        var text = string.Join("\n", Enumerable.Repeat("<b>Черга 3.2</b> &amp; 🏠 " + new string('ї', 180), 50));
+        var text = string.Join("\n", Enumerable.Repeat("<b>Група 3.2</b> &amp; 🏠 " + new string('ї', 180), 50));
         var parts = CombinedSchedule.Parts(text);
         Assert.True(parts.Count > 1);
         Assert.All(parts, part => Assert.True(WebUtility.HtmlDecode(part).Length <= 4096));
@@ -258,7 +258,7 @@ public sealed class MultiAddressTests : IDisposable
     {
         var channel = new Channel { RegionId = "kyiv", Addresses = [Address("Дім", "45.1"), Address("Офіс", "45.1")] };
         var text = CombinedSchedule.Render(channel, RealSnapshot(), "м. Київ", Kyiv(15, 12), false);
-        Assert.Equal(2, text.Split("<b>Черга 45.1</b>").Length - 1);
+        Assert.Equal(2, text.Split("<b>Група 45.1</b>").Length - 1);
         Assert.Contains("Дім, Офіс", text);
         Assert.Equal(1, text.Split("Графік відключень на сьогодні").Length - 1);
     }

@@ -29,18 +29,8 @@ public static class ScheduleText
             foreach (var id in channel.GroupIds())
             {
                 if (!snapshot.CoversDay(id, start, end) || snapshot.Find(id) is not { } group) continue;
-                var intervals = group.Outages
-                    .Select(o => new[] { Math.Max(o.Start.ToUnixTimeSeconds(), start.ToUnixTimeSeconds()),
-                        Math.Min(o.End.ToUnixTimeSeconds(), end.ToUnixTimeSeconds()) })
-                    .Where(o => o[1] > o[0]).OrderBy(o => o[0]).ThenBy(o => o[1]);
-                var merged = new List<long[]>();
-                foreach (var interval in intervals)
-                {
-                    if (merged.Count > 0 && interval[0] <= merged[^1][1])
-                        merged[^1][1] = Math.Max(merged[^1][1], interval[1]);
-                    else merged.Add(interval);
-                }
-                result[DateKey(start) + "|" + id] = merged.ToArray();
+                result[DateKey(start) + "|" + id] = ClippedOutages(group, start, end)
+                    .Select(o => new[] { o.Start.ToUnixTimeSeconds(), o.End.ToUnixTimeSeconds() }).ToArray();
             }
         }
         return result;
@@ -73,7 +63,7 @@ public static class ScheduleText
                 if (removed.Count > 0) parts.Add("скасовано планове відключення " + Ranges(removed));
                 if (parts.Count == 0) continue;
                 var names = channel.GroupNames(id);
-                lines.Add($"Черга {id}" + (names.Length == 0 ? "" : $" · {names}") + ": " + string.Join("; ", parts));
+                lines.Add($"Група {id}" + (names.Length == 0 ? "" : $" · {names}") + ": " + string.Join("; ", parts));
             }
             changes[dateKey] = lines.Count == 0 ? "" : "🔄 Зміни планового графіка:\n" + string.Join("\n", lines);
         }
@@ -138,6 +128,17 @@ public static class ScheduleText
         };
     }
 
+    private static string ScheduleDuration(TimeSpan span)
+    {
+        var minutes = (int)Math.Round(span.TotalMinutes);
+        return (minutes / 60, minutes % 60) switch
+        {
+            (0, var rest) => $"{rest} хв",
+            (var hours, 0) => $"{hours} год",
+            (var hours, var rest) => $"{hours} год {rest} хв",
+        };
+    }
+
     public static string Clock(DateTimeOffset moment) => KyivTime.FromUtc(moment).ToString("HH:mm");
 
     // "00:00 (16.10)" when the moment is not today (Kyiv time), "14:00" otherwise, so it reads well after "о".
@@ -181,20 +182,62 @@ public static class ScheduleText
             var daypart = local.Hour / 6;
             if (part is not null && daypart != part) continue;
 
-            var endLabel = end == dayEnd ? "24:00" : Clock(end);
-            if (string.IsNullOrWhiteSpace(lineTemplate))
-                lines.Add($"🔴 {Clock(start)} - {endLabel} ({Approx(end - start)})");
-            else
-                lines.Add(System.Net.WebUtility.HtmlDecode(MessageTemplate.Render(lineTemplate,
-                    new Dictionary<string, string>
-                    {
-                        ["start"] = Clock(start), ["end"] = endLabel, ["duration"] = Approx(end - start),
-                        ["date"] = local.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
-                        ["weekday"] = Weekdays[(int)local.DayOfWeek],
-                        ["daypart"] = new[] { "Ніч", "Ранок", "День", "Вечір" }[daypart],
-                    })));
+            lines.Add(IntervalLine(start, end, dayEnd, lineTemplate,
+                MessageSlots.ScheduleLine, Approx(end - start)));
         }
 
+        return lines;
+    }
+
+    private static string IntervalLine(DateTimeOffset start, DateTimeOffset end, DateTimeOffset dayEnd,
+        string? template, string slot, string duration)
+    {
+        var local = KyivTime.FromUtc(start);
+        return System.Net.WebUtility.HtmlDecode(MessageTemplate.Render(template,
+            new Dictionary<string, string>
+            {
+                ["start"] = Clock(start), ["end"] = end == dayEnd ? "24:00" : Clock(end), ["duration"] = duration,
+                ["date"] = local.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
+                ["weekday"] = Weekdays[(int)local.DayOfWeek],
+                ["daypart"] = new[] { "Ніч", "Ранок", "День", "Вечір" }[local.Hour / 6],
+            }, MessageSlots.Find(slot)!.DefaultTemplate));
+    }
+
+    private static IReadOnlyList<OutageInterval> ClippedOutages(GroupSchedule group,
+        DateTimeOffset dayStart, DateTimeOffset dayEnd)
+    {
+        var intervals = group.Outages.Select(o => new OutageInterval(
+                o.Start > dayStart ? o.Start : dayStart, o.End < dayEnd ? o.End : dayEnd))
+            .Where(o => o.End > o.Start).OrderBy(o => o.Start).ThenBy(o => o.End);
+        var merged = new List<OutageInterval>();
+        foreach (var interval in intervals)
+        {
+            if (merged.Count > 0 && interval.Start <= merged[^1].End)
+                merged[^1] = new(merged[^1].Start, interval.End > merged[^1].End ? interval.End : merged[^1].End);
+            else merged.Add(interval);
+        }
+        return merged;
+    }
+
+    // Call only after checking complete group/day coverage: gaps in unknown data are not light periods.
+    public static IReadOnlyList<string> TimelineLines(GroupSchedule group, DateTimeOffset dayStart,
+        DateTimeOffset dayEnd, string? outageTemplate = null, string? lightTemplate = null)
+    {
+        var lines = new List<string>();
+        var cursor = dayStart;
+        var total = TimeSpan.Zero;
+        void Add(DateTimeOffset start, DateTimeOffset end, bool off) =>
+            lines.Add(IntervalLine(start, end, dayEnd, off ? outageTemplate : lightTemplate,
+                off ? MessageSlots.ScheduleLine : MessageSlots.ScheduleLightLine, ScheduleDuration(end - start)));
+        foreach (var outage in ClippedOutages(group, dayStart, dayEnd))
+        {
+            if (outage.Start > cursor) Add(cursor, outage.Start, false);
+            Add(outage.Start, outage.End, true);
+            total += outage.End - outage.Start;
+            cursor = outage.End;
+        }
+        if (cursor < dayEnd) Add(cursor, dayEnd, false);
+        lines.Add("Загалом без світла за графіком: " + ScheduleDuration(total));
         return lines;
     }
 
@@ -334,7 +377,7 @@ public static class ScheduleText
     {
         var lines = new List<string>
         {
-            $"🗓 За графіком (черга {groupId}) зараз планове стабілізаційне відключення"
+            $"🗓 За графіком (група {groupId}) зараз планове стабілізаційне відключення"
                 + (status.Since is { } since ? $" з {Clock(since)}." : "."),
             status.Until is { } until
                 ? $"Світло очікується о {ClockWithDay(until, now)}."

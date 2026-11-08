@@ -141,15 +141,14 @@ async function getInfo({
         const formData = new URLSearchParams()
         formData.append("method", "getHomeNum")
 
-        if (REGION !== "k") {
-          formData.append("data[0][name]", "city")
-          formData.append("data[0][value]", CITY)
-        }
-
-        formData.append("data[1][name]", "street")
-        formData.append("data[1][value]", STREET)
-        formData.append("data[2][name]", "updateFact")
-        formData.append("data[2][value]", new Date().toLocaleString("uk-UA"))
+        // Match the site's own request: sequential field indexes and the page's updateFact value.
+        const fields = REGION !== "k" ? [["city", CITY], ["street", STREET]] : [["street", STREET]]
+        const updateFact = document.querySelector('input[name="updateFact"]')?.value ?? ""
+        if (updateFact) fields.push(["updateFact", updateFact])
+        fields.forEach(([name, value], index) => {
+          formData.append(`data[${index}][name]`, name)
+          formData.append(`data[${index}][value]`, value)
+        })
 
         const response = await fetch("/ua/ajax", {
           method: "POST",

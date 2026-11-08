@@ -35,7 +35,8 @@ public sealed class TemplatePreviewService(
         CancellationToken ct,
         string? scheduleLineTemplate = null,
         string? scheduleHeadingTemplate = null,
-        Channel? channel = null)
+        Channel? channel = null,
+        string? scheduleLightLineTemplate = null)
     {
         var definition = MessageSlots.Find(slot)!;
         var now = time.GetUtcNow();
@@ -43,11 +44,14 @@ public sealed class TemplatePreviewService(
         string? imageUrl = null;
         var source = slot == MessageSlots.Local ? AlertSource.Yasno : AlertSource.Dtek;
         var context = channel?.ForRegion(region.Id) ?? new Channel { RegionId = region.Id, GroupId = groupId, AddressLabel = address };
+        // Prefer the chat's own group so previews show what the bot would send; samples only fill gaps.
+        var chatGroup = !string.IsNullOrEmpty(groupId) ? groupId : context.GroupIds().FirstOrDefault();
 
         if (MessageSlots.IsAlert(slot))
         {
+            var localGroup = chatGroup ?? values["group"];
             var partNames = slot == MessageSlots.Local
-                ? [$"черга {(string.IsNullOrEmpty(groupId) ? values["group"] : groupId)}"]
+                ? [$"загально по групі {localGroup}"]
                 : partIds
                     .Select(id => region.Parts.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.Name)
                     .OfType<string>()
@@ -59,12 +63,12 @@ public sealed class TemplatePreviewService(
             values["message"] = AlertSourceText.Tag(values["message"], source);
             var matching = context.Addresses.Where(a =>
             {
-                if (slot == MessageSlots.Local) return a.Groups.Any(g => g.GroupId == (groupId ?? "45.1"));
+                if (slot == MessageSlots.Local) return a.Groups.Any(g => g.GroupId == localGroup);
                 var scope = a.PartIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     ?? context.PartIdList.ToArray();
                 return partIds.Count == 0 || scope.Length == 0 || scope.Intersect(partIds, StringComparer.OrdinalIgnoreCase).Any();
             });
-            context.AddTemplateContext(values, matching, slot == MessageSlots.Local ? [groupId ?? "45.1"] : null);
+            context.AddTemplateContext(values, matching, slot == MessageSlots.Local ? [localGroup] : null);
 
             if (values["popup"].Length == 0)
             {
@@ -101,21 +105,21 @@ public sealed class TemplatePreviewService(
             var templates = new Dictionary<string, string>();
             if (!string.IsNullOrWhiteSpace(scheduleLineTemplate)) templates[MessageSlots.ScheduleLine] = scheduleLineTemplate;
             if (!string.IsNullOrWhiteSpace(scheduleHeadingTemplate)) templates[MessageSlots.ScheduleHeading] = scheduleHeadingTemplate;
+            if (!string.IsNullOrWhiteSpace(scheduleLightLineTemplate)) templates[MessageSlots.ScheduleLightLine] = scheduleLightLineTemplate;
             target.TemplateMap = templates;
             var scheduleHtml = CombinedSchedule.Render(target, snapshot, region.Name, now, false, region.DisplayNames(partIds));
             return new RenderedTemplate((sample ? "<b>Зразок</b>\n\n" : "") + scheduleHtml, imageUrl);
         }
-        else if (region.HasSchedules && !string.IsNullOrEmpty(groupId) && await schedules.GetAsync(region.Id, ct) is { } snapshot
-            && snapshot.Find(groupId) is not null)
+        else if (!string.IsNullOrEmpty(chatGroup))
         {
             values["region"] = region.Name;
-            values["group"] = groupId;
+            values["group"] = chatGroup;
         }
         if (slot == MessageSlots.BeforeOff)
         {
             context.AddTemplateContext(values, context.Addresses.Where(a =>
-                string.IsNullOrEmpty(groupId) || a.Groups.Any(g => g.GroupId == groupId)),
-                string.IsNullOrEmpty(groupId) ? null : [groupId]);
+                string.IsNullOrEmpty(chatGroup) || a.Groups.Any(g => g.GroupId == chatGroup)),
+                string.IsNullOrEmpty(chatGroup) ? null : [chatGroup]);
             values["region"] = region.Name;
             values["status"] = "Планове відключення";
             values["statusCode"] = TemplateStatus.PlannedOutage;

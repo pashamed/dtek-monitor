@@ -18,6 +18,15 @@ public enum AlertFilter
     EmergencyOnly,
 }
 
+// Which outage sources may post emergency alerts to a chat. Auto combines DTEK/Ukrenergo regional notices with
+// Yasno group alerts in one message thread; the others drop one side. Yasno without a saved group behaves as Auto.
+public enum AlertSourceMode
+{
+    Auto,
+    Dtek,
+    Yasno,
+}
+
 public enum AlertKind
 {
     Emergency,
@@ -61,7 +70,11 @@ public sealed record ChatSettingsDto(
     // Read-only here: the group whose weekly schedule goes to Svitlobot; changed via PUT .../svitlobot/group.
     string? SvitlobotGroupId = null,
     string? SvitlobotRegionId = null,
-    long? SvitlobotAddressId = null);
+    long? SvitlobotAddressId = null,
+    // Omitted/null preserves the saved mode for older editors.
+    bool? ScheduleShowLightPeriods = null,
+    // Omitted/null preserves the saved choice for older editors.
+    AlertSourceMode? AlertSource = null);
 
 // Per alert-message type: whether the chat gets it at all, and whether a newer alert edits the open message.
 // EditInPlace does not apply to the «ended» slot; EndStyle applies to it alone.
@@ -200,7 +213,9 @@ public sealed record PreviewRequest(
     ScheduleImage? ImageKind = null,
     IReadOnlyList<ChatAddressDto>? Addresses = null,
     string? ScheduleLineTemplate = null,
-    string? ScheduleHeadingTemplate = null);
+    string? ScheduleHeadingTemplate = null,
+    bool ScheduleShowLightPeriods = false,
+    string? ScheduleLightLineTemplate = null);
 
 // ImageUrl is set for slots that come with a picture (the schedule post).
 public sealed record PreviewMessageDto(string Html, string? ImageUrl = null);

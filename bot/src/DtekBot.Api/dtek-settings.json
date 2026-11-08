@@ -335,6 +335,7 @@
       "MonitorWorkflowIntervalMinutes": 15,
       "MonitorWorkflowStartDelaySeconds": 60,
       "BrowserWaitSeconds": 180,
+      "ClearConfirmMinutes": 10,
       "SvitlobotWeeklyRefreshDay": "Monday",
       "SvitlobotWeeklyRefreshTime": "03:00"
     }

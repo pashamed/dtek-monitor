@@ -58,6 +58,7 @@ public sealed class PlaceholderNamesTests
     [InlineData("<a href=\"{сайт}\">час</a>", "<a href=\"{site}\">час</a>")]
     [InlineData("час {{час}} {час}", "час {{час}} {time}")]
     [InlineData("{невідомо} {#щось}", "{невідомо} {#щось}")]
+    [InlineData("{черга} {група} {#черга}x{/черга}", "{group} {group} {#group}x{/group}")]
     public void ToCanonical_AcceptsUkrainianAndLatin(string input, string expected)
     {
         Assert.Equal(expected, PlaceholderNames.ToCanonical(input));
@@ -219,11 +220,11 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
 
         var response = await client.PutJsonAsync(
             $"/api/chats/{userId}",
-            Settings(Map(("off", "{група} {#світло_було}x"), ("schedule", "{time}"), ("local", "{outages}{message}"))));
+            Settings(Map(("off", "{рядок} {#світло_було}x"), ("schedule", "{time}"), ("local", "{outages}{message}"))));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var details = (await response.ReadAsync<ApiError>())!.Details!;
-        Assert.Contains("Світло вимкнено за графіком: Невідомий параметр {група}.", details);
+        Assert.Contains("Світло вимкнено за графіком: Невідомий параметр {рядок}.", details);
         Assert.Contains("Світло вимкнено за графіком: Блок {#світло_було} не закрито: додайте {/світло_було}.", details);
         Assert.Contains(details, d => d.StartsWith("Графік відключень: Додайте {відключення} або {ранок}"));
         Assert.Contains("Локальне відключення: Невідомий параметр {відключення}.", details);
@@ -248,7 +249,7 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
     {
         var (_, client) = NewUser();
 
-        foreach (var template in new[] { "{регіон}|{черга}|{час}", "{region}|{group}|{time}", "{регіон}|{group}|{час}" })
+        foreach (var template in new[] { "{регіон}|{черга}|{час}", "{регіон}|{група}|{час}", "{region}|{group}|{time}", "{регіон}|{group}|{час}" })
         {
             var response = await client.PostJsonAsync("/api/preview", new PreviewRequest(template, AlertKind.Emergency, "kyiv", null, null, "off", "1.1"));
             var result = (await response.ReadAsync<PreviewResponse>())!;

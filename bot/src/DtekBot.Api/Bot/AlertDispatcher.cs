@@ -80,7 +80,9 @@ public sealed class AlertDispatcher(
             var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
             var slot = SlotFor(kind, false);
             var slotOn = channel.SlotEnabled(slot);
+            var takesRegional = channel.TakesRegionalAlerts();
             var eligible = resolved.IsAlert
+                && takesRegional
                 && !channel.IsPaused
                 && Matches(channel, resolved)
                 && slotOn
@@ -97,6 +99,7 @@ public sealed class AlertDispatcher(
                     ct);
             }
             else if (regionWideFallback is { IsAlert: true } fallback
+                && takesRegional
                 && !channel.IsPaused
                 && channel.SlotEnabled(SlotFor(fallback.Kind == PopupKind.Emergency ? AlertKind.Emergency
                     : fallback.Kind == PopupKind.Accident ? AlertKind.Accident : AlertKind.Unknown, false))
@@ -113,7 +116,7 @@ public sealed class AlertDispatcher(
                     () => SendRegionalAsync(channel, region, fallback, fallbackSlot, delivery, text, now, ct),
                     ct);
             }
-            else if (delivery is not null && resolved.IsAlert && regionWideActive && slotOn && !channel.IsPaused)
+            else if (delivery is not null && resolved.IsAlert && regionWideActive && slotOn && !channel.IsPaused && takesRegional)
             {
                 // Narrowed out by the districts of the newer popup while the region-wide alert is still on:
                 // the chat keeps its open thread, so the alert is neither repeated later nor announced as ended.
@@ -121,10 +124,26 @@ public sealed class AlertDispatcher(
             }
             else if (delivery is not null)
             {
-                // A switched-off alert type closes its open thread silently.
-                var announce = !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
+                // The DTEK alert is gone but Yasno still reports an emergency for a group it covered:
+                // the same message carries on as that group's alert instead of an end notice and a new post.
+                var (coveredGroup, groupThreadOpen) = channel.TakesGroupAlerts()
+                    ? await CoveredGroupEmergencyAsync(channel, region, delivery, ct)
+                    : (null, false);
+                if (coveredGroup is not null && !groupThreadOpen && !channel.IsPaused && delivery.TelegramMessageId > 0)
+                {
+                    delivery.RegionId = GroupDeliveryKey(region.Id, coveredGroup);
+                    delivery.ContentHash = "";
+                    delivery.EmergencyPartsJson = null;
+                    delivery.UpdatedAt = now;
+                    logger.LogInformation("Chat {ChatId}: regional alert {MessageId} continues as group {Region}/{Group} emergency",
+                        channel.ChatId, delivery.TelegramMessageId, region.Id, coveredGroup);
+                    continue;
+                }
+
+                // A switched-off alert type or source closes its open thread silently.
+                var announce = takesRegional && !channel.IsPaused && channel.SlotEnabled(MessageSlots.Ended)
                     && !(resolved.IsAlert && !slotOn)
-                    && !await HasCoveredGroupEmergencyAsync(channel, region, delivery, ct);
+                    && coveredGroup is null;
                 outcome = announce
                     ? await TrySendAsync(
                         channel,
@@ -195,11 +214,26 @@ public sealed class AlertDispatcher(
             stale.UpdatedAt = now;
         }
 
-        var partNames = new List<string> { $"черга {groupId}" };
+        // Yasno reports a group, not a district: the group can span the whole city, so the text says so.
+        var partNames = new List<string> { $"загально по групі {groupId}" };
         foreach (var channel in channels)
         {
             var delivery = openDeliveries.FirstOrDefault(d => d.ChatId == channel.ChatId);
-            var covered = regionalDeliveries.TryGetValue(channel.ChatId, out var regional)
+            if (!channel.TakesGroupAlerts())
+            {
+                // The chat follows DTEK only: a group thread left from before the switch closes silently.
+                if (delivery is not null)
+                {
+                    delivery.IsClosed = true;
+                    delivery.UpdatedAt = now;
+                    closed++;
+                }
+                continue;
+            }
+
+            Delivery? regional = null;
+            var covered = channel.CombinesAlertSources()
+                && regionalDeliveries.TryGetValue(channel.ChatId, out regional)
                 && CoversGroup(channel, region, groupId, regional);
             if (isEmergency && covered)
             {
@@ -207,6 +241,7 @@ public sealed class AlertDispatcher(
                 {
                     delivery.IsClosed = true;
                     delivery.UpdatedAt = now;
+                    if (channel.DeletePreviousAlert) await CleanupAsync(channel, delivery, now, ct);
                     closed++;
                 }
                 logger.LogInformation("Chat {ChatId}: group {Region}/{Group} emergency is covered by regional message {MessageId}",
@@ -261,13 +296,32 @@ public sealed class AlertDispatcher(
     private async Task<Outcome> SendRegionalAsync(Channel channel, RegionSettings region, PopupClassification result,
         string slot, Delivery? delivery, string text, DateTimeOffset now, CancellationToken ct)
     {
+        var coverage = result.Kind == PopupKind.Emergency
+            ? (result.PartIds.Count == 0 ? [] : PopupInterpretation.Expand(region, result.PartIds).ToArray())
+            : null;
+        if (delivery is null && coverage is not null && channel.CombinesAlertSources())
+        {
+            // A Yasno group alert the new DTEK alert covers continues as the regional one: one emergency message per chat.
+            var prefix = GroupDeliveryKey(region.Id, "");
+            var groupThreads = await db.Deliveries
+                .Where(d => d.ChatId == channel.ChatId && !d.IsClosed && d.RegionId.StartsWith(prefix))
+                .ToListAsync(ct);
+            delivery = groupThreads.FirstOrDefault(d => d.TelegramMessageId > 0
+                && CoversGroup(channel, region, d.RegionId[prefix.Length..], coverage));
+            if (delivery is not null)
+            {
+                logger.LogInformation("Chat {ChatId}: group alert {MessageId} continues as the regional {Region} alert",
+                    channel.ChatId, delivery.TelegramMessageId, region.Id);
+                delivery.RegionId = region.Id;
+                delivery.ContentHash = "";
+            }
+        }
+
         var outcome = await SendOrEditAsync(channel, slot, region.Id, delivery, text,
             RenderHash(channel, result.Hash, text), now, ct);
         var stored = delivery ?? db.Deliveries.Local.Single(d =>
             d.ChatId == channel.ChatId && d.RegionId == region.Id && !d.IsClosed);
-        stored.EmergencyPartsJson = result.Kind == PopupKind.Emergency
-            ? JsonSerializer.Serialize(result.PartIds.Count == 0 ? [] : PopupInterpretation.Expand(region, result.PartIds).ToArray())
-            : null;
+        stored.EmergencyPartsJson = coverage is null ? null : JsonSerializer.Serialize(coverage);
         return outcome;
     }
 
@@ -275,8 +329,12 @@ public sealed class AlertDispatcher(
     {
         if (delivery.TelegramMessageId <= 0 || delivery.EmergencyPartsJson is null) return false;
         var coverage = JsonSerializer.Deserialize<string[]>(delivery.EmergencyPartsJson);
-        if (coverage is null) return false;
-        if (coverage.Length == 0) return true;
+        return coverage is not null && CoversGroup(channel, region, groupId, coverage);
+    }
+
+    private static bool CoversGroup(Channel channel, RegionSettings region, string groupId, IReadOnlyCollection<string> coverage)
+    {
+        if (coverage.Count == 0) return true;
         var addresses = channel.Addresses.Where(a => a.Groups.Any(g => g.GroupId == groupId)).ToArray();
         IEnumerable<IReadOnlyList<string>> scopes = addresses.Length == 0 ? [channel.PartIdList]
             : addresses.Select(a => (IReadOnlyList<string>)(a.PartIds?.Split(',',
@@ -286,16 +344,25 @@ public sealed class AlertDispatcher(
             .All(id => coverage.Contains(id, StringComparer.OrdinalIgnoreCase)));
     }
 
-    private async Task<bool> HasCoveredGroupEmergencyAsync(Channel channel, RegionSettings region, Delivery delivery, CancellationToken ct)
+    // A group the closing regional alert covered that Yasno still reports in emergency, and whether it already has its own thread.
+    private async Task<(string? GroupId, bool HasThread)> CoveredGroupEmergencyAsync(
+        Channel channel, RegionSettings region, Delivery delivery, CancellationToken ct)
     {
         var covered = channel.GroupIds().Where(id => CoversGroup(channel, region, id, delivery)).ToArray();
-        if (covered.Length == 0) return false;
+        if (covered.Length == 0) return (null, false);
         var states = await db.GroupStates.AsNoTracking().Where(s => s.RegionId == region.Id
             && covered.Contains(s.GroupId)).ToListAsync(ct);
-        if (states.Any(s => s.Today == GroupStatuses.Emergency)) return true;
+        var keys = covered.Select(id => GroupDeliveryKey(region.Id, id)).ToArray();
+        var threads = (await db.Deliveries.AsNoTracking()
+            .Where(d => d.ChatId == channel.ChatId && !d.IsClosed && keys.Contains(d.RegionId))
+            .Select(d => d.RegionId).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
         var known = states.Select(s => s.GroupId).ToHashSet(StringComparer.Ordinal);
-        var keys = covered.Where(id => !known.Contains(id)).Select(id => GroupDeliveryKey(region.Id, id)).ToArray();
-        return await db.Deliveries.AnyAsync(d => d.ChatId == channel.ChatId && !d.IsClosed && keys.Contains(d.RegionId), ct);
+        var active = covered.Where(id => states.Any(s => s.GroupId == id && s.Today == GroupStatuses.Emergency)
+            || (!known.Contains(id) && threads.Contains(GroupDeliveryKey(region.Id, id)))).ToArray();
+        if (active.Length == 0) return (null, false);
+        if (!channel.SlotEnabled(MessageSlots.Local)) return (active[0], true);
+        var free = active.FirstOrDefault(id => !threads.Contains(GroupDeliveryKey(region.Id, id)));
+        return free is null ? (active[0], true) : (free, false);
     }
 
     private async Task<Outcome> SendOrEditAsync(
@@ -313,7 +380,8 @@ public sealed class AlertDispatcher(
             return Outcome.Unchanged;
         }
 
-        if (delivery is not null && !channel.DeletePreviousAlert && channel.SlotEditInPlace(slot))
+        // The slot's own choice decides between editing and posting anew; deletion only tidies what posting leaves behind.
+        if (delivery is not null && channel.SlotEditInPlace(slot))
         {
             var edited = await WithMarkupFallback(
                 text,
@@ -345,11 +413,12 @@ public sealed class AlertDispatcher(
 
         if (delivery is not null && channel.DeletePreviousAlert)
         {
-            await DeletePreviousAlertAsync(channel, delivery, now, ct);
+            await DeleteMessageAsync(channel, delivery.TelegramMessageId, delivery.SentAt ?? delivery.UpdatedAt, now, ct);
         }
 
         if (delivery is null)
         {
+            if (channel.DeletePreviousAlert) await CleanupClosedAsync(channel, now, ct);
             db.Deliveries.Add(new Delivery
             {
                 ChatId = channel.ChatId,
@@ -357,6 +426,7 @@ public sealed class AlertDispatcher(
                 TelegramMessageId = message.Id,
                 ContentHash = hash,
                 UpdatedAt = now,
+                SentAt = now,
             });
             return Outcome.Sent;
         }
@@ -365,48 +435,79 @@ public sealed class AlertDispatcher(
         delivery.TelegramMessageId = message.Id;
         delivery.ContentHash = hash;
         delivery.UpdatedAt = now;
+        delivery.SentAt = now;
         return Outcome.Sent;
     }
 
-    private async Task DeletePreviousAlertAsync(Channel channel, Delivery delivery, DateTimeOffset now, CancellationToken ct)
+    // A new alert thread removes what earlier, already closed threads of the chat left behind: the alert and its end notice.
+    private async Task CleanupClosedAsync(Channel channel, DateTimeOffset now, CancellationToken ct)
     {
-        var age = now - delivery.UpdatedAt;
-        if (age > TelegramDeleteWindow)
+        var since = now - TelegramDeleteWindow;
+        var saved = await db.Deliveries
+            .Where(d => d.ChatId == channel.ChatId && d.IsClosed && d.UpdatedAt >= since
+                && (d.TelegramMessageId > 0 || d.EndMessageId != null))
+            .ToListAsync(ct);
+        var pending = db.Deliveries.Local.Where(d => d.ChatId == channel.ChatId && d.IsClosed
+            && (d.TelegramMessageId > 0 || d.EndMessageId != null));
+        foreach (var closed in saved.Concat(pending).Distinct().ToList())
+        {
+            await CleanupAsync(channel, closed, now, ct);
+        }
+    }
+
+    private async Task CleanupAsync(Channel channel, Delivery closed, DateTimeOffset now, CancellationToken ct)
+    {
+        if (closed.EndMessageId is { } end)
+        {
+            await DeleteMessageAsync(channel, end, closed.UpdatedAt, now, ct);
+        }
+        if (closed.TelegramMessageId > 0)
+        {
+            await DeleteMessageAsync(channel, closed.TelegramMessageId, closed.SentAt ?? closed.UpdatedAt, now, ct);
+        }
+        // Attempted once: rights or the 48-hour window will not improve on a retry.
+        closed.TelegramMessageId = 0;
+        closed.EndMessageId = null;
+    }
+
+    private async Task DeleteMessageAsync(Channel channel, int messageId, DateTimeOffset sentAt, DateTimeOffset now, CancellationToken ct)
+    {
+        if (now - sentAt > TelegramDeleteWindow)
         {
             logger.LogWarning(
                 "Could not delete previous alert {MessageId} in chat {ChatId}: Telegram's 48-hour deletion window has passed",
-                delivery.TelegramMessageId, channel.ChatId);
+                messageId, channel.ChatId);
             return;
         }
 
         try
         {
-            await bot.DeleteMessage(channel.ChatId, delivery.TelegramMessageId, ct);
-            await mirror.DeleteAsync(channel.ChatId, delivery.TelegramMessageId, ct);
+            await bot.DeleteMessage(channel.ChatId, messageId, ct);
+            await mirror.DeleteAsync(channel.ChatId, messageId, ct);
         }
         catch (ApiRequestException ex) when (IsDeleteMissing(ex))
         {
-            await mirror.DeleteAsync(channel.ChatId, delivery.TelegramMessageId, ct);
+            await mirror.DeleteAsync(channel.ChatId, messageId, ct);
         }
         catch (ApiRequestException ex)
         {
             logger.LogWarning(
                 "Could not delete previous alert {MessageId} in chat {ChatId}: {Error}",
-                delivery.TelegramMessageId, channel.ChatId, ex.Message);
+                messageId, channel.ChatId, ex.Message);
         }
         catch (HttpRequestException ex)
         {
             logger.LogWarning(
                 ex,
                 "Could not delete previous alert {MessageId} in chat {ChatId} due to a Telegram API connection error",
-                delivery.TelegramMessageId, channel.ChatId);
+                messageId, channel.ChatId);
         }
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
             logger.LogWarning(
                 ex,
                 "Could not delete previous alert {MessageId} in chat {ChatId} because the Telegram API request timed out",
-                delivery.TelegramMessageId, channel.ChatId);
+                messageId, channel.ChatId);
         }
     }
 
@@ -473,6 +574,7 @@ public sealed class AlertDispatcher(
             channel);
         await mirror.SyncAsync(sent, ct, style == EndStyle.New ? null : delivery.TelegramMessageId,
             QuietHours.IsQuiet(channel, now));
+        delivery.EndMessageId = sent.Id;
         return Outcome.Closed;
     }
 

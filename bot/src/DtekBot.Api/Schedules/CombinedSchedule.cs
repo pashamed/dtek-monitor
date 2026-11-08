@@ -44,7 +44,10 @@ public static class CombinedSchedule
             {
                 var group = snapshot.CoversDay(id, start, end) ? snapshot.Find(id) : null;
                 var lines = group is null ? "Графік тимчасово недоступний."
-                    : string.Join("\n", ScheduleText.OutageLines(group, start, end, channel.TemplateFor(MessageSlots.ScheduleLine)));
+                    : string.Join("\n", channel.ScheduleShowLightPeriods
+                        ? ScheduleText.TimelineLines(group, start, end, channel.TemplateFor(MessageSlots.ScheduleLine),
+                            channel.TemplateFor(MessageSlots.ScheduleLightLine))
+                        : ScheduleText.OutageLines(group, start, end, channel.TemplateFor(MessageSlots.ScheduleLine)));
                 if (group is not null && lines.Length == 0) lines = ScheduleText.NoOutages;
                 return (channel.IsCombined() ? channel.Heading(id) + "\n" : "")
                     + MessageTemplate.Render("{outages}", new Dictionary<string, string> { ["outages"] = lines });

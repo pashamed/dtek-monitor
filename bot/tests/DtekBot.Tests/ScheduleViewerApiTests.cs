@@ -360,11 +360,11 @@ public sealed class ScheduleViewerApiTests
         Assert.Contains("Підписка: на паузі.", lines);
         Assert.Contains(lines, l => l.Contains("Фактична наявність електроенергії невідома"));
         Assert.Contains(lines, l => l.Contains("Дарницький"));
-        Assert.Contains("Збережені черги: 45.1.", lines);
+        Assert.Contains("Збережені групи: 45.1.", lines);
         Assert.Contains(lines, l => l.Contains("Адреса «Дім»"));
         Assert.Contains(lines, l => l.Contains("попередня копія"));
-        Assert.Contains("Графік на сьогодні: доступний для збережених черг.", lines);
-        Assert.Contains("Графік на завтра: доступний для збережених черг.", lines);
+        Assert.Contains("Графік на сьогодні: доступний для збережених груп.", lines);
+        Assert.Contains("Графік на завтра: доступний для збережених груп.", lines);
         Assert.Contains(lines, l => l.Contains("не перевірка наявності повідомлення в Telegram"));
         Assert.Equal(before, DatabaseSnapshot(api));
         AssertNoDelivery(api);

@@ -137,6 +137,11 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<bool>("Found")
                         .HasColumnType("bit");
 
+                    b.Property<string>("SourceUpdated")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<string>("StartDate")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -177,6 +182,11 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("AddressStreet")
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("AlertSource")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("nvarchar(8)");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
@@ -270,6 +280,9 @@ namespace DtekBot.Api.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(15);
+
+                    b.Property<bool>("ScheduleShowLightPeriods")
+                        .HasColumnType("bit");
 
                     b.Property<string>("SlotSettings")
                         .HasColumnType("nvarchar(max)");
@@ -412,6 +425,9 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("EmergencyPartsJson")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<int?>("EndMessageId")
+                        .HasColumnType("int");
+
                     b.Property<bool>("IsClosed")
                         .HasColumnType("bit");
 
@@ -419,6 +435,9 @@ namespace DtekBot.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset?>("SentAt")
+                        .HasColumnType("datetimeoffset");
 
                     b.Property<int>("TelegramMessageId")
                         .HasColumnType("int");
@@ -532,6 +551,9 @@ namespace DtekBot.Api.Data.Migrations
                     b.Property<string>("RegionId")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset?>("ClearPendingSince")
+                        .HasColumnType("datetimeoffset");
 
                     b.Property<string>("Hash")
                         .IsRequired()

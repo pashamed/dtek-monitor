@@ -47,7 +47,7 @@ public sealed class AlertDispatcherTests : IDisposable
         await _f.DispatchAsync(DispatcherFixture.EmergencyText);
 
         var text = Assert.Single(_f.Bot.Sent).Text;
-        Assert.Contains("🚨", text);
+        Assert.Contains("⚠️", text);
         Assert.Contains("м. Київ", text);
         Assert.DoesNotContain(_f.Kyiv.SiteUrl, text);
         Assert.DoesNotContain("(за даними ДТЕК)", text);
@@ -137,11 +137,29 @@ public sealed class AlertDispatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task ChangedText_WithDeletePreviousEnabled_SendsReplacementBeforeDeletingOldAlert()
+    public async Task ChangedText_WithDeletePreviousEnabled_EditsInPlaceWhenEditModeIsOn()
     {
         _f.AddChannel(ChatA, c =>
         {
             c.EditInPlace = true;
+            c.DeletePreviousAlert = true;
+        });
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        var previous = Assert.Single(_f.Deliveries(ChatA));
+
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText + " Оновлення: діє до 23:00.");
+
+        Assert.Empty(_f.Bot.Deletes);
+        Assert.Single(_f.Bot.Sent);
+        Assert.Equal(previous.TelegramMessageId, Assert.Single(_f.Deliveries(ChatA)).TelegramMessageId);
+    }
+
+    [Fact]
+    public async Task ChangedText_WithDeletePreviousEnabled_SendsReplacementBeforeDeletingOldAlert()
+    {
+        _f.AddChannel(ChatA, c =>
+        {
+            c.EditInPlace = false;
             c.DeletePreviousAlert = true;
         });
         await _f.DispatchAsync(DispatcherFixture.EmergencyText);
@@ -160,7 +178,11 @@ public sealed class AlertDispatcherTests : IDisposable
     [Fact]
     public async Task ChangedText_WithDeletePreviousEnabled_DoesNotDeleteAlertOlderThan48Hours()
     {
-        _f.AddChannel(ChatA, c => c.DeletePreviousAlert = true);
+        _f.AddChannel(ChatA, c =>
+        {
+            c.EditInPlace = false;
+            c.DeletePreviousAlert = true;
+        });
         await _f.DispatchAsync(DispatcherFixture.EmergencyText);
         _f.Clock.Now = _f.Clock.Now.AddHours(49);
 
@@ -168,6 +190,56 @@ public sealed class AlertDispatcherTests : IDisposable
 
         Assert.Empty(_f.Bot.Deletes);
         Assert.Equal(2, _f.Bot.Sent.Count());
+    }
+
+    [Fact]
+    public async Task NewAlertAfterEnd_WithDeletePreviousEnabled_DeletesTheOldAlertAndItsEndNotice()
+    {
+        _f.AddChannel(ChatA, c => c.DeletePreviousAlert = true);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        await _f.DispatchAsync(DispatcherFixture.StabilizationText);
+        var ended = Assert.Single(_f.Deliveries(ChatA));
+        Assert.True(ended.IsClosed);
+        Assert.NotNull(ended.EndMessageId);
+        _f.Clock.Now = _f.Clock.Now.AddHours(1);
+
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        var deleted = _f.Bot.Deletes.Select(d => d.MessageId).ToList();
+        Assert.Contains(ended.TelegramMessageId, deleted);
+        Assert.Contains(ended.EndMessageId!.Value, deleted);
+        Assert.Equal(3, _f.Bot.Sent.Count());
+        Assert.Single(_f.Deliveries(ChatA), d => !d.IsClosed);
+    }
+
+    [Fact]
+    public async Task NewAlertAfterEnd_KeepsMessagesOlderThan48HoursSinceTheyWereSent()
+    {
+        _f.AddChannel(ChatA, c => c.DeletePreviousAlert = true);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        _f.Clock.Now = _f.Clock.Now.AddHours(47);
+        await _f.DispatchAsync(DispatcherFixture.StabilizationText);
+        var ended = Assert.Single(_f.Deliveries(ChatA));
+        _f.Clock.Now = _f.Clock.Now.AddHours(2);
+
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        var deleted = _f.Bot.Deletes.Select(d => d.MessageId).ToList();
+        Assert.DoesNotContain(ended.TelegramMessageId, deleted);
+        Assert.Contains(ended.EndMessageId!.Value, deleted);
+    }
+
+    [Fact]
+    public async Task NewAlertAfterEnd_WithDeletePreviousDisabled_DeletesNothing()
+    {
+        _f.AddChannel(ChatA);
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+        await _f.DispatchAsync(DispatcherFixture.StabilizationText);
+
+        await _f.DispatchAsync(DispatcherFixture.EmergencyText);
+
+        Assert.Empty(_f.Bot.Deletes);
+        Assert.Equal(3, _f.Bot.Sent.Count());
     }
 
     [Theory]
@@ -661,8 +733,8 @@ public sealed class AlertDispatcherTests : IDisposable
 
         Assert.Equal(new(1, 0, 0, 0), summary);
         Assert.Equal(2, _f.Bot.Sent.Count());
-        Assert.Equal("<b>м. Київ</b> 🚨", _f.Bot.Sent.First().Text);
-        Assert.Equal("м. Київ 🚨", _f.Bot.Sent.Last().Text);
+        Assert.Equal("<b>м. Київ</b> ⚠️", _f.Bot.Sent.First().Text);
+        Assert.Equal("м. Київ ⚠️", _f.Bot.Sent.Last().Text);
         Assert.True(_f.LoadChannel(ChatA).IsActive);
         Assert.Single(_f.Deliveries(ChatA));
     }

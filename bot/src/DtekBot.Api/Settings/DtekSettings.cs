@@ -31,7 +31,11 @@ public sealed class TimerSettings
     public DayOfWeek SvitlobotWeeklyRefreshDay { get; set; } = DayOfWeek.Monday;
     public TimeSpan SvitlobotWeeklyRefreshTime { get; set; } = new(3, 0, 0);
 
+    // How long a DTEK alert must stay absent (two popup-less observations this far apart) before it counts as ended.
+    public int ClearConfirmMinutes { get; set; } = 10;
+
     public TimeSpan MonitoringInterval => TimeSpan.FromMinutes(Math.Clamp(MonitoringIntervalMinutes, 1, 60));
+    public TimeSpan ClearConfirm => TimeSpan.FromMinutes(Math.Clamp(ClearConfirmMinutes, 0, 120));
     public TimeSpan MonitoringStartDelay => TimeSpan.FromSeconds(Math.Clamp(MonitoringStartDelaySeconds, 0, 600));
     public TimeSpan MonitorWorkflowInterval => TimeSpan.FromMinutes(Math.Clamp(MonitorWorkflowIntervalMinutes, 5, 60));
     public TimeSpan MonitorWorkflowStartDelay => TimeSpan.FromSeconds(Math.Clamp(MonitorWorkflowStartDelaySeconds, 0, 600));

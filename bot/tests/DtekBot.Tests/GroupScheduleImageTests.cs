@@ -65,7 +65,7 @@ public sealed class GroupScheduleImageTests
         var suffix = image == ScheduleImage.Card ? "summary.png" : "emergency.png";
         Assert.Contains(photos, p => ((InputFileUrl)p.Photo).Url.ToString().Contains($"images/kyiv/gpv-45-2-{suffix}"));
         Assert.Contains(photos, p => ((InputFileUrl)p.Photo).Url.ToString().Contains($"images/kyiv-region/gpv-45-1-{suffix}"));
-        Assert.DoesNotContain(photos.Single(p => p.Caption!.Contains("Черга 45.2")).Caption!, "Офіс");
+        Assert.DoesNotContain(photos.Single(p => p.Caption!.Contains("Група 45.2")).Caption!, "Офіс");
         var posts = await f.Db.SchedulePostThreads.AsNoTracking().ToListAsync();
         Assert.Equal(3, posts.Count);
         Assert.Equal(3, posts.Select(p => p.MessageId).Distinct().Count());
@@ -150,8 +150,10 @@ public sealed class GroupScheduleImageTests
         Assert.Equal(1, (await notifier.TickAsync(default)).Skipped);
     }
 
-    [Fact]
-    public async Task PreviewAndTestSend_UseSeparateSavedGroupPicturesWithoutAutomaticSends()
+    [Theory]
+    [InlineData(ScheduleImage.Grid)]
+    [InlineData(ScheduleImage.Card)]
+    public async Task PreviewAndTestSend_UseSeparateSavedGroupPicturesWithoutAutomaticSends(ScheduleImage image)
     {
         using var api = new ApiFactory();
         using var client = api.ClientFor(94002);
@@ -159,22 +161,31 @@ public sealed class GroupScheduleImageTests
         api.Schedules.Snapshots["kyiv-oblast"] = Snapshot("kyiv-region");
         api.WithDb(db => db.Channels.Add(new()
         {
-            ChatId = 94002, RegionId = "kyiv", Addresses = Addresses(), SchedulePostImage = ScheduleImage.Card,
+            ChatId = 94002, RegionId = "kyiv", Addresses = Addresses(), SchedulePostImage = image,
         }));
         var chat = Assert.Single((await client.GetFromJsonAsync<List<ChatSummaryDto>>("/api/chats", ApiJson.Options))!);
         var response = await client.PostAsJsonAsync("/api/preview", new PreviewRequest(null, AlertKind.Emergency,
-            "kyiv", null, Slot: MessageSlots.Schedule, Addresses: chat.Settings.Addresses, ImageKind: ScheduleImage.Card), ApiJson.Options);
+            "kyiv", null, Slot: MessageSlots.Schedule, Addresses: chat.Settings.Addresses, ImageKind: image), ApiJson.Options);
         response.EnsureSuccessStatusCode();
         var preview = (await response.Content.ReadFromJsonAsync<PreviewResponse>(ApiJson.Options))!;
         Assert.Equal(2, preview.Messages!.Count);
-        Assert.All(preview.Messages, m => Assert.Contains("summary.png", m.ImageUrl!));
+        var suffix = image == ScheduleImage.Card ? "summary.png" : "emergency.png";
+        Assert.All(preview.Messages, m => Assert.Contains(suffix, m.ImageUrl!));
         Assert.Equal(preview.Messages[0].Html, preview.Html);
+        Assert.Equal(preview.Messages[0].ImageUrl, preview.ImageUrl);
+        var shared = Assert.Single(preview.Messages, m => m.Html.Contains("<b>Група 45.1</b>"));
+        Assert.Contains("Дім", shared.Html);
+        Assert.Contains("Офіс", shared.Html);
+        var home = Assert.Single(preview.Messages, m => m.Html.Contains("<b>Група 45.2</b>"));
+        Assert.Contains("Дім", home.Html);
+        Assert.DoesNotContain("Офіс", home.Html);
         Assert.Empty(api.Bot.Sent);
         var sent = await client.PostAsJsonAsync("/api/chats/94002/templates/schedule/send", new SendTestRequest(null), ApiJson.Options);
         sent.EnsureSuccessStatusCode();
         var photos = api.Bot.Requests.OfType<SendPhotoRequest>().ToArray();
         Assert.Equal(3, photos.Length);
         Assert.Equal("🧪 <b>Тест</b>\n\n" + preview.Messages[0].Html, photos[0].Caption);
+        Assert.Equal("🧪 <b>Тест</b>\n\n" + preview.Messages[1].Html, photos[1].Caption);
         Assert.Contains(photos, p => ((InputFileUrl)p.Photo).Url.ToString().Contains("images/kyiv-region/"));
         Assert.Empty(api.Bot.Requests.OfType<CopyMessageRequest>());
         api.WithDb(db => Assert.Empty(db.SchedulePostThreads));

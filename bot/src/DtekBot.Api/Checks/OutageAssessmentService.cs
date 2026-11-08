@@ -45,7 +45,7 @@ public sealed class OutageAssessmentService(
             var lines = new List<string>();
             AddGroupEmergencyLine(lines, channel, await GroupInEmergencyAsync(channel, ct));
             var places = region is null ? string.Join(", ", mine) : string.Join(", ", region.DisplayNames(mine));
-            lines.Add($"🚨 У вашому районі ({places}) зараз діють екстрені відключення за даними ДТЕК. Графіки там не діють, тому причина, найімовірніше, в цьому. Перевірку за адресою не запускаю.");
+            lines.Add($"⚠️ У вашому районі ({places}) зараз діють екстрені відключення за даними ДТЕК. Графіки там не діють, тому причина, найімовірніше, в цьому. Перевірку за адресою не запускаю.");
             return string.Join("\n\n", lines);
         }
 
@@ -89,7 +89,7 @@ public sealed class OutageAssessmentService(
                 if (district) answers[address.Id] = "Екстрені відключення в районі (за даними ДТЕК). Графік не діє.";
                 else if (general) answers[address.Id] = $"Екстрені відключення в регіоні (за даними {(dtek ? "ДТЕК" : "Укренерго")}). Графік може не діяти.";
                 else if (off.Length > 0) answers[address.Id] = $"Відключення за графіком: {string.Join(", ", off)}.";
-                else if (emergency.Length > 0) answers[address.Id] = $"Екстрені відключення черги {string.Join(", ", emergency)} (за даними Yasno).";
+                else if (emergency.Length > 0) answers[address.Id] = $"Екстрені відключення групи {string.Join(", ", emergency)} (за даними Yasno).";
                 else needed.Add(address);
             }
         }
@@ -156,7 +156,7 @@ public sealed class OutageAssessmentService(
     {
         if (inEmergency)
         {
-            lines.Add($"🚨 Для вашої черги {channel.GroupId} зараз діють екстрені відключення (за даними Yasno).");
+            lines.Add($"⚠️ Для вашої групи {channel.GroupId} зараз діють екстрені відключення (за даними Yasno).");
         }
     }
 

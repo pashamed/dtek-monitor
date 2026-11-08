@@ -103,7 +103,7 @@ public sealed class RegionalGroupDeduplicationTests : IDisposable
         });
         f.Bot.Failure = null;
         Assert.Equal(1, (await GroupAsync()).Sent);
-        Assert.Contains("черга 45.1", f.Bot.Sent.Last().Text);
+        Assert.Contains("загально по групі 45.1", f.Bot.Sent.Last().Text);
     }
 
     [Fact]
@@ -115,43 +115,95 @@ public sealed class RegionalGroupDeduplicationTests : IDisposable
         f.Db.GroupStates.Add(new() { RegionId = "kyiv", GroupId = Group, Today = GroupStatuses.Emergency, UpdatedAt = f.Clock.Now });
         await f.Db.SaveChangesAsync();
 
+        // The regional message carries on as the group alert: no end notice and no second start post.
         await f.DispatchAsync(DispatcherFixture.StabilizationText);
         Assert.Single(f.Bot.Sent);
-        Assert.True(Assert.Single(f.Deliveries(Chat)).IsClosed);
-        Assert.Equal(1, (await GroupAsync()).Sent);
-        Assert.Contains("черга 45.1", f.Bot.Sent.Last().Text);
+        var handedOff = Assert.Single(f.Deliveries(Chat));
+        Assert.False(handedOff.IsClosed);
+        Assert.Equal(AlertDispatcher.GroupDeliveryKey("kyiv", Group), handedOff.RegionId);
+
+        Assert.Equal(new(0, 1, 0, 0), await GroupAsync());
+        Assert.Contains("загально по групі 45.1", f.Bot.Edits.Last().Text);
+        Assert.Single(f.Bot.Sent);
         Assert.DoesNotContain(f.Bot.Sent, m => m.Text.Contains("Запис про відключення знято"));
 
         await GroupAsync(false);
-        Assert.Equal(3, f.Bot.Sent.Count());
-        Assert.NotNull(f.Bot.Sent.Last().ReplyParameters);
+        Assert.Equal(2, f.Bot.Sent.Count());
+        Assert.Equal(handedOff.TelegramMessageId, f.Bot.Sent.Last().ReplyParameters?.MessageId);
     }
 
     [Fact]
-    public async Task GroupClearance_WhileRegionEmergency_ClosesItsOldThreadSilently()
+    public async Task RegionalEmergency_TakesOverTheOpenGroupThread_AndGroupClearanceStaysSilent()
+    {
+        Subscribe();
+        await GroupAsync();
+        var groupMessage = Assert.Single(f.Deliveries(Chat)).TelegramMessageId;
+
+        await f.DispatchAsync(DispatcherFixture.EmergencyText);
+        Assert.Single(f.Bot.Sent);
+        var regional = Assert.Single(f.Deliveries(Chat));
+        Assert.Equal("kyiv", regional.RegionId);
+        Assert.Equal(groupMessage, regional.TelegramMessageId);
+        Assert.False(regional.IsClosed);
+
+        Assert.Equal(new(0, 0, 0, 0), await GroupAsync(false));
+        Assert.Single(f.Bot.Sent);
+        Assert.False(Assert.Single(f.Deliveries(Chat)).IsClosed);
+    }
+
+    [Fact]
+    public async Task CoveredGroupEmergency_AfterHandoff_DoesNotPostAgain()
     {
         Subscribe();
         await GroupAsync();
         await f.DispatchAsync(DispatcherFixture.EmergencyText);
-        Assert.Equal(2, f.Bot.Sent.Count());
 
-        Assert.Equal(1, (await GroupAsync(false)).Closed);
-        Assert.Equal(2, f.Bot.Sent.Count());
-        Assert.False(f.Deliveries(Chat).Single(d => d.RegionId == "kyiv").IsClosed);
-        Assert.True(f.Deliveries(Chat).Single(d => d.RegionId.Contains(":group:")).IsClosed);
+        Assert.Equal(new(0, 0, 0, 0), await GroupAsync());
+        Assert.Single(f.Bot.Sent);
+        Assert.Equal("kyiv", Assert.Single(f.Deliveries(Chat)).RegionId);
     }
 
     [Fact]
-    public async Task CoveredGroupEmergency_RetiresItsOldThreadWithoutAnotherPost()
+    public async Task CoveredGroupEmergency_ClosesALeftoverGroupThread()
     {
         Subscribe();
-        await GroupAsync();
         await f.DispatchAsync(DispatcherFixture.EmergencyText);
+        f.Db.Deliveries.Add(new()
+        {
+            ChatId = Chat, RegionId = AlertDispatcher.GroupDeliveryKey("kyiv", Group),
+            TelegramMessageId = 777, ContentHash = "old", UpdatedAt = f.Clock.Now,
+        });
+        await f.Db.SaveChangesAsync();
 
         Assert.Equal(new(0, 0, 1, 0), await GroupAsync());
-        Assert.Equal(2, f.Bot.Sent.Count());
+        Assert.Single(f.Bot.Sent);
         Assert.True(f.Deliveries(Chat).Single(d => d.RegionId.Contains(":group:")).IsClosed);
         Assert.False(f.Deliveries(Chat).Single(d => d.RegionId == "kyiv").IsClosed);
+    }
+
+    [Fact]
+    public async Task FlappingDtekPopup_WithYasnoGroupEmergency_KeepsOneMessage()
+    {
+        Subscribe(c => c.DeletePreviousAlert = true);
+        f.Db.GroupStates.Add(new() { RegionId = "kyiv", GroupId = Group, Today = GroupStatuses.Emergency, UpdatedAt = f.Clock.Now });
+        await f.Db.SaveChangesAsync();
+        await GroupAsync();
+
+        for (var i = 0; i < 3; i++)
+        {
+            f.Clock.Now = f.Clock.Now.AddMinutes(15);
+            await f.DispatchAsync(DispatcherFixture.EmergencyText);
+            await GroupAsync();
+            f.Clock.Now = f.Clock.Now.AddMinutes(15);
+            await f.DispatchAsync(DispatcherFixture.StabilizationText);
+            await GroupAsync();
+        }
+
+        Assert.Single(f.Bot.Sent);
+        Assert.Empty(f.Bot.Deletes);
+        var thread = Assert.Single(f.Deliveries(Chat));
+        Assert.False(thread.IsClosed);
+        Assert.Contains("загально по групі 45.1", f.Bot.Edits.Last().Text);
     }
 
     [Fact]
@@ -213,5 +265,61 @@ public sealed class RegionalGroupDeduplicationTests : IDisposable
         Assert.Equal(1, narrowed.Edited);
         Assert.Equal(1, (await GroupAsync()).Sent);
         Assert.Equal(2, f.Bot.Sent.Count());
+    }
+
+    [Fact]
+    public async Task DtekOnlyChat_IgnoresYasnoGroupAlerts_AndAnnouncesRegionalEnd()
+    {
+        Subscribe(c => c.AlertSource = AlertSourceMode.Dtek);
+        Assert.Equal(new(0, 0, 0, 0), await GroupAsync());
+        Assert.Empty(f.Bot.Sent);
+
+        await f.DispatchAsync(DispatcherFixture.EmergencyText);
+        f.Db.GroupStates.Add(new() { RegionId = "kyiv", GroupId = Group, Today = GroupStatuses.Emergency, UpdatedAt = f.Clock.Now });
+        await f.Db.SaveChangesAsync();
+
+        // No handoff to Yasno: the DTEK alert ends with its own notice.
+        Assert.Equal(new(0, 0, 1, 0), await f.DispatchAsync(DispatcherFixture.StabilizationText));
+        Assert.Equal(2, f.Bot.Sent.Count());
+        Assert.Equal(new(0, 0, 0, 0), await GroupAsync());
+        Assert.Equal(2, f.Bot.Sent.Count());
+        Assert.All(f.Deliveries(Chat), d => Assert.Equal("kyiv", d.RegionId));
+    }
+
+    [Fact]
+    public async Task DtekOnlyChat_ClosesALeftoverGroupThreadSilently()
+    {
+        Subscribe(c => c.AlertSource = AlertSourceMode.Dtek);
+        f.Db.Deliveries.Add(new()
+        {
+            ChatId = Chat, RegionId = AlertDispatcher.GroupDeliveryKey("kyiv", Group),
+            TelegramMessageId = 777, ContentHash = "old", UpdatedAt = f.Clock.Now,
+        });
+        await f.Db.SaveChangesAsync();
+
+        Assert.Equal(new(0, 0, 1, 0), await GroupAsync());
+        Assert.Empty(f.Bot.Sent);
+        Assert.True(Assert.Single(f.Deliveries(Chat)).IsClosed);
+    }
+
+    [Fact]
+    public async Task YasnoOnlyChat_IgnoresDtekAlerts_AndPostsGroupEmergency()
+    {
+        Subscribe(c => c.AlertSource = AlertSourceMode.Yasno);
+        Assert.Equal(0, (await f.DispatchAsync(DispatcherFixture.EmergencyText)).Sent);
+        Assert.Equal(0, (await f.DispatchAsync(DispatcherFixture.AccidentRightBankText)).Sent);
+        Assert.Empty(f.Bot.Sent);
+
+        Assert.Equal(1, (await GroupAsync()).Sent);
+        Assert.Contains("загально по групі 45.1", Assert.Single(f.Bot.Sent).Text);
+        Assert.Equal(AlertDispatcher.GroupDeliveryKey("kyiv", Group), Assert.Single(f.Deliveries(Chat)).RegionId);
+    }
+
+    [Fact]
+    public async Task YasnoOnlyChat_WithoutAGroup_StillGetsDtekAlerts()
+    {
+        Subscribe(c => { c.GroupId = null; c.AlertSource = AlertSourceMode.Yasno; });
+        Assert.Equal(1, (await f.DispatchAsync(DispatcherFixture.EmergencyText)).Sent);
+        Assert.Single(f.Bot.Sent);
     }
 }

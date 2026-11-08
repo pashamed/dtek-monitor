@@ -434,7 +434,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         Assert.Equal(ChannelChat, reply.ChatId.Identifier);
         Assert.Equal(post.ChannelPost!.Id, reply.ReplyParameters?.MessageId);
         Assert.Contains("⏳", reply.Text);
-        Assert.DoesNotContain("Для вашої черги", reply.Text);
+        Assert.DoesNotContain("Для вашої групи", reply.Text);
         Assert.Equal(default, reply.ParseMode);
         Assert.Null(reply.LinkPreviewOptions);
 
@@ -701,7 +701,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         var reply = Assert.Single(_f.Bot.Sent);
         Assert.StartsWith("ℹ️", reply.Text);
-        Assert.DoesNotContain("Для вашої черги", reply.Text);
+        Assert.DoesNotContain("Для вашої групи", reply.Text);
         Assert.Equal(0, CheckRows());
     }
 
@@ -743,7 +743,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         var text = Assert.Single(_f.Bot.Sent).Text;
         var parts = text.Split("\n\n");
         Assert.Equal(2, parts.Length);
-        Assert.Equal("🚨 Для вашої черги 45.1 зараз діють екстрені відключення (за даними Yasno).", parts[0]);
+        Assert.Equal("⚠️ Для вашої групи 45.1 зараз діють екстрені відключення (за даними Yasno).", parts[0]);
         Assert.StartsWith("⏳", parts[1]);
         Assert.Equal(1, CheckRows());
         AssertDoesNotSelfTrigger(text);
@@ -758,7 +758,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         await PostAsync(SamplePost);
 
         var text = Assert.Single(_f.Bot.Sent).Text;
-        Assert.StartsWith("🚨 Для вашої черги 45.1", text);
+        Assert.StartsWith("⚠️ Для вашої групи 45.1", text);
         Assert.Contains("Спершу оберіть адресу", text);
         Assert.Equal(0, CheckRows());
     }
@@ -776,7 +776,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         await PostAsync(SamplePost);
 
         var text = Assert.Single(_f.Bot.Sent).Text;
-        Assert.DoesNotContain("Для вашої черги", text);
+        Assert.DoesNotContain("Для вашої групи", text);
         Assert.StartsWith("⏳", text);
     }
 
@@ -788,7 +788,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         await PostAsync(SamplePost);
 
-        Assert.DoesNotContain("Для вашої черги", Assert.Single(_f.Bot.Sent).Text);
+        Assert.DoesNotContain("Для вашої групи", Assert.Single(_f.Bot.Sent).Text);
     }
 
     [Fact]
@@ -866,7 +866,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
     private static readonly DateTimeOffset ScheduledOff = ScheduleFixtures.Kyiv(15, 12);
 
-    private const string NoticeStart = "🗓 За графіком (черга 45.1) зараз планове стабілізаційне відключення з 11:00.";
+    private const string NoticeStart = "🗓 За графіком (група 45.1) зараз планове стабілізаційне відключення з 11:00.";
 
     [Fact]
     public async Task PowerOutPost_WhenScheduleSaysOff_RepliesWithTheNotice_InsteadOfQueuing()
@@ -929,7 +929,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         var text = Assert.Single(_f.Bot.Sent).Text;
         Assert.StartsWith("ℹ️ На сайті ДТЕК зараз діє загальне повідомлення", text);
-        Assert.DoesNotContain("Для вашої черги", text);
+        Assert.DoesNotContain("Для вашої групи", text);
         Assert.Equal(0, CheckRows());
     }
 

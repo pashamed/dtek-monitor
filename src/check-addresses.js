@@ -70,20 +70,22 @@ async function openRegion(browser, region) {
 }
 
 // One call returns every house on the street. For DTEK regional sites the city is required;
-// Kyiv city uses the same form without a city field.
+// Kyiv city uses the same form without a city field. Fields are numbered sequentially and
+// updateFact comes from the page's hidden input, matching the request the site itself sends.
 async function getStreetHouses(session, region, pending) {
   const info = await session.page.evaluate(
     async ({ street, city, csrfToken, needsCity }) => {
+      const fields = needsCity ? [["city", city], ["street", street]] : [["street", street]]
+      const updateFact = typeof document !== "undefined"
+        ? document.querySelector('input[name="updateFact"]')?.value ?? ""
+        : ""
+      if (updateFact) fields.push(["updateFact", updateFact])
       const form = new URLSearchParams()
       form.append("method", "getHomeNum")
-      if (needsCity) {
-        form.append("data[0][name]", "city")
-        form.append("data[0][value]", city)
-      }
-      form.append("data[1][name]", "street")
-      form.append("data[1][value]", street)
-      form.append("data[2][name]", "updateFact")
-      form.append("data[2][value]", new Date().toLocaleString("uk-UA"))
+      fields.forEach(([name, value], index) => {
+        form.append(`data[${index}][name]`, name)
+        form.append(`data[${index}][value]`, value)
+      })
 
       const response = await fetch("/ua/ajax", {
         method: "POST",
@@ -109,10 +111,13 @@ async function getStreetHouses(session, region, pending) {
   if (Object.values(info.data).some((house) => !house || typeof house !== "object" || Array.isArray(house))) {
     throw new Error("address lookup returned an invalid house record")
   }
-  return info.data
+  return {
+    houses: info.data,
+    updateTimestamp: typeof info.updateTimestamp === "string" ? info.updateTimestamp : "",
+  }
 }
 
-function buildStreetResult(pending, houses) {
+function buildStreetResult(pending, houses, updateTimestamp = "") {
   const byNormalized = new Map(
     Object.entries(houses).map(([key, value]) => [normalizeHouse(key), value])
   )
@@ -133,7 +138,13 @@ function buildStreetResult(pending, houses) {
         }
       : { found: false }
   }
-  return { regionId: pending.regionId, city: pending.city ?? "", street: pending.street, houses: result }
+  return {
+    regionId: pending.regionId,
+    city: pending.city ?? "",
+    street: pending.street,
+    houses: result,
+    updateTimestamp,
+  }
 }
 
 async function postResults(results) {
@@ -191,8 +202,8 @@ async function run() {
       try {
         for (const street of streets) {
           try {
-            const houses = await getStreetHouses(session, region, street)
-            results.push(buildStreetResult(street, houses))
+            const { houses, updateTimestamp } = await getStreetHouses(session, region, street)
+            results.push(buildStreetResult(street, houses, updateTimestamp))
             console.log(
               `ℹ️ ${regionId}: street checked (${street.houses.length} house(s) requested, ${Object.keys(houses).length} on the street)`
             )

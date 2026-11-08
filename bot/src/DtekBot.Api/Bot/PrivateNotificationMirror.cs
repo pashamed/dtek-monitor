@@ -26,6 +26,11 @@ public sealed class PrivateNotificationMirror(
         var links = await db.ChannelAdmins.Where(a => a.ChatId == sourceChatId).ToListAsync(ct);
         foreach (var link in links)
         {
+            if (link.UserId == bot.BotId)
+            {
+                logger.LogDebug("Skipping private notification to the bot itself for source {ChatId}", sourceChatId);
+                continue;
+            }
             if (!await access.IsAdminAsync(sourceChatId, link.UserId, ct)) continue;
             PrivateNotificationCopy? copy = null;
             try
@@ -121,6 +126,12 @@ public sealed class PrivateNotificationMirror(
 
         foreach (var copy in pending)
         {
+            if (copy.UserId == bot.BotId)
+            {
+                logger.LogWarning("Dropping invalid pending private notification to the bot itself for source {ChatId}", copy.SourceChatId);
+                db.PrivateNotificationCopies.Remove(copy);
+                continue;
+            }
             try
             {
                 if (copy.SourceMessageId < 0)
@@ -176,6 +187,12 @@ public sealed class PrivateNotificationMirror(
                 && !copies.Contains(c)).ToArray());
         foreach (var copy in copies)
         {
+            if (copy.UserId == bot.BotId)
+            {
+                logger.LogWarning("Dropping invalid private notification to the bot itself for source {ChatId}", sourceChatId);
+                db.PrivateNotificationCopies.Remove(copy);
+                continue;
+            }
             if (copy.SourceMessageId < 0)
             {
                 db.PrivateNotificationCopies.Remove(copy);
