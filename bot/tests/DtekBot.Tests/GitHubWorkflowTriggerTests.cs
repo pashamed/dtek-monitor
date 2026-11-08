@@ -117,6 +117,27 @@ public class GitHubWorkflowTriggerTests
     }
 
     [Fact]
+    public async Task Trigger_ForwardsStandaloneChannelPostIdentifiers()
+    {
+        var (trigger, handler, _) = Create(() => new HttpResponseMessage(HttpStatusCode.NoContent));
+        var payload = new Dictionary<string, object>
+        {
+            ["chat_id"] = -100123,
+            ["message_id"] = 42,
+            ["update_id"] = 99,
+        };
+
+        Assert.True(await trigger.TriggerAsync("check-channel-outage", CancellationToken.None, payload));
+
+        using var doc = System.Text.Json.JsonDocument.Parse(Assert.Single(handler.Requests).Body!);
+        Assert.Equal("check-channel-outage", doc.RootElement.GetProperty("event_type").GetString());
+        var clientPayload = doc.RootElement.GetProperty("client_payload");
+        Assert.Equal(-100123, clientPayload.GetProperty("chat_id").GetInt64());
+        Assert.Equal(42, clientPayload.GetProperty("message_id").GetInt32());
+        Assert.Equal(99, clientPayload.GetProperty("update_id").GetInt32());
+    }
+
+    [Fact]
     public async Task Trigger_UsesTheGivenEventType()
     {
         var (trigger, handler, _) = Create(() => new HttpResponseMessage(HttpStatusCode.NoContent));

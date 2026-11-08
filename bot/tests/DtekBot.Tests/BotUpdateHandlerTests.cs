@@ -19,6 +19,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     private const long PrivateChat = 500;
     private const long GroupChat = -1001;
     private const long ChannelChat = -1002;
+    private const long StandaloneMonitorChat = -1001002;
 
     private const string OldButtonsAlert = "Бот тепер працює через редактор. Надішліть /start і відкрийте його.";
 
@@ -53,7 +54,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
         }
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        return new BotUpdateHandler(_f.Bot, _f.Db, NewAssessment(), config, _clock, NullLogger<BotUpdateHandler>.Instance, _f.CreateMirror(time: _clock));
+        return new BotUpdateHandler(_f.Bot, _f.Db, NewAssessment(), _trigger, config, _clock, NullLogger<BotUpdateHandler>.Instance, _f.CreateMirror(time: _clock));
     }
 
     // ---- helpers ----
@@ -445,6 +446,50 @@ public sealed class BotUpdateHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task StandaloneMonitorTrigger_WorksWithoutChannelSetupAndRelaysOnlyPostIdentifiers()
+    {
+        var handler = NewHandler("https://example.test");
+        var post = ChannelPostUpdate(SamplePost, StandaloneMonitorChat);
+
+        await handler.HandleAsync(post, CancellationToken.None);
+
+        Assert.Empty(_f.Bot.Sent);
+        Assert.Equal(["check-channel-outage"], _trigger.Events);
+        Assert.Empty(_f.Db.Channels);
+        Assert.Empty(_f.Db.AddressChecks);
+        var payload = Assert.IsType<Dictionary<string, object>>(_trigger.Payloads[0]);
+        var channelPost = Assert.IsType<Message>(post.ChannelPost);
+        Assert.Equal(StandaloneMonitorChat, payload["chat_id"]);
+        Assert.Equal(channelPost.Id, payload["message_id"]);
+        Assert.Equal(post.Id, payload["update_id"]);
+    }
+
+    [Fact]
+    public async Task StandaloneMonitorTrigger_DispatchFailureDoesNotSendAnUnverifiedReply()
+    {
+        _trigger.Result = false;
+        var handler = NewHandler("https://example.test");
+        var post = ChannelPostUpdate(SamplePost, StandaloneMonitorChat);
+        await handler.HandleAsync(post, CancellationToken.None);
+
+        Assert.Empty(_f.Bot.Sent);
+        Assert.Equal(["check-channel-outage"], _trigger.Events);
+        Assert.Empty(_f.Db.AddressChecks);
+    }
+
+    [Fact]
+    public async Task StandaloneMonitorTrigger_IgnoresPostsWithoutThePowerOffPhrase()
+    {
+        var post = ChannelPostUpdate("Оновлення графіка", StandaloneMonitorChat);
+
+        await HandleAsync(post);
+
+        Assert.Empty(_f.Bot.Sent);
+        Assert.Empty(_trigger.Events);
+        Assert.Empty(_f.Db.Channels);
+    }
+
+    [Fact]
     public async Task PowerOutPost_PausedChannelDoesNotTriggerAddressCheck()
     {
         AddTriggerChannel(c => c.IsPaused = true);
@@ -578,7 +623,7 @@ public sealed class BotUpdateHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task PowerOutPost_WhenTriggerIsOff_DoesNothing()
+    public async Task PowerOutPost_WhenTriggerIsOff_RelaysDefaultPhraseForWorkflowFiltering()
     {
         AddTriggerChannel(c => c.OutageTrigger = false);
 
@@ -586,10 +631,11 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         Assert.Empty(_f.Bot.Requests);
         Assert.Equal(0, CheckRows());
+        Assert.Equal(["check-channel-outage"], _trigger.Events);
     }
 
     [Fact]
-    public async Task PowerOutPost_WhenChannelIsInactive_DoesNothing()
+    public async Task PowerOutPost_WhenChannelIsInactive_RelaysDefaultPhraseForWorkflowFiltering()
     {
         AddTriggerChannel(c => c.IsActive = false);
 
@@ -597,15 +643,17 @@ public sealed class BotUpdateHandlerTests : IDisposable
 
         Assert.Empty(_f.Bot.Requests);
         Assert.Equal(0, CheckRows());
+        Assert.Equal(["check-channel-outage"], _trigger.Events);
     }
 
     [Fact]
-    public async Task PowerOutPost_WhenChannelHasNoRow_DoesNothing()
+    public async Task PowerOutPost_WhenChannelHasNoRow_RelaysDefaultPhraseForWorkflowFiltering()
     {
         await PostAsync(SamplePost);
 
         Assert.Empty(_f.Bot.Requests);
         Assert.Equal(0, CheckRows());
+        Assert.Equal(["check-channel-outage"], _trigger.Events);
     }
 
     [Fact]

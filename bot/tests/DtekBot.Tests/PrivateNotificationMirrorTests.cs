@@ -593,10 +593,11 @@ public sealed class PrivateNotificationMirrorTests
         await f.Db.SaveChangesAsync();
         var provider = new FakeScheduleProvider();
         provider.Snapshots["kyiv"] = RealSnapshot();
-        var checks = new AddressCheckService(f.Db, f.Bot, new FakeWorkflowTrigger(), f.Options, f.Clock,
+        var workflow = new FakeWorkflowTrigger();
+        var checks = new AddressCheckService(f.Db, f.Bot, workflow, f.Options, f.Clock,
             NullLogger<AddressCheckService>.Instance, f.CreateMirror());
         var assessment = new OutageAssessmentService(f.Db, checks, provider, f.Options, f.Clock);
-        var handler = new BotUpdateHandler(f.Bot, f.Db, assessment, new ConfigurationBuilder().Build(), f.Clock,
+        var handler = new BotUpdateHandler(f.Bot, f.Db, assessment, workflow, new ConfigurationBuilder().Build(), f.Clock,
             NullLogger<BotUpdateHandler>.Instance, f.CreateMirror());
         await handler.HandleAsync(new Update { ChannelPost = new Message
         {

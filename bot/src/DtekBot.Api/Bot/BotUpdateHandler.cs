@@ -15,11 +15,14 @@ public sealed class BotUpdateHandler(
     ITelegramBotClient bot,
     BotDbContext db,
     OutageAssessmentService assessment,
+    IWorkflowTrigger workflowTrigger,
     IConfiguration config,
     TimeProvider time,
     ILogger<BotUpdateHandler> logger,
     PrivateNotificationMirror mirror)
 {
+    private const string StandaloneMonitorWorkflowEvent = "check-channel-outage";
+
     public async Task HandleAsync(Update update, CancellationToken ct)
     {
         if (update.MyChatMember is { } membership)
@@ -49,7 +52,7 @@ public sealed class BotUpdateHandler(
         // A power-monitor app posts «Світло зникло» (or the channel's own phrase) to a channel the bot administers.
         if (update.ChannelPost is { } post && !text.StartsWith('/'))
         {
-            await HandleChannelPostAsync(post, text, ct);
+            await HandleChannelPostAsync(post, text, update.Id, ct);
             return;
         }
 
@@ -60,14 +63,17 @@ public sealed class BotUpdateHandler(
         }
     }
 
-    // Reacts to a "power is out" post. The assessment goes from the cheapest explanation to the DTEK address lookup.
-    // Every post of a trigger-enabled channel is remembered (a few of them) so the editor can warn about a wrong phrase.
-    private async Task HandleChannelPostAsync(Message post, string text, CancellationToken ct)
+    // Relays standalone power-off posts to GitHub; other enabled channels use the shared assessment flow.
+    private async Task HandleChannelPostAsync(Message post, string text, int updateId, CancellationToken ct)
     {
-        var channel = await db.Channels.FirstOrDefaultAsync(c =>
-            c.ChatId == post.Chat.Id && c.IsActive && c.OutageTrigger, ct);
-        if (channel is null)
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChatId == post.Chat.Id, ct);
+        if (channel is null || !channel.IsActive || !channel.OutageTrigger)
         {
+            if (OutageTriggerMatcher.IsMatch(null, text))
+            {
+                await TriggerStandaloneMonitorAsync(post, updateId, ct);
+            }
+
             return;
         }
 
@@ -88,6 +94,23 @@ public sealed class BotUpdateHandler(
             cancellationToken: ct);
         await mirror.SyncAsync(sent, ct, replyToMessageId: post.Id, disableNotification: disableNotification);
         await db.SaveChangesAsync(ct);
+    }
+
+    private async Task TriggerStandaloneMonitorAsync(Message post, int updateId, CancellationToken ct)
+    {
+        var accepted = await workflowTrigger.TriggerAsync(
+            StandaloneMonitorWorkflowEvent,
+            ct,
+            new Dictionary<string, object>
+            {
+                ["chat_id"] = post.Chat.Id,
+                ["message_id"] = post.Id,
+                ["update_id"] = updateId,
+            });
+        if (!accepted)
+        {
+            logger.LogWarning("Standalone channel-post workflow dispatch failed");
+        }
     }
 
     // The single entry point into the editor from a chat; the menu button next to the input field opens it too.

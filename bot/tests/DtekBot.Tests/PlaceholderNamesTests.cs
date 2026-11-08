@@ -143,7 +143,7 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
     {
         var (userId, client) = NewUser();
         var templates = Map(
-            ("emergency", "{значок} {message}"),
+            ("emergency", "{значок} {message}!"),
             ("off", "{час} {#світло_було}було {світло_було}{/світло_було}"),
             ("on", "{time} {регіон}"));
 
@@ -151,12 +151,12 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var summary = (await response.ReadAsync<ChatSummaryDto>())!;
-        Assert.Equal("{значок} {текст}", summary.Settings.Templates!["emergency"]);
+        Assert.Equal("{значок} {текст}!", summary.Settings.Templates!["emergency"]);
         Assert.Equal("{час} {#світло_було}було {світло_було}{/світло_було}", summary.Settings.Templates["off"]);
         Assert.Equal("{час} {регіон}", summary.Settings.Templates["on"]);
 
         var channel = Load(userId)!;
-        Assert.Equal("{emoji} {message}", channel.TemplateFor("emergency"));
+        Assert.Equal("{emoji} {message}!", channel.TemplateFor("emergency"));
         Assert.Equal("{time} {#onDuration}було {onDuration}{/onDuration}", channel.TemplateFor("off"));
         Assert.Equal("{time} {region}", channel.TemplateFor("on"));
         Assert.DoesNotContain(JsonDocument.Parse(channel.Templates!).RootElement.EnumerateObject().Select(p => p.Value.GetString()!), t => t.Contains("час") || t.Contains("значок"));
