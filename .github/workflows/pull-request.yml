@@ -31,7 +31,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           const title = process.env.PR_TITLE;
-          if (!/^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: \S.*$/.test(title)) {
+          if (!/^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: \S.*$/i.test(title)) {
             console.error('Use a Conventional Commit PR title, e.g. feat: add schedule previews or fix(api): preserve unknown states.');
             process.exit(1);
           }
