@@ -227,7 +227,7 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
         Assert.Contains("Світло вимкнено за графіком: Невідомий параметр {рядок}.", details);
         Assert.Contains("Світло вимкнено за графіком: Блок {#світло_було} не закрито: додайте {/світло_було}.", details);
         Assert.Contains(details, d => d.StartsWith("Графік відключень: Додайте {відключення} або {ранок}"));
-        Assert.Contains("Локальне відключення: Невідомий параметр {відключення}.", details);
+        Assert.Contains("Екстрене відключення групи: Невідомий параметр {відключення}.", details);
         Assert.DoesNotContain(details, d => d.Contains("{outages}") || d.Contains("{time}") || d.Contains("{onDuration}"));
         Assert.Null(Load(userId));
     }
@@ -241,7 +241,7 @@ public sealed class PlaceholderApiTests : IClassFixture<ApiFactory>
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var details = (await response.ReadAsync<ApiError>())!.Details!;
-        Assert.Contains("Екстрені відключення: Невідомий параметр {відключення}.", details);
+        Assert.Contains("Регіональні екстрені відключення: Невідомий параметр {відключення}.", details);
     }
 
     [Fact]
