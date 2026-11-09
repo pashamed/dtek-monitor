@@ -690,7 +690,7 @@ public sealed class MiniAppApiTests : IClassFixture<ApiFactory>
 
         var error = (await response.ReadAsync<ApiError>())!;
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains(error.Details!, d => d.StartsWith("Екстрені відключення: Невідомий параметр {unknown}"));
+        Assert.Contains(error.Details!, d => d.StartsWith("Регіональні екстрені відключення: Невідомий параметр {unknown}"));
         Assert.Contains(error.Details!, d => d.StartsWith("Графік відключень: Додайте {відключення}"));
         Assert.Contains(error.Details!, d => d.StartsWith("Світло з'явилося за графіком: Тег <script>"));
     }
