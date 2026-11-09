@@ -21,8 +21,12 @@ export function isEmergencyNotice(notice) {
   return (
     typeof notice === "string" &&
     notice.length > 0 &&
-    // A stabilization notice can also report an accident; the accident is the alert.
-    (!isStabilizationNotice(notice) || isAccidentNotice(notice))
+    // Stabilization elsewhere must not suppress an active emergency or accident.
+    (!isStabilizationNotice(notice) ||
+      isAccidentNotice(notice) ||
+      /(?<![\p{L}])(?<!не\s)(?:введен[іо]|застосован[іо]|діють|тривають)\s+екстрені\s+відключ/iu.test(
+        normalize(notice)
+      ))
   )
 }
 

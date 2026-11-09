@@ -10,6 +10,16 @@ import { test } from "node:test"
 const execFileAsync = promisify(execFile)
 const monitorPath = fileURLToPath(new URL("./monitor.js", import.meta.url))
 
+const MIXED_EMERGENCY_NOTICE = `Шановні клієнти!
+
+В Білоцерківському, Бучанському, Фастівському та Обухівському районах введені екстрені відключення.
+
+В інших раонах області діють стабілізаційні відключення електроенергії.
+
+Будь ласка, розумно споживайте електроенергію — це допоможе зменшити навантаження на мережу та уникнути екстрених відключень.
+
+Дякуємо за ваше розуміння!`
+
 async function runMonitor(
   subType,
   regionalNotice = null,
@@ -185,6 +195,29 @@ test("clears a local emergency after two successful no-outage address checks", a
   assert.match(stdout, /REPLY:true/)
   assert.match(stdout, /✅ <b>Локальне аварійне відключення більше не відображається на сайті ДТЕК\.<\/b>/)
   assert.match(stdout, /Якщо світла досі немає, перевірте статус через 15 хвилин/)
+})
+
+test("publishes a mixed regional emergency popup without querying the address", async () => {
+  const { stdout } = await runMonitor("", MIXED_EMERGENCY_NOTICE)
+
+  assert.match(stdout, /METHOD:sendMessage/)
+  assert.match(stdout, /🚨 <b>Екстрені \/ аварійні відключення:<\/b>/)
+  assert.ok(stdout.includes(MIXED_EMERGENCY_NOTICE))
+  assert.doesNotMatch(stdout, /ADDRESS_LOOKUP/)
+})
+
+test("a mixed regional popup updates an active emergency instead of clearing it", async () => {
+  const { stdout } = await runMonitor("", MIXED_EMERGENCY_NOTICE, {
+    message_id: 77,
+    date: 1,
+    outageText: "Previous regional emergency",
+    messageType: "emergency",
+  })
+
+  assert.match(stdout, /METHOD:editMessageText/)
+  assert.match(stdout, /EDIT_TO:77/)
+  assert.ok(stdout.includes(MIXED_EMERGENCY_NOTICE))
+  assert.doesNotMatch(stdout, /ADDRESS_LOOKUP|re-checking|✅/)
 })
 
 test("does not repeat a local emergency clearance", async () => {
