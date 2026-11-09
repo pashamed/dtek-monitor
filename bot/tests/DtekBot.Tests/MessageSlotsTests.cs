@@ -57,6 +57,19 @@ public class MessageSlotsTests
         });
     }
 
+    [Fact]
+    public void AlertSlots_DistinguishRegionalAndGroupEmergencies()
+    {
+        var regional = MessageSlots.Find(MessageSlots.Emergency)!;
+        var group = MessageSlots.Find(MessageSlots.Local)!;
+
+        Assert.Equal("Регіональні екстрені відключення", regional.Title);
+        Assert.Contains("ДТЕК чи Укренерго", regional.Description);
+        Assert.Equal("Екстрене відключення групи", group.Title);
+        Assert.Contains("за даними Yasno", group.Description);
+        Assert.Contains("конкретною адресою", group.Description);
+    }
+
     [Theory]
     [InlineData("emergency", "emergency")]
     [InlineData("local", "local")]

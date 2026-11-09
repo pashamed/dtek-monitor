@@ -186,7 +186,7 @@ test('address search, region changes and editor restoration', async () => {
     const address = { id: 1, regionId: 'kyiv-oblast', name: 'Дім', city: '', street: '', house: '', groups: [] };
     let chat = {
       chatId: -100123, title: 'Тест', isPrivate: false,
-      settings: { regionId: 'kyiv-oblast', isActive: true, addresses: [address], partIds: [], templates: {} },
+      settings: { regionId: 'kyiv-oblast', isActive: true, outageTrigger: true, addresses: [address], partIds: [], templates: {} },
     };
     const regions = [
       { id: 'kyiv-oblast', name: 'Київська область', siteUrl: 'https://example.test', hasSchedules: true, hasGroups: false, parts: [] },
@@ -209,8 +209,9 @@ test('address search, region changes and editor restoration', async () => {
       if (path === '/api/bootstrap') data = {
         regions, maxTemplateLength: 1000,
         templateSlots: [
-          ['emergency', 'emergency', 'Екстрені відключення'],
+          ['emergency', 'emergency', 'Регіональні екстрені відключення'],
           ['regional', 'regional', 'Аварія в регіоні'],
+          ['local', 'local', 'Екстрене відключення групи'],
           ['ended', 'emergency', 'Запис про відключення знято'],
           ['schedule', 'stabilization', 'Графік відключень'],
           ['schedule-heading', 'stabilization', 'Заголовок графіка'],
@@ -218,6 +219,7 @@ test('address search, region changes and editor restoration', async () => {
         ].map(([id, group, title]) => ({ id, group, title, description: '', defaultTemplate: '{текст}', placeholders: [] })),
       };
       else if (path === '/api/chats') data = [chat];
+      else if (path.endsWith('/trigger-check')) data = { warning: null, matched: 1, seen: 1 };
       else if (path === '/api/preview') {
         previews.push(route.request().postDataJSON());
         data = { html: 'Попередній перегляд', errors: [] };
@@ -236,6 +238,10 @@ test('address search, region changes and editor restoration', async () => {
     await page.goto('https://lite.test/');
     await page.getByRole('heading', { name: 'Тест', exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Керування', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Довідка: Реагувати на «Світло зникло»', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Реагувати на «Світло зникло»' })
+      .getByText(/активні сповіщення ДТЕК і Укренерго, а за наявності групи — її графік і аварійний статус Yasno/).waitFor();
+    await page.getByRole('button', { name: 'Зрозуміло', exact: true }).click();
     assert.equal(await page.getByRole('button', { name: 'Видалити зі списку', exact: true }).isVisible(), true);
     assert.equal(await page.locator('#regionSel').isEnabled(), true);
     // The collection must use the real city/street/house lookup, not only manual inputs.
@@ -253,7 +259,11 @@ test('address search, region changes and editor restoration', async () => {
     assert.equal(chat.settings.addresses[0].groups.length, 2);
     await page.getByRole('tab', { name: 'Повідомлення', exact: true }).click();
     assert.equal(await page.getByRole('button', { name: 'Видалити зі списку', exact: true }).isVisible(), false);
-    assert.equal(await page.getByRole('tab', { name: 'Екстрені відключення', exact: true }).count(), 1);
+    assert.equal(await page.getByRole('tab', { name: 'Регіональні екстрені відключення', exact: true }).count(), 1);
+    assert.equal(await page.getByRole('tab', { name: 'Екстрене відключення групи', exact: true }).count(), 1);
+    await page.getByRole('tablist', { name: 'Види повідомлень' })
+      .getByText('Регіональні сповіщення', { exact: true }).waitFor();
+    await page.getByText('Сповіщення для групи', { exact: true }).waitFor();
     assert.equal(await page.getByRole('tab', { name: 'Аварія в регіоні', exact: true }).count(), 0);
     assert.equal(await page.getByRole('tab', { name: 'Запис про відключення знято', exact: true }).count(), 0);
     await page.getByRole('button', { name: 'Знято', exact: true }).click();
@@ -661,6 +671,11 @@ test('private schedule actions identify the private destination and viewing send
       await route.fulfill({ json: data });
     });
     await page.goto('https://lite.test/');
+    await page.getByRole('heading', { name: 'Перевірити відключення за адресою', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Довідка: Що перевіряє бот', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Що перевіряє бот' })
+      .getByText(/активними сповіщеннями ДТЕК і Укренерго, а за наявності групи — ще й за її графіком та аварійним статусом Yasno/).waitFor();
+    await page.getByRole('button', { name: 'Зрозуміло', exact: true }).click();
     await page.getByRole('tab', { name: 'Графік', exact: true }).click();
     await page.getByRole('heading', { name: 'Графік у чаті з ботом', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Надіслати графік у канал зараз', exact: true }).count(), 0);
